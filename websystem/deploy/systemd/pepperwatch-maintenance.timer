@@ -1,0 +1,15 @@
+[Unit]
+Description=Run Pepper Watch maintenance nightly
+
+[Timer]
+# 02:00, when the device is idle. wal_autocheckpoint only fires on a *writing*
+# connection, so an idle overnight worker leaves the -wal file at whatever size
+# the day's logging grew it to. This is what actually bounds it.
+OnCalendar=*-*-* 02:00:00
+# The device is solar powered and may well have been off at 02:00. Persistent
+# means the run happens at the next boot instead of being skipped.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

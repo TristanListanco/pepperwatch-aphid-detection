@@ -1,0 +1,60 @@
+[Unit]
+Description=Pepper Watch dashboard
+After=network.target mosquitto.service pepperwatch-worker.service
+Wants=mosquitto.service
+# Wants, NOT Requires, on the worker. This is deliberate: if the detector dies,
+# the dashboard must stay up so that history is still readable and the failure
+# is visible on screen. A Requires= would take the dashboard down at exactly
+# the moment somebody needs it to explain what happened.
+Wants=pepperwatch-worker.service
+PartOf=pepperwatch.target
+
+[Service]
+Type=simple
+User=pepperwatch
+Group=pepperwatch
+WorkingDirectory=/opt/pepperwatch
+Environment=PYTHONUNBUFFERED=1
+
+# --workers 1 is a correctness requirement, not tuning. The process holds a
+# single MQTT subscription in its EventHub; a second worker would mean a second
+# subscription, and each browser would see only the half of the traffic that
+# landed on its process.
+#
+# gthread with many threads suits this load: nearly every request is either
+# blocked on a long-lived stream (SSE, MJPEG) or on a short SQLite read.
+#
+# No --max-requests recycling. gthread can deadlock after many days of uptime,
+# but this device power-cycles nightly by design (§3.5.2's eight-hour daylight
+# cycles) so that window is never reached — and request recycling would kill
+# live SSE and MJPEG connections mid-flight, which is worse than the disease.
+ExecStart=/opt/pepperwatch/.venv/bin/gunicorn \
+    --workers 1 \
+    --threads 16 \
+    --worker-class gthread \
+    --bind 0.0.0.0:8000 \
+    --timeout 0 \
+    --graceful-timeout 10 \
+    --access-logfile - \
+    --error-logfile - \
+    pepperwatch.web.wsgi:app
+
+# --timeout 0 disables gunicorn's worker watchdog, which would otherwise kill
+# the worker for an SSE connection that is legitimately idle between events.
+# systemd's WatchdogSec below covers a genuinely hung process instead.
+
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/pepperwatch /dev/shm
+MemoryMax=1G
+
+[Install]
+WantedBy=pepperwatch.target

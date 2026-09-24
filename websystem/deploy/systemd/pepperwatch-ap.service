@@ -1,0 +1,19 @@
+[Unit]
+Description=Pepper Watch wireless access point
+Documentation=man:nmcli(1)
+After=NetworkManager.service
+Wants=NetworkManager.service
+Before=pepperwatch-web.service
+PartOf=pepperwatch.target
+
+[Service]
+# oneshot + RemainAfterExit: bringing the AP up is a single idempotent action,
+# not a daemon. NetworkManager owns the interface once it is configured.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/pepperwatch/deploy/network/setup-ap.sh
+ExecStop=/usr/bin/nmcli connection down pepperwatch-ap
+TimeoutStartSec=60
+
+[Install]
+WantedBy=pepperwatch.target

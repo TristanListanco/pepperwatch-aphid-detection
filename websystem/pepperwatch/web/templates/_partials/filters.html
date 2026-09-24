@@ -1,0 +1,35 @@
+{# Search and filter controls for the Historical Detection Log. #}
+<form class="filters" data-filters>
+  <div class="field">
+    <label for="filter-from">From</label>
+    <input type="date" id="filter-from" name="from">
+  </div>
+  <div class="field">
+    <label for="filter-to">To</label>
+    <input type="date" id="filter-to" name="to">
+  </div>
+  <div class="field">
+    <label for="filter-severity">Severity</label>
+    <select id="filter-severity" name="severity">
+      <option value="">Any</option>
+      <option value="none">None</option>
+      <option value="low">Low</option>
+      <option value="moderate">Moderate</option>
+      <option value="high">High</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="filter-class">Class</label>
+    <select id="filter-class" name="class">
+      <option value="">Any</option>
+      {% for name in class_names %}
+        <option value="{{ name }}">{{ name.replace('_', ' ') | title }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="filter-q">Search</label>
+    <input type="search" id="filter-q" name="q" placeholder="note or site">
+  </div>
+  <button class="btn is-quiet" type="button" data-filter-reset>Reset</button>
+</form>

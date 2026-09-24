@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Local configuration and secrets: AP passphrase, control PIN, Flask secret
+config/local.toml
+
+# Generated at runtime: database, captured media, mock frame cache, benchmarks
+var/
+models/*.onnx
+models/*.pt
+benchmarks/*.csv
+
+# OS noise
+.DS_Store
+
+# Manuscript material: kept local, the repository is public
+*.pdf
+MANUSCRIPT-NOTES.md

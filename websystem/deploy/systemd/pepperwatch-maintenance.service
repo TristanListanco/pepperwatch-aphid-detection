@@ -1,0 +1,14 @@
+[Unit]
+Description=Pepper Watch nightly maintenance
+After=pepperwatch-worker.service
+
+[Service]
+Type=oneshot
+User=pepperwatch
+Group=pepperwatch
+WorkingDirectory=/opt/pepperwatch
+ExecStart=/opt/pepperwatch/.venv/bin/python -m pepperwatch.maintenance
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pepperwatch

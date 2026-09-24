@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- viewport-fit=cover so the layout reaches under a phone's notch; this is
+       held in one hand while standing in a pepper row. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}Pepper Watch{% endblock %} · {{ site_name }}</title>
+  <!-- Local stylesheet only. There is no internet on a field Pi, so nothing
+       may come from a CDN (§3.3.2.2). -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌿</text></svg>">
+</head>
+<body data-page="{{ page }}">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="identity">
+        <div class="avatar" aria-hidden="true">
+          {{ operator.split(' ') | map('first') | join('') | upper | truncate(2, true, '') }}
+        </div>
+        <div class="identity-text">
+          <div class="identity-name">{{ operator }}</div>
+          <div class="identity-role">{{ role }}</div>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Sections">
+        <div class="nav-label">Navigation</div>
+        <a href="{{ url_for('pages.dashboard') }}"
+           {% if page == 'dashboard' %}aria-current="page"{% endif %}>
+          <span aria-hidden="true">▦</span> Dashboard
+        </a>
+        <a href="{{ url_for('pages.archived') }}"
+           {% if page == 'archived' %}aria-current="page"{% endif %}>
+          <span aria-hidden="true">▤</span> Archived
+        </a>
+        <a href="{{ url_for('pages.settings') }}"
+           {% if page == 'settings' %}aria-current="page"{% endif %}>
+          <span aria-hidden="true">⚙</span> Settings
+        </a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <h1>{{ site_name }}</h1>
+        <div class="topbar-actions">
+          {% block topbar %}{% endblock %}
+          <span class="chip is-down" data-worker-chip>
+            <span class="dot"></span><span data-worker-label>Detector offline</span>
+          </span>
+          {% if platform == 'mock' %}
+            <span class="chip is-warn" title="Replaying the Naawan field photographs; telemetry is modelled, not measured">
+              <span class="dot"></span>mock hardware
+            </span>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="content">
+        <div class="banner is-offline" data-worker-banner hidden>
+          <span class="banner-icon" aria-hidden="true">!</span>
+          <div>
+            <strong>The detector is not running.</strong>
+            Stored history and past scans are still available below, but there is no live
+            feed and no new detections are being recorded.
+            Start it with <code class="mono">systemctl start pepperwatch-worker</code>.
+          </div>
+        </div>
+
+        <div class="banner" data-toast hidden role="status" aria-live="polite"></div>
+
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

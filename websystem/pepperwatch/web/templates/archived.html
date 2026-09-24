@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Archived{% endblock %}
+
+{% block content %}
+<section class="card" data-history data-archived="true">
+  <div class="card-head">
+    <h2>Archived Scans</h2>
+    <span class="card-sub">Set aside from the main log</span>
+  </div>
+  <div class="card-body">
+    {% include "_partials/filters.html" %}
+    <div class="gallery" data-gallery style="margin-top:14px"></div>
+    <div class="pager" data-pager></div>
+  </div>
+</section>
+
+{% include "_partials/scan_dialog.html" %}
+{% endblock %}

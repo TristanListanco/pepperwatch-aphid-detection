@@ -1,0 +1,52 @@
+[Unit]
+Description=Pepper Watch inference worker
+Documentation=https://github.com/pepperwatch
+# The broker is required: telemetry and the control commands both ride MQTT.
+# The worker tolerates it being down (publishes are dropped, not raised), but
+# ordering the start correctly avoids a pointless reconnect storm at boot.
+After=network.target mosquitto.service
+Wants=mosquitto.service
+PartOf=pepperwatch.target
+
+[Service]
+Type=simple
+User=pepperwatch
+Group=pepperwatch
+# Camera access. On Bookworm/Trixie the CSI camera is reached through
+# /dev/video* and /dev/dma_heap, both of which are group-owned by video.
+SupplementaryGroups=video i2c gpio
+WorkingDirectory=/opt/pepperwatch
+Environment=PYTHONUNBUFFERED=1
+# Leave one of the Pi 5's four cores free. Giving ONNX all four starves Flask
+# and the capture thread, and the dashboard stutters exactly when inference is
+# busiest — which is when somebody is most likely to be looking at it.
+Environment=OMP_NUM_THREADS=3
+ExecStart=/opt/pepperwatch/.venv/bin/python -m pepperwatch.worker
+
+# §3.4.5 calls for auto-recovery from runtime exceptions, network dropouts and
+# power fluctuations. Restart=always plus a short delay is that.
+Restart=always
+RestartSec=5
+# If it is crash-looping, stop and leave the failure visible rather than
+# hammering the SD card with restarts all night.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+# Deliberately NOT --max-requests style recycling anywhere in this deployment:
+# see the note in pepperwatch-web.service.
+
+# Hardening. The worker needs the camera, the database and the media directory,
+# and nothing else on the filesystem.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/var/lib/pepperwatch /dev/shm
+# A runaway would otherwise take the dashboard down with it.
+MemoryMax=2G
+
+[Install]
+WantedBy=pepperwatch.target

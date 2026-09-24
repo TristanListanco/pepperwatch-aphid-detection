@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>Detection Thresholds</h2>
+    <span class="card-sub">Applied live</span>
+  </div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div class="slider-row">
+        <div class="slider-head">
+          <label for="slider-conf">Confidence threshold</label>
+          <span class="mono" data-slider-conf-value>0.25</span>
+        </div>
+        <input type="range" id="slider-conf" data-slider-conf
+               min="0.05" max="0.95" step="0.05">
+        <p class="note">
+          Figure 3.3 of the manuscript specifies a fixed filter of 0.80. That is
+          shipped here as an adjustable value defaulting to 0.25, because 0.80 on
+          clusters this small discards most true detections — and Chapter IV counts
+          missed infestations as a headline metric. Sweeping this slider and
+          recording precision against recall is a stronger result than asserting
+          a single number.
+        </p>
+      </div>
+
+      <div class="slider-row">
+        <div class="slider-head">
+          <label for="slider-iou">NMS IoU threshold</label>
+          <span class="mono" data-slider-iou-value>0.45</span>
+        </div>
+        <input type="range" id="slider-iou" data-slider-iou
+               min="0.10" max="0.90" step="0.05">
+        <p class="note">
+          How much two boxes may overlap before the weaker one is suppressed.
+          Applied per class, so an aphid cluster sitting on a leaf does not
+          suppress the leaf.
+        </p>
+      </div>
+
+      <p class="note" data-settings-status></p>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Site &amp; Language</h2></div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div class="field">
+        <label>Site</label>
+        <div class="metric-value" data-setting-site>—</div>
+      </div>
+      <div class="field">
+        <label for="setting-locale">Language</label>
+        <select id="setting-locale" data-setting-locale></select>
+        <p class="note">
+          Advisory text is available in English and Cebuano.
+        </p>
+      </div>
+      <div class="field" data-setting-pin-row hidden>
+        <label for="setting-pin">Control PIN</label>
+        <input type="password" id="setting-pin" data-setting-pin
+               inputmode="numeric" autocomplete="off">
+        <p class="note">
+          Required for snapshot, pause, and threshold changes. Held for this
+          browser tab only. Reading the dashboard never needs it.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Provenance</h2></div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div class="field">
+        <label>Model</label>
+        <div class="metric-value" data-setting-model>—</div>
+      </div>
+      <div class="field">
+        <label>Advisory content status</label>
+        <div data-setting-advisory>—</div>
+        <p class="note">
+          Treatment guidance needs review by an agriculturist before it reaches
+          farmers. Until then the dashboard marks it as a draft.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

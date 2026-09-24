@@ -1,0 +1,13 @@
+[Unit]
+Description=Pepper Watch edge node
+# One unit to enable. §3.4.5 requires that the moment the solar subsystem
+# supplies power, the access point, camera, broker, inference loop and web
+# server all initialise together with no keyboard intervention:
+#
+#   sudo systemctl enable pepperwatch.target
+#
+Requires=pepperwatch-ap.service pepperwatch-worker.service pepperwatch-web.service
+After=pepperwatch-ap.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+Drop the trained model here as pepperwatch.onnx.
+
+Until one exists the worker falls back to the stub detector, so the dashboard,
+database, MQTT bus and captive portal are all fully exercisable without it.
+Override the location with PW_INFERENCE_MODEL_PATH.

@@ -1,0 +1,101 @@
+# Pepper Watch — default configuration.
+#
+# Every value here can be overridden by an environment variable built from the
+# table path, upper-cased, prefixed with PW_ and joined by underscores:
+#   [camera].preview_fps   ->  PW_CAMERA_PREVIEW_FPS
+#   [site].name            ->  PW_SITE_NAME
+# A local config/local.toml, if present, is merged on top of this file and
+# beneath the environment. Keep secrets (the AP passphrase, the control PIN)
+# in local.toml, which is gitignored.
+
+[site]
+# Figure 3.4 shows "Buru-un"; the manuscript's dataset came from Naawan.
+# Set this to the plot you actually deploy to.
+name = "Naawan"
+operator = "Tristan Listanco"
+role = "Agricultural Officer"
+
+[platform]
+# "auto" reads /proc/device-tree/model and picks "pi" when it says Raspberry Pi,
+# otherwise "mock". Force either with PW_PLATFORM_KIND.
+kind = "auto"
+
+[camera]
+kind = "csi"          # csi | usb  — only consulted on the Pi
+device_index = 0      # for kind = "usb"
+preview_width = 640
+preview_height = 480
+preview_fps = 25      # capture thread target; decoupled from inference
+still_width = 2304    # manual high-res snapshot
+still_height = 1296
+jpeg_quality = 75
+rotate = 0            # 0 | 90 | 180 | 270
+
+[inference]
+model_path = "models/pepperwatch.onnx"   # absent -> stub detector
+input_size = 640
+conf_threshold = 0.25   # Figure 3.3 says 0.80; see the threshold-sweep note in README
+iou_threshold = 0.45
+max_detections = 100
+target_fps = 17         # the §3.2 requirement, reported against, not assumed
+intra_op_threads = 3    # leave one of the Pi 5's four cores for Flask + OS
+class_names = ["healthy", "aphid_damage"]
+
+[severity]
+# Derived in software from box count and affected area, since the model itself
+# predicts only healthy / aphid_damage. Documented so the thesis can cite it.
+low_max_count = 2
+moderate_max_count = 5
+low_max_area = 0.02
+moderate_max_area = 0.08
+
+[frames]
+transport = "shm"     # shm | tmpfs
+shm_name = "pepperwatch_frames"
+slot_bytes = 524288   # 512 KB per slot, two slots
+tmpfs_dir = "/dev/shm/pepperwatch"
+
+[persist]
+# 17 fps x 8 h is ~490k frames a day. Never write one row per frame.
+heartbeat_detected_s = 30    # while detections persist
+heartbeat_clean_s = 300      # while nothing is detected
+on_state_change = true       # write when clean<->detected or severity moves
+# A severity band must HOLD this long before a change counts. Without it, a
+# box count hovering on a band boundary flips every frame and each flip writes
+# a row -- measured at 5.6 events/second before this existed.
+state_change_debounce_s = 4.0
+# Hard ceiling on automatic writes, whatever the trigger. Manual snapshots are
+# exempt: the user pressing a button is always allowed through.
+min_write_interval_s = 8.0
+telemetry_interval_s = 15
+retention_days = 90          # system_log prune; detection_event is kept
+thumb_width = 320
+
+[db]
+path = "var/db/pepperwatch.db"
+busy_timeout_ms = 5000
+
+[media]
+root = "var/media"
+
+[mqtt]
+host = "127.0.0.1"
+port = 1883
+keepalive = 30
+client_id_prefix = "pepperwatch"
+
+[web]
+host = "0.0.0.0"
+port = 8000
+stream_fps = 10           # MJPEG is ~8 Mbit/s per client at 17 fps; throttle it
+stream_width = 640
+max_stream_clients = 4
+max_sse_clients = 12
+sse_queue_size = 10
+sse_keepalive_s = 15
+control_pin = ""          # set in local.toml to gate the mutating endpoints
+secret_key = "dev-only-change-me"
+
+[portal]
+address = "192.168.4.1"
+ssid = "PepperWatch"

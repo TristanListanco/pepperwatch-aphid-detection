@@ -1,0 +1,60 @@
+# Raspberry Pi 3 profile.
+#
+# Merged over default.toml when /proc/device-tree/model reports a Pi 3, before
+# local.toml and the environment — so a deliberate override still wins.
+#
+# default.toml is sized for a Pi 5. A Pi 3 differs in two ways that matter:
+#
+#   RAM   1 GB against the Pi 5's 8-16 GB. The unit files' memory caps are sized
+#         in deploy/systemd/pi3/ to match; without that the caps sit above
+#         physical memory and the kernel's OOM killer fires before systemd's
+#         limit ever engages.
+#
+#   CPU   Cortex-A53 at 1.2-1.4 GHz (ARMv8.0) against Cortex-A76 at 2.4 GHz
+#         (ARMv8.2). Beyond the clock, the A53 lacks the dot-product
+#         instructions the A76 has, so INT8 quantization buys less here too.
+#         Expect roughly 1 FPS at 640x640 and 3-5 at 320x320.
+#
+# This board is a development and integration target. Its frame rates are not
+# Chapter IV data — those must come from the Pi 5.
+
+[camera]
+# The A53 cannot feed 25 fps of JPEG encoding and keep up with inference.
+# 15 is comfortably above what the dashboard's 1 fps polling default consumes.
+preview_fps = 15
+# Snapshots at Pi 5 resolution would take seconds to encode here.
+still_width = 1024
+still_height = 768
+jpeg_quality = 70
+
+[inference]
+# 640x640 on an A53 is around 1 FPS, which makes the live view useless for
+# development. 320 keeps the loop responsive; recall on small clusters will be
+# worse, which is exactly why this board's numbers are not reportable.
+input_size = 320
+# Two of four cores. Three would leave too little for Flask and the capture
+# thread on a board this slow, and ONNX Runtime's per-thread arenas are a real
+# cost against 1 GB.
+intra_op_threads = 2
+max_detections = 50
+# target_fps is deliberately NOT lowered. It is the §3.2 requirement, and the
+# dashboard showing "below the 17 fps target" on this board is correct and
+# useful information rather than something to paper over.
+
+[frames]
+# 256 KB per slot. At 640x480 quality 70 a frame is well under 50 KB, and two
+# 512 KB slots would be a megabyte of a gigabyte spent on headroom never used.
+slot_bytes = 262144
+
+[persist]
+# Halve the telemetry write rate. The SD card is the likeliest thing to fail on
+# this board and there is no USB SSD option worth the bother on a test rig.
+telemetry_interval_s = 30
+
+[web]
+stream_fps = 6
+# The Pi 3B's radio is 2.4 GHz 802.11n and single-antenna. Two concurrent MJPEG
+# viewers is a realistic ceiling; beyond that everyone's stream degrades
+# together, which is worse than refusing the third.
+max_stream_clients = 2
+max_sse_clients = 6

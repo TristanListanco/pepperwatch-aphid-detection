@@ -1,0 +1,501 @@
+"""Preflight diagnostics: ``python -m pepperwatch.doctor``.
+
+Run this after installing on the Pi, and whenever something behaves oddly. It
+checks the things that actually go wrong in this deployment, in the order they
+tend to bite:
+
+* **The numpy/libcamera ABI trap.** The venv needs ``--system-site-packages``
+  to see apt's Picamera2, but that flag also lets a pip-installed numpy shadow
+  apt's — and libcamera's C bindings were compiled against apt's. The import
+  then fails with something that looks nothing like the actual cause. This is
+  the single most common Pi setup failure, so it is checked first.
+* **The clock.** No internet means no NTP. A Pi with no RTC battery boots to a
+  meaningless date, which silently makes every timestamp in the Historical
+  Detection Log worthless.
+* Camera, broker, database, disk, and thermals.
+
+Exit code is 0 when everything passes, 1 if anything failed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import importlib.metadata as metadata
+import logging
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+OK, WARN, FAIL = "ok", "warn", "FAIL"
+
+
+@dataclass
+class Check:
+    name: str
+    status: str
+    detail: str
+    hint: str = ""
+
+
+def check_python() -> Check:
+    version = sys.version_info
+    text = f"{version.major}.{version.minor}.{version.micro} at {sys.executable}"
+    if version < (3, 11):
+        return Check("python", FAIL, text, "Python 3.11 or newer is required")
+    if version >= (3, 14):
+        return Check("python", WARN, text, "3.14+ is untested; onnxruntime and cv2 wheels lag")
+    return Check("python", OK, text)
+
+
+def check_venv() -> Check:
+    in_venv = sys.prefix != sys.base_prefix
+    if not in_venv:
+        return Check("venv", WARN, "not running inside a virtual environment",
+                     "expected .venv; see deploy/install.sh")
+
+    # On a Pi the venv MUST be able to see apt's packages, or Picamera2 is
+    # invisible no matter how it was installed.
+    marker = Path(sys.prefix) / "pyvenv.cfg"
+    system_site = "false"
+    try:
+        for line in marker.read_text().splitlines():
+            if line.startswith("include-system-site-packages"):
+                system_site = line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+
+    if _is_pi() and system_site != "true":
+        return Check(
+            "venv", FAIL, f"system site packages: {system_site}",
+            "recreate with: python3 -m venv --system-site-packages .venv "
+            "(Picamera2 is apt-only and cannot be seen otherwise)",
+        )
+    return Check("venv", OK, f"{sys.prefix} (system site packages: {system_site})")
+
+
+def check_numpy_abi() -> Check:
+    """The trap that --system-site-packages sets, checked explicitly."""
+    try:
+        import numpy
+    except ImportError as exc:
+        return Check("numpy", FAIL, str(exc), "pip install numpy")
+
+    location = Path(numpy.__file__).resolve()
+    in_venv = str(location).startswith(str(Path(sys.prefix).resolve()))
+
+    if _is_pi() and in_venv:
+        return Check(
+            "numpy", WARN,
+            f"{numpy.__version__} from the venv ({location.parent})",
+            "a pip-installed numpy shadows apt's, and libcamera's bindings were "
+            "built against apt's. If the camera check below fails, run: "
+            "pip uninstall numpy  (and let the system copy be used)",
+        )
+    return Check("numpy", OK, f"{numpy.__version__} from {location.parent}")
+
+
+def check_imports() -> list[Check]:
+    checks = []
+    for module, hint in (
+        ("cv2", "pip install opencv-python-headless"),
+        ("flask", "pip install flask"),
+        ("paho.mqtt.client", "pip install paho-mqtt"),
+        ("onnxruntime", "pip install onnxruntime"),
+        ("psutil", "pip install psutil"),
+        ("PIL", "pip install Pillow"),
+    ):
+        try:
+            importlib.import_module(module)
+        except ImportError as exc:
+            checks.append(Check(module, FAIL, str(exc), hint))
+            continue
+
+        # Read the version from package metadata rather than a __version__
+        # attribute: Flask deprecated theirs, and several of these never had one.
+        distribution = {
+            "cv2": "opencv-python-headless",
+            "paho.mqtt.client": "paho-mqtt",
+            "PIL": "Pillow",
+        }.get(module, module)
+        try:
+            version = metadata.version(distribution)
+        except metadata.PackageNotFoundError:
+            version = "installed"
+        checks.append(Check(module, OK, version))
+    return checks
+
+
+def check_clock() -> Check:
+    """No NTP offline; a dead RTC battery makes every timestamp meaningless."""
+    now = datetime.now(timezone.utc)
+    detail = now.isoformat(timespec="seconds")
+
+    # A Pi with no RTC and no fake-hwclock typically boots to the epoch or to
+    # its filesystem build date.
+    if now.year < 2025:
+        return Check(
+            "clock", FAIL, f"{detail} — implausible",
+            "fit the Pi 5 RTC battery (J5 connector) and run "
+            "`sudo timedatectl set-time '<correct time>'`. Without it every "
+            "row in the Historical Detection Log is misdated.",
+        )
+
+    rtc_present = Path("/dev/rtc0").exists()
+    if _is_pi() and not rtc_present:
+        return Check(
+            "clock", WARN, f"{detail}, no /dev/rtc0",
+            "no hardware clock detected. Offline there is no NTP, so the date "
+            "will drift or reset on power loss. Fit the RTC battery (J5).",
+        )
+    return Check("clock", OK, f"{detail}{', RTC present' if rtc_present else ''}")
+
+
+def _parse_systemd_bytes(value: str) -> float | None:
+    """Parse a systemd memory value to bytes.
+
+    Accepts the suffixed form used in unit files ("460M", "2G"), the plain byte
+    count `systemctl show` returns, and "infinity".
+    """
+    text = str(value).strip()
+    if not text or text.lower() == "infinity":
+        return None
+
+    suffixes = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+    if text[-1].upper() in suffixes:
+        try:
+            return float(text[:-1]) * suffixes[text[-1].upper()]
+        except ValueError:
+            return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _effective_memory_max(unit: str) -> tuple[float | None, str]:
+    """The memory ceiling systemd will actually apply to ``unit``.
+
+    Prefers `systemctl show`, which resolves drop-ins for us. Falls back to
+    reading this repository's unit files plus whichever board profile would
+    apply, so the check still says something useful before installation.
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "-p", "MemoryMax", "--value", unit],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return _parse_systemd_bytes(result.stdout), "systemd"
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    from .config import PROJECT_ROOT, detect_board
+
+    limit = None
+    for candidate in (
+        PROJECT_ROOT / "deploy" / "systemd" / unit,
+        PROJECT_ROOT / "deploy" / "systemd" / detect_board() / f"{unit}.d" / "10-{}.conf".format(detect_board()),
+    ):
+        if not candidate.exists():
+            continue
+        for line in candidate.read_text().splitlines():
+            if line.strip().startswith("MemoryMax="):
+                parsed = _parse_systemd_bytes(line.split("=", 1)[1])
+                if parsed is not None:
+                    limit = parsed  # later file wins, as a drop-in does
+    return limit, "unit files"
+
+
+def check_board() -> Check:
+    """Report the board and whether a tuning profile is in effect."""
+    from .config import detect_board, profile_path, read_device_model, total_memory_mb
+
+    board = detect_board()
+    memory_mb = total_memory_mb()
+    memory = f"{memory_mb / 1024:.1f} GB RAM" if memory_mb else "unknown RAM"
+
+    if board == "unknown":
+        model = read_device_model() or platform.machine()
+        return Check("board", OK, f"{model} ({memory}) — no profile, using defaults")
+
+    profile = profile_path(board)
+    if profile is None:
+        return Check(
+            "board", WARN, f"{board}, {memory} — no profile ships for this board",
+            f"defaults are sized for a Pi 5; add config/profiles/{board}.toml if "
+            "this board differs materially",
+        )
+    return Check("board", OK, f"{board}, {memory} — profile {profile.name} applied")
+
+
+def check_memory_budget() -> Check:
+    """Do the service memory ceilings actually fit in this machine's RAM?
+
+    This is the check that catches shipping Pi 5 limits to a Pi 3. A MemoryMax
+    above physical memory is worse than none at all: it never engages, so the
+    kernel's OOM killer fires instead and chooses its victim by heuristic
+    rather than by our intent.
+    """
+    from .config import total_memory_mb
+
+    total_mb = total_memory_mb()
+    if total_mb is None:
+        return Check("memory budget", WARN, "cannot read total memory")
+
+    units = ("pepperwatch-worker.service", "pepperwatch-web.service")
+    limits: dict[str, float | None] = {}
+    source = "unit files"
+    for unit in units:
+        limit, source = _effective_memory_max(unit)
+        limits[unit] = limit
+
+    if all(limit is None for limit in limits.values()):
+        return Check("memory budget", WARN, "no MemoryMax set on either service",
+                     "a runaway process could take the whole device down")
+
+    capped_mb = sum((limit or 0) / 1e6 for limit in limits.values())
+    breakdown = ", ".join(
+        f"{unit.split('-')[1].split('.')[0]} {(limit / 1e6):.0f}M" if limit else
+        f"{unit.split('-')[1].split('.')[0]} unlimited"
+        for unit, limit in limits.items()
+    )
+    detail = f"{breakdown} = {capped_mb:.0f}M of {total_mb:.0f}M ({source})"
+
+    # Leave room for the OS, NetworkManager, mosquitto and sshd.
+    reserve_mb = 150.0
+    if capped_mb + reserve_mb > total_mb:
+        return Check(
+            "memory budget", FAIL, detail,
+            f"the service ceilings exceed physical RAM once ~{reserve_mb:.0f}M is "
+            "reserved for the OS, so they will never engage and the OOM killer "
+            "will fire instead. Install the board drop-ins: "
+            "deploy/systemd/<board>/",
+        )
+    if capped_mb + reserve_mb > total_mb * 0.92:
+        return Check("memory budget", WARN, detail, "very little headroom left for the OS")
+    return Check("memory budget", OK, detail)
+
+
+def check_camera(probe: bool) -> Check:
+    """Optionally open the camera and take one real frame."""
+    from .config import load
+
+    cfg = load()
+    if not cfg.is_pi:
+        frames = cfg.path("var/mock_frames/preview")
+        count = len(list(frames.glob("*.jpg"))) if frames.exists() else 0
+        if count == 0:
+            return Check(
+                "camera", FAIL, "mock platform with no frame cache",
+                "run: python scripts/prepare_mock_frames.py",
+            )
+        return Check("camera", OK, f"mock replay, {count} frames cached")
+
+    if not probe:
+        return Check("camera", WARN, f"configured as {cfg.camera.kind}, not probed",
+                     "re-run with --camera-probe to capture a test frame")
+
+    try:
+        from .hal import get_camera
+
+        camera = get_camera(cfg)
+        camera.start()
+        try:
+            frame = None
+            deadline = time.monotonic() + 6
+            while frame is None and time.monotonic() < deadline:
+                frame = camera.read()
+            if frame is None:
+                return Check("camera", FAIL, "opened but produced no frame within 6s",
+                             "check the ribbon cable seating and `rpicam-hello --list-cameras`")
+            info = camera.info
+            return Check("camera", OK,
+                         f"{info.kind}: captured {frame.width}x{frame.height} ({info.description})")
+        finally:
+            camera.stop()
+    except Exception as exc:  # noqa: BLE001
+        return Check("camera", FAIL, f"{type(exc).__name__}: {exc}",
+                     "if this mentions numpy or libcamera, see the numpy check above")
+
+
+def check_broker() -> Check:
+    from .config import load
+
+    cfg = load()
+    try:
+        with socket.create_connection((cfg.mqtt.host, cfg.mqtt.port), timeout=2):
+            return Check("mqtt", OK, f"broker reachable at {cfg.mqtt.host}:{cfg.mqtt.port}")
+    except OSError as exc:
+        return Check(
+            "mqtt", FAIL, f"{cfg.mqtt.host}:{cfg.mqtt.port} unreachable ({exc})",
+            "sudo systemctl start mosquitto  (telemetry and controls need it; "
+            "detection and logging continue without it)",
+        )
+
+
+def check_database() -> Check:
+    from .config import load
+    from .db import Database
+
+    cfg = load()
+    try:
+        database = Database(cfg)
+        database.initialise(writer="doctor")
+        stats = database.stats()
+        database.close()
+    except Exception as exc:  # noqa: BLE001
+        return Check("database", FAIL, str(exc), f"check permissions on {cfg.db_path.parent}")
+
+    if stats["journal_mode"] != "wal":
+        return Check("database", FAIL, f"journal_mode is {stats['journal_mode']}",
+                     "WAL is required for concurrent read/write (§3.3.2.1)")
+
+    counts = stats["counts"]
+    return Check(
+        "database", OK,
+        f"WAL, {counts['detection_event']} events, {counts['bounding_box']} boxes, "
+        f"{stats['size_mb']} MB (+{stats['wal_mb']} MB wal)",
+    )
+
+
+def check_model() -> Check:
+    from .config import load
+
+    cfg = load()
+    if cfg.model_path.exists():
+        size_mb = cfg.model_path.stat().st_size / 1e6
+        return Check("model", OK, f"{cfg.model_path.name}, {size_mb:.1f} MB")
+    return Check(
+        "model", WARN, f"no model at {cfg.model_path}",
+        "the heuristic stub will run instead. Its output is NOT model output "
+        "and every event it writes is flagged synthetic — do not report it.",
+    )
+
+
+def check_storage() -> Check:
+    from .config import load
+
+    cfg = load()
+    try:
+        usage = shutil.disk_usage(cfg.db_path.parent)
+    except OSError as exc:
+        return Check("storage", FAIL, str(exc))
+
+    free_gb = usage.free / 1e9
+    percent_free = 100.0 * usage.free / usage.total
+
+    if free_gb < 1.0:
+        return Check("storage", FAIL, f"{free_gb:.1f} GB free ({percent_free:.0f}%)",
+                     "captured images will start failing")
+    if free_gb < 4.0:
+        return Check("storage", WARN, f"{free_gb:.1f} GB free ({percent_free:.0f}%)",
+                     "an 8-hour cycle writes images continuously")
+    return Check("storage", OK, f"{free_gb:.1f} GB free ({percent_free:.0f}%)")
+
+
+def check_thermal() -> Check:
+    if not _is_pi():
+        return Check("thermal", OK, "not applicable off-device")
+
+    try:
+        celsius = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000.0
+    except (OSError, ValueError):
+        return Check("thermal", WARN, "cannot read thermal zone")
+
+    if celsius >= 80:
+        return Check("thermal", FAIL, f"{celsius:.1f} °C",
+                     "at or past the soft throttle point; check the fan and enclosure venting")
+    if celsius >= 70:
+        return Check("thermal", WARN, f"{celsius:.1f} °C",
+                     "the governor begins backing off inference at 75 °C")
+    return Check("thermal", OK, f"{celsius:.1f} °C")
+
+
+def check_advisory() -> Check:
+    from .advisory import load_advisory
+    from .config import load
+
+    advisory = load_advisory(load())
+    if advisory.validated:
+        return Check("advisory", OK, "content signed off")
+    return Check(
+        "advisory", WARN, "treatment guidance is an unvalidated draft",
+        "have an agriculturist review config/recommendations.json and set "
+        "meta.status to 'validated' before this reaches farmers",
+    )
+
+
+def _is_pi() -> bool:
+    from .config import detect_platform
+
+    return detect_platform() == "pi"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--camera-probe", action="store_true",
+                        help="Open the camera and capture a test frame")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.ERROR)
+
+    from .config import detect_board, detect_platform
+
+    print(f"Pepper Watch diagnostics")
+    print(f"  host     : {platform.node()} ({platform.machine()})")
+    print(f"  board    : {detect_board()}")
+    print(f"  platform : {detect_platform()}")
+    print(f"  cwd      : {os.getcwd()}")
+    print()
+
+    checks = [check_board(), check_python(), check_venv(), check_numpy_abi()]
+    checks += check_imports()
+    checks += [
+        check_memory_budget(),
+        check_clock(),
+        check_camera(args.camera_probe),
+        check_model(),
+        check_broker(),
+        check_database(),
+        check_storage(),
+        check_thermal(),
+        check_advisory(),
+    ]
+
+    width = max(len(check.name) for check in checks)
+    failures = warnings = 0
+    for check in checks:
+        if check.status == FAIL:
+            failures += 1
+        elif check.status == WARN:
+            warnings += 1
+        print(f"  [{check.status:>4}] {check.name:<{width}}  {check.detail}")
+        if check.hint and check.status != OK:
+            for line in _wrap(check.hint, 88 - width):
+                print(f"         {'':<{width}}  -> {line}")
+
+    print()
+    if failures:
+        print(f"{failures} failed, {warnings} warnings")
+        return 1
+    print(f"all checks passed{f' ({warnings} warnings)' if warnings else ''}")
+    return 0
+
+
+def _wrap(text: str, width: int) -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(text, max(width, 40))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

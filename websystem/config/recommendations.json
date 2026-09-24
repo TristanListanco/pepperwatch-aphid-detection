@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "version": "0.1-draft",
+    "status": "UNVALIDATED DRAFT — REQUIRES AGRICULTURIST SIGN-OFF BEFORE FIELD USE",
+    "note": "Manuscript §3.3.2 promises 'immediate treatment recommendations' but names no source. Advice reaching smallholder farmers needs local backing, so each entry carries a `references` list and the dashboard shows an unvalidated banner until `status` reads 'validated'. Deliberately no chemical names, products, or dosages: those depend on local registration, pre-harvest intervals, and resistance history, and belong with the DA/ATI technician rather than in a JSON file. Entries describe monitoring and decision thresholds, and escalate to naming a person to call.",
+    "locales": ["en", "ceb"],
+    "default_locale": "en",
+    "sign_off": {
+      "validated_by": null,
+      "affiliation": null,
+      "date": null
+    }
+  },
+  "classes": {
+    "healthy": {
+      "none": {
+        "en": {
+          "headline": "No aphid damage detected",
+          "body": "The leaves in view show no visible aphid feeding damage. A clean scan is not proof of absence — early colonies sit on leaf undersides and growing tips, where this camera cannot see them.",
+          "actions": [
+            "Keep to the normal scouting round; do not reduce it based on a clean scan",
+            "Check leaf undersides and new shoots by hand, which the camera cannot cover",
+            "Watch for ants on stems — they tend aphid colonies and often show up first"
+          ],
+          "urgency": "routine"
+        },
+        "ceb": {
+          "headline": "Walay nakit-ang danyos sa aphid",
+          "body": "Ang mga dahon nga makita walay timaan sa pagkaon sa aphid. Apan dili kini garantiya nga walay aphid — ang bag-ong kolonya nagpuyo sa ilawom sa dahon ug sa umok nga tumoy, nga dili makita sa camera.",
+          "actions": [
+            "Padayon sa naandang pag-inspeksyon; dili pagpaminusan tungod niini",
+            "Susiha pinaagi sa kamot ang ilawom sa dahon ug bag-ong saha",
+            "Bantayi ang mga hulmigas sa punoan — sila nag-atiman sa aphid"
+          ],
+          "urgency": "routine"
+        },
+        "references": []
+      }
+    },
+    "aphid_damage": {
+      "low": {
+        "en": {
+          "headline": "Light aphid damage — monitor closely",
+          "body": "A small number of damaged areas were found. At this level the plant usually carries the load without yield effect, and natural enemies often bring it down on their own. Intervening now risks killing the predators that would otherwise do the work for free.",
+          "actions": [
+            "Re-scan the same plants in 2–3 days and compare the trend, not the single reading",
+            "Look for ladybird beetles, lacewing larvae, and parasitised aphid mummies before deciding to spray",
+            "A firm spray of water can dislodge small colonies without harming predators",
+            "Record the location so the same plants can be re-checked"
+          ],
+          "urgency": "monitor"
+        },
+        "ceb": {
+          "headline": "Gaan nga danyos sa aphid — bantayi pag-ayo",
+          "body": "Diyutay ra ang nadaot nga bahin. Sa kini nga lebel, kasagaran makaagwanta ang tanom ug ang mga kaaway sa aphid mao nay mopaubos niini. Ang pagsabod karon makapatay sa mga mananap nga motabang kanimo nga walay bayad.",
+          "actions": [
+            "Balika ang pag-scan sa samang tanom sulod sa 2–3 ka adlaw ug tan-awa ang uso",
+            "Pangitaa ang ladybird, lacewing, ug namatay nga aphid sa dili pa mosabod",
+            "Ang kusog nga tubig makatangtang sa gagmay nga kolonya",
+            "Itala ang lugar aron masusi pag-usab"
+          ],
+          "urgency": "monitor"
+        },
+        "references": []
+      },
+      "moderate": {
+        "en": {
+          "headline": "Moderate aphid damage — prepare to act",
+          "body": "Damage is established across several areas. Left alone, aphid populations double quickly in warm weather, and the honeydew they leave invites sooty mould that costs marketable quality even where the plant survives.",
+          "actions": [
+            "Inspect the affected plants by hand today and confirm live colonies, not just old damage",
+            "Ask your local DA or ATI technician which control is currently registered for bell pepper in your area",
+            "If treating, spot-treat only the affected plants rather than the whole plot",
+            "Remove and destroy the worst-affected leaves where the damage is localised",
+            "Re-scan 3–5 days after any treatment to confirm it worked"
+          ],
+          "urgency": "act_soon"
+        },
+        "ceb": {
+          "headline": "Kasarangan nga danyos — pangandam sa aksyon",
+          "body": "Nakalapad na ang danyos sa pipila ka bahin. Kon pasagdan, paspas modoble ang aphid sa init nga panahon, ug ang ilang honeydew magpatubo sa itom nga agup-op nga makapaubos sa kalidad.",
+          "actions": [
+            "Susiha karon pinaagi sa kamot ug pamatud-i nga buhi pa ang kolonya",
+            "Pangutana sa teknisyan sa DA o ATI unsa ang rehistrado nga tambal para sa atsal sa inyong lugar",
+            "Kon mosabod, ang naapektuhan ra nga tanom ang tagda",
+            "Kuhaa ug gub-a ang labing nadaot nga dahon",
+            "Balika ang pag-scan 3–5 ka adlaw human sa tambal"
+          ],
+          "urgency": "act_soon"
+        },
+        "references": []
+      },
+      "high": {
+        "en": {
+          "headline": "Heavy aphid damage — act now",
+          "body": "Damage covers a large share of the leaf area in view. At this level yield loss is likely already underway, and the greater risk is virus: aphids transmit mosaic viruses while feeding, and no treatment reverses an infected plant.",
+          "actions": [
+            "Contact your DA or ATI agricultural technician today, before choosing any treatment",
+            "Inspect the surrounding rows — damage this heavy is rarely confined to one plant",
+            "Isolate and remove plants showing mottled or distorted new growth, which suggests virus rather than feeding damage alone",
+            "Follow the pre-harvest interval on whatever is applied; a treated crop harvested too early cannot be sold",
+            "Keep the exported log as a record of when the outbreak was first seen"
+          ],
+          "urgency": "urgent"
+        },
+        "ceb": {
+          "headline": "Grabe nga danyos sa aphid — aksyon karon",
+          "body": "Dako nga bahin sa dahon ang nadaot. Sa kini nga lebel, tingali nagkunhod na ang abot, ug ang labing dako nga risgo mao ang virus: ang aphid nagpasa sa mosaic virus samtang mokaon, ug walay tambal nga makaayo sa natakdan nga tanom.",
+          "actions": [
+            "Kontaka karon ang teknisyan sa DA o ATI sa dili pa mopili og tambal",
+            "Susiha ang silingan nga mga linya — talagsa ra nga usa ra ka tanom",
+            "Kuhaa ang tanom nga batik-batik o kurog ang bag-ong saha — timaan kini sa virus",
+            "Tumana ang pre-harvest interval sa gigamit nga tambal",
+            "Tipigi ang exported log isip rekord kanus-a nakit-an ang outbreak"
+          ],
+          "urgency": "urgent"
+        },
+        "references": []
+      }
+    }
+  }
+}
