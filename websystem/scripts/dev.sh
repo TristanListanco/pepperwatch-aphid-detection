@@ -50,6 +50,16 @@ fi
 
 mkdir -p var/mosquitto
 
+# var/ is gitignored, so a fresh clone has no broker config yet.
+if [ ! -f var/mosquitto/dev.conf ]; then
+  cat > var/mosquitto/dev.conf <<'CONF'
+# Development broker config, mirroring what deploy/mosquitto ships to the Pi.
+listener 1883 127.0.0.1
+allow_anonymous true
+persistence false
+CONF
+fi
+
 if ! pgrep -f "mosquitto -c var/mosquitto" >/dev/null; then
   if [ ! -x "$MOSQUITTO" ]; then
     echo "mosquitto not found at $MOSQUITTO — install with: brew install mosquitto" >&2

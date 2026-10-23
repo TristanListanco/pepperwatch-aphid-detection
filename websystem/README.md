@@ -20,14 +20,11 @@ no Pi and no camera.
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 
-# Pull ~300 field photos out of the parent repo's git history and pre-scale them
-.venv/bin/python scripts/prepare_mock_frames.py
-
 brew install mosquitto
-/opt/homebrew/opt/mosquitto/sbin/mosquitto -c var/mosquitto/dev.conf &
 
-.venv/bin/python -m pepperwatch.worker &   # camera + inference
-.venv/bin/python -m pepperwatch.web        # dashboard on :8000
+# Builds the mock frames from ~300 field photos on first run, then starts the
+# broker, the worker (camera + inference) and the dashboard on :8000
+./scripts/dev.sh
 ```
 
 Then open <http://localhost:8000>. Check the setup at any time with:
@@ -78,7 +75,7 @@ pepperwatch/
   web/           Flask app, ES6 modules, Jinja templates
 deploy/          systemd units, mosquitto conf, NetworkManager AP, install.sh
 scripts/         prepare_mock_frames.py, bench_fps.py, check_js.sh
-tests/           222 unit/API tests + 19 Selenium
+tests/           281 unit/API tests + 19 Selenium
 ```
 
 ## Configuration
@@ -96,7 +93,7 @@ at startup rather than halfway through a field trial.
 ## Testing
 
 ```bash
-.venv/bin/python -m pytest              # 222 tests, ~50s
+.venv/bin/python -m pytest              # 281 tests, ~1 min
 .venv/bin/python -m pytest -m selenium  # 19 browser tests, ~4min, needs Chrome
 ./scripts/check_js.sh                   # ES module syntax (there is no build step)
 ```
@@ -237,5 +234,6 @@ listed here so they can be defended or the manuscript amended.
 | Figure 3.3: "Web Camera" | Both supported | Table 3.2 says MIPI CSI. `[camera].kind` selects either. |
 | Nothing stated | Persist policy, PIN gate, RTC handling | 17 fps × 8 h is ~490k frames/day; an unauthenticated AP lets anyone pause a trial; no NTP means no valid clock. All three needed solving. |
 
-`MANUSCRIPT-NOTES.md` has the full list, including items that need fixing in the
-document itself rather than in code.
+The full list, including items that need fixing in the manuscript itself rather
+than in code, is kept in `MANUSCRIPT-NOTES.md` alongside the manuscript (not in
+this repository).

@@ -233,6 +233,11 @@ def test_readme_records_the_divergences_from_the_manuscript() -> None:
 
 
 def test_manuscript_notes_exist_and_cover_the_serious_items() -> None:
-    notes = (ROOT / "MANUSCRIPT-NOTES.md").read_text()
+    # Kept beside the manuscript and out of the public repository, so a fresh
+    # clone (and CI) will not have it.
+    path = ROOT / "MANUSCRIPT-NOTES.md"
+    if not path.exists():
+        pytest.skip("MANUSCRIPT-NOTES.md is local-only and not in this checkout")
+    notes = path.read_text()
     for topic in ("H1", "MongoDB", "RTC", "TFT", "17 FPS"):
         assert topic in notes, f"MANUSCRIPT-NOTES.md does not mention {topic}"
