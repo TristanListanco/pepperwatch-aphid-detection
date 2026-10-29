@@ -83,7 +83,7 @@ def test_profiles_are_named_for_known_boards() -> None:
 def test_no_profile_applies_off_device(monkeypatch) -> None:
     monkeypatch.setenv("PW_BOARD", "unknown")
     cfg = load()
-    assert cfg.platform.get("profile") is None
+    assert cfg.board_profile is None
     assert cfg.inference.input_size == 640  # the Pi 5 default
 
 
@@ -93,7 +93,7 @@ def test_pi3_profile_lowers_the_expensive_settings(monkeypatch) -> None:
     monkeypatch.setenv("PW_BOARD", "unknown")
     default = load()
 
-    assert pi3.platform.get("profile") == "pi3"
+    assert pi3.board_profile == "pi3"
     assert pi3.inference.input_size < default.inference.input_size
     assert pi3.inference.intra_op_threads < default.inference.intra_op_threads
     assert pi3.camera.preview_fps < default.camera.preview_fps

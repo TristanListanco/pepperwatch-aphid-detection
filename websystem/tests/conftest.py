@@ -30,14 +30,14 @@ def cfg(tmp_path: Path) -> Config:
     shm is machine-global, so a test using the default name would attach to a
     dev worker's live segment and read its frames -- which silently turned the
     "no worker running" assertion green or red depending on what happened to be
-    running. Note the length: macOS caps these names at 30 characters.
+    running.
     """
     unique = f"pw_t_{os.getpid() % 100000}_{uuid.uuid4().hex[:8]}"
     return load(
         {
             "db": {"path": str(tmp_path / "test.db")},
             "media": {"root": str(tmp_path / "media")},
-            "platform": {"kind": "mock"},
+            "sessions": {"root": str(tmp_path / "sessions")},
             "frames": {
                 "shm_name": unique,
                 "tmpfs_dir": str(tmp_path / "frames"),

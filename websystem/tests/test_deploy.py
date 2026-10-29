@@ -1,6 +1,6 @@
 """The deployment artifacts.
 
-These files cannot be exercised on a Mac, but their content can be checked —
+These files cannot be exercised in CI, but their content can be checked —
 and the things worth checking are exactly the ones that would fail silently in
 a field: a unit that does not restart, a broker listening on the wrong
 interface, an access point with no passphrase.

@@ -1,16 +1,8 @@
 """Hardware abstraction contracts.
 
-Two implementations satisfy these: ``hal.mock`` for macOS development, which
-replays the Naawan field photographs, and ``hal.pi`` for the Raspberry Pi 5,
-which drives a real camera and reads real sensors. Everything above the HAL —
-the worker, the detector, the database, the dashboard — is written against
-these types alone and never learns which platform it is on.
-
-One field deserves emphasis: :attr:`Telemetry.synthetic`. Mock telemetry is
-plausible, smooth, and completely made up. It propagates through MQTT, the
-System Health Monitor, and ``system_log``, so every sample carries a flag
-saying whether it came from real silicon. Chapter IV must never accidentally
-report a synthetic thermal curve as a measurement.
+``hal.pi`` implements these for the Raspberry Pi 5: a CSI or USB camera and
+the board's own sensors. The worker, detector, database and dashboard are
+written against these types alone.
 """
 
 from __future__ import annotations
@@ -47,24 +39,46 @@ class Frame:
 class Telemetry:
     """A hardware health sample.
 
-    Every optional field is ``None`` when the platform genuinely cannot measure
-    it, which is different from zero. The System Health Monitor renders "—" for
-    ``None`` rather than a misleading 0.0.
+    Every optional field is ``None`` when the board genuinely cannot measure
+    it, which is different from zero. The dashboard renders "—" for ``None``
+    rather than a misleading 0.0.
+
+    Power comes from two places, kept apart because they measure different
+    things. ``voltage_v``/``current_ma``/``power_w`` are an INA219 on the
+    supply, i.e. what the whole device draws. ``pmic_power_w`` is the sum of
+    the Pi 5 PMIC's rail readings: always available, but it covers the SoC's
+    internal rails only, not USB peripherals, the HAT or conversion losses, so
+    it reads low. :attr:`power_source` names which one ``best_power_w`` is.
     """
 
     ts: float
-    synthetic: bool
     cpu_temp_c: float | None = None
     cpu_percent: float | None = None
+    cpu_freq_mhz: float | None = None
     mem_used_mb: float | None = None
     mem_total_mb: float | None = None
     disk_free_mb: float | None = None
     voltage_v: float | None = None
     current_ma: float | None = None
     power_w: float | None = None
-    battery_pct: float | None = None
+    pmic_power_w: float | None = None
+    input_voltage_v: float | None = None
+    fan_rpm: float | None = None
     throttled: bool = False
+    throttled_flags: int | None = None
     throttle_detail: str = ""
+
+    @property
+    def power_source(self) -> str | None:
+        if self.power_w is not None:
+            return "ina219"
+        if self.pmic_power_w is not None:
+            return "pmic"
+        return None
+
+    @property
+    def best_power_w(self) -> float | None:
+        return self.power_w if self.power_w is not None else self.pmic_power_w
 
     @property
     def mem_percent(self) -> float | None:
@@ -76,9 +90,9 @@ class Telemetry:
         """Flat JSON-safe mapping for MQTT, SSE, and system_log."""
         return {
             "ts": self.ts,
-            "synthetic": self.synthetic,
             "cpu_temp_c": self.cpu_temp_c,
             "cpu_percent": self.cpu_percent,
+            "cpu_freq_mhz": self.cpu_freq_mhz,
             "mem_used_mb": self.mem_used_mb,
             "mem_total_mb": self.mem_total_mb,
             "mem_percent": self.mem_percent,
@@ -86,8 +100,13 @@ class Telemetry:
             "voltage_v": self.voltage_v,
             "current_ma": self.current_ma,
             "power_w": self.power_w,
-            "battery_pct": self.battery_pct,
+            "pmic_power_w": self.pmic_power_w,
+            "input_voltage_v": self.input_voltage_v,
+            "power_source": self.power_source,
+            "best_power_w": self.best_power_w,
+            "fan_rpm": self.fan_rpm,
             "throttled": self.throttled,
+            "throttled_flags": self.throttled_flags,
             "throttle_detail": self.throttle_detail,
         }
 
@@ -101,7 +120,6 @@ class CameraInfo:
     width: int
     height: int
     fps: float
-    synthetic: bool
     detail: dict[str, Any] = field(default_factory=dict)
 
 

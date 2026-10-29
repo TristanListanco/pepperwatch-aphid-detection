@@ -80,11 +80,46 @@ apt-get install -y --no-install-recommends \
   network-manager \
   fake-hwclock \
   i2c-tools \
-  libatlas-base-dev
+  rsync
 
 note "python3-picamera2 and python3-numpy come from apt on purpose:"
 note "pip cannot build working libcamera bindings, and a pip numpy would"
 note "shadow the one those bindings were compiled against."
+
+# -- AI HAT+ ---------------------------------------------------------------
+
+# Hailo's PCI vendor ID is 0x1e60. The Hailo-8 and Hailo-8L (AI HAT+ 26 and
+# 13 TOPS) share device 0x2864 and the hailo-all stack; the Hailo-10H (AI HAT+
+# 2) is 0x45c4 and needs hailo-h10-all. Both build a kernel driver with DKMS,
+# so a first install needs a reboot before /dev/hailo0 exists.
+HAILO_PACKAGE=""
+REBOOT_NEEDED=0
+for pci in /sys/bus/pci/devices/*; do
+  [ "$(cat "$pci/vendor" 2>/dev/null)" = "0x1e60" ] || continue
+  case "$(cat "$pci/device" 2>/dev/null)" in
+    0x45c4) HAILO_PACKAGE=hailo-h10-all ;;
+    *)      HAILO_PACKAGE=hailo-all ;;
+  esac
+  LINK="$(cat "$pci/current_link_speed" 2>/dev/null || echo unknown)"
+  log "AI HAT+ detected at $(basename "$pci") (PCIe $LINK)"
+  case "$LINK" in
+    8.0*|16.0*) ;;
+    *) note "The link is below Gen 3. For full speed add dtparam=pciex1_gen=3"
+       note "to /boot/firmware/config.txt and reboot." ;;
+  esac
+  break
+done
+
+if [ -n "$HAILO_PACKAGE" ]; then
+  if apt-get install -y dkms "$HAILO_PACKAGE"; then
+    note "installed $HAILO_PACKAGE"
+    [ -e /dev/hailo0 ] || REBOOT_NEEDED=1
+  else
+    note "WARNING: $HAILO_PACKAGE did not install; inference will run on the CPU."
+  fi
+else
+  note "no AI HAT+ on the PCIe bus; inference will run on the CPU"
+fi
 
 # -- the clock -------------------------------------------------------------
 
@@ -113,7 +148,10 @@ for group in video i2c gpio; do
   getent group "$group" >/dev/null && usermod -aG "$group" "$APP_USER"
 done
 
-install -d -o "$APP_USER" -g "$APP_USER" "$DATA_DIR" "$DATA_DIR/media" "$DATA_DIR/db"
+# sessions/ holds the per-session CSV files; hailort/ takes HailoRT's own log,
+# which it would otherwise try to write into the read-only app directory.
+install -d -o "$APP_USER" -g "$APP_USER" \
+  "$DATA_DIR" "$DATA_DIR/media" "$DATA_DIR/db" "$DATA_DIR/sessions" "$DATA_DIR/hailort"
 install -d -m 700 "$CONFIG_DIR"
 
 # -- application -----------------------------------------------------------
@@ -236,9 +274,18 @@ cat <<EOF
     Joining it should open the dashboard automatically; if it does not,
     browse to http://192.168.4.1:8000/
 
+    Session CSV files (inference, power, fps) are written to
+    $DATA_DIR/sessions and can be downloaded from the dashboard.
+
     Before any field trial, confirm:
       - the RTC battery is fitted, or timestamps will be wrong
-      - models/pepperwatch.onnx exists, or the stub detector runs instead
+      - models/pepperwatch.onnx exists (CPU), and models/pepperwatch_<chip>.hef
+        if an AI HAT+ is fitted, or the stub detector runs instead
       - an agriculturist has signed off config/recommendations.json
 
 EOF
+
+if [ "$REBOOT_NEEDED" -eq 1 ]; then
+  log "Reboot required"
+  note "The AI HAT+ driver was just installed and loads at boot: sudo reboot"
+fi

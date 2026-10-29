@@ -70,7 +70,6 @@ def test_dashboard_contains_the_figure_3_4_elements(client) -> None:
         "data-kpi-confidence",   # Avg. Confidence tile
         "data-kpi-trend",        # Trend tile
         "data-kpi-severity",     # Severity tile
-        "data-insight",          # the plain-language banner
         "data-donut",            # Detection Distribution
         "data-toggle-live",      # the Live toggle
     ):
@@ -91,9 +90,35 @@ def test_operator_and_role_render_in_the_sidebar(client, cfg) -> None:
     assert cfg.site.role in html
 
 
-def test_mock_platform_is_labelled_in_the_ui(client) -> None:
-    """A screenshot taken during development must not look like field data."""
-    assert "mock hardware" in client.get("/").get_data(as_text=True)
+def test_dashboard_shows_the_measured_performance_and_power(client) -> None:
+    """The figures the results chapter reports, all on the dashboard."""
+    html = client.get("/").get_data(as_text=True)
+    for hook in (
+        "data-pipeline-inference-rate",  # inference fps, against the 17 fps target
+        "data-pipeline-inference-meter",
+        "data-pipeline-preview-rate",
+        "data-pipeline-latency",
+        "data-health-power",
+        "data-health-power-source",      # INA219 or the PMIC estimate, never unlabelled
+        "data-session-energy",
+        "data-accelerator-chip",         # CPU or which Hailo chip
+    ):
+        assert hook in html, f"performance element {hook} is missing"
+
+
+def test_dashboard_offers_the_session_csv_files(client) -> None:
+    html = client.get("/").get_data(as_text=True)
+    for name in ("inference.csv", "system.csv", "summary.json"):
+        assert f'data-session-file="{name}"' in html
+    assert "/api/sessions.csv" in html
+    assert "data-session-new" in html
+
+
+def test_trimmed_metrics_are_gone(client) -> None:
+    """Battery, storage, memory and the insight banner were cut from the dashboard."""
+    html = client.get("/").get_data(as_text=True)
+    for hook in ("data-health-battery", "data-health-disk", "data-health-mem", "data-insight"):
+        assert hook not in html
 
 
 def test_unvalidated_advice_shows_a_draft_banner(client) -> None:

@@ -14,11 +14,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from pepperwatch.accel import AcceleratorChoice
 from pepperwatch.config import load
 from pepperwatch.detect import get_detector
 from pepperwatch.detect.onnx_detector import OnnxDetector
 from tests.make_fixture_model import build
 
+CPU = AcceleratorChoice(kind="cpu", name="CPU", profile="cpu", reason="test")
 CLASSES = ["healthy", "aphid_damage"]
 
 
@@ -147,10 +149,11 @@ def test_factory_prefers_the_model_when_one_exists(fixture_model: Path, tmp_path
         },
         use_env=False,
     )
-    det = get_detector(cfg)
+    det, choice = get_detector(cfg, CPU)
     try:
         assert det.info.kind == "onnx"
         assert det.info.synthetic is False
+        assert choice.kind == "cpu"
     finally:
         det.close()
 
@@ -163,6 +166,42 @@ def test_factory_falls_back_to_the_stub_and_flags_it(tmp_path: Path) -> None:
         },
         use_env=False,
     )
-    det = get_detector(cfg)
+    det, _ = get_detector(cfg, CPU)
     assert det.info.kind == "stub"
     assert det.info.synthetic is True
+
+
+def test_onnx_detector_reports_its_stage_timings(detector: OnnxDetector) -> None:
+    """Session CSV rows split each inference into preprocess, model and decode."""
+    frame = np.full((480, 640, 3), 90, dtype=np.uint8)
+    detector.detect(frame)
+    timings = detector.timings
+    assert timings.preprocess_ms > 0 and timings.infer_ms > 0 and timings.postprocess_ms >= 0
+    assert timings.total_ms == pytest.approx(
+        timings.preprocess_ms + timings.infer_ms + timings.postprocess_ms
+    )
+
+
+def test_a_hailo_choice_that_cannot_start_falls_back_to_the_cpu(
+    fixture_model: Path, tmp_path: Path
+) -> None:
+    """A HEF the runtime rejects must not stop the session; it runs on the CPU and says why."""
+    hef = tmp_path / "pepperwatch_hailo8l.hef"
+    hef.write_bytes(b"not a real HEF")
+    cfg = load(
+        {
+            "inference": {"model_path": str(fixture_model)},
+            "db": {"path": str(tmp_path / "t.db")},
+        },
+        use_env=False,
+    )
+    choice = AcceleratorChoice(
+        kind="hailo", name="Hailo-8L", profile="hailo", reason="test", hef_path=hef
+    )
+    det, final = get_detector(cfg, choice)
+    try:
+        assert det.info.kind == "onnx"
+        assert final.kind == "cpu" and final.profile == "cpu"
+        assert "pepperwatch_hailo8l.hef" in final.reason
+    finally:
+        det.close()

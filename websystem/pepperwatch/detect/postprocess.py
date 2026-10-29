@@ -243,6 +243,91 @@ def decode_yolov8(
     return detections
 
 
+def decode_hailo_nms(
+    output,
+    transform: Letterbox,
+    class_names: list[str],
+    *,
+    conf_threshold: float,
+    max_detections: int = 100,
+) -> list[Detection]:
+    """Turn a Hailo HEF's on-chip NMS output into frame-space detections.
+
+    A YOLOv8 HEF compiled with NMS (the Hailo model zoo default) returns, for
+    each class, boxes as ``[y_min, x_min, y_max, x_max, score]`` normalised to
+    the model input, i.e. to the letterboxed square. HailoRT hands that over in
+    one of two shapes, both accepted here:
+
+    * already split: a list with one ``(N, 5)`` array per class, possibly
+      wrapped in a one-element batch list;
+    * packed (``HAILO_NMS_BY_CLASS``): a flat float buffer holding, for each
+      class in turn, a box count followed by that many 5-tuples.
+
+    Suppression already ran on the chip, so only the confidence threshold and
+    the detection cap remain. Note the axis order: y before x, unlike YOLO's
+    own head.
+    """
+    per_class = _split_hailo_nms(output, len(class_names))
+    size = float(transform.size)
+
+    candidates: list[tuple[float, int, tuple[float, float, float, float]]] = []
+    for class_id, boxes in enumerate(per_class):
+        for y1, x1, y2, x2, score in boxes:
+            if score < conf_threshold:
+                continue
+            candidates.append((float(score), class_id, (x1 * size, y1 * size, x2 * size, y2 * size)))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+
+    detections: list[Detection] = []
+    for score, class_id, corners in candidates[:max_detections]:
+        x, y, w, h = transform.to_frame(*corners)
+        if w <= 0.0 or h <= 0.0:
+            continue
+        detections.append(
+            Detection(
+                class_id=class_id,
+                class_name=class_names[class_id] if class_id < len(class_names) else str(class_id),
+                confidence=score,
+                x=x,
+                y=y,
+                w=w,
+                h=h,
+            ).clipped()
+        )
+    return detections
+
+
+def _split_hailo_nms(output, num_classes: int) -> list[np.ndarray]:
+    """Normalise either NMS layout to one ``(N, 5)`` float array per class."""
+    if isinstance(output, dict):
+        if len(output) != 1:
+            raise ValueError(f"expected one NMS output, got {sorted(output)}")
+        output = next(iter(output.values()))
+
+    if isinstance(output, (list, tuple)):
+        if len(output) == 1 and isinstance(output[0], (list, tuple)):
+            output = output[0]  # batch of one
+        arrays = [np.asarray(item, dtype=np.float32) for item in output]
+        if len(arrays) != num_classes:
+            raise ValueError(f"NMS output has {len(arrays)} classes; expected {num_classes}")
+        return [a.reshape(-1, 5) if a.size else np.zeros((0, 5), np.float32) for a in arrays]
+
+    flat = np.asarray(output, dtype=np.float32).ravel()
+    per_class: list[np.ndarray] = []
+    offset = 0
+    for _ in range(num_classes):
+        if offset >= flat.size:
+            per_class.append(np.zeros((0, 5), np.float32))
+            continue
+        count = int(flat[offset])
+        offset += 1
+        if count < 0 or offset + count * 5 > flat.size:
+            raise ValueError(f"packed NMS buffer is malformed at offset {offset - 1} (count {count})")
+        per_class.append(flat[offset : offset + count * 5].reshape(count, 5))
+        offset += count * 5
+    return per_class
+
+
 def derive_severity(
     detections: list[Detection],
     *,

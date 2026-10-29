@@ -1,27 +1,23 @@
-"""Raspberry Pi 5 implementations of the HAL.
+"""Raspberry Pi 5 camera and sensor drivers.
 
 Two camera backends, because the manuscript specifies two different things:
 Table 3.2 lists a MIPI CSI Camera Module, while Figure 3.3's hardware block
-says "Web Camera". Both are supported, selected by ``[camera].kind``, so the
-figure can be corrected either way without touching code.
+says "Web Camera". Both are supported, and :func:`open_camera` picks whichever
+is attached (see ``hal.discovery``) unless ``[camera].kind`` forces one.
 
 Picamera2 is **apt-only**. ``sudo apt install python3-picamera2`` provides it
 along with the libcamera bindings it needs; pip cannot build working ones. That
-is why the venv must be created with ``--system-site-packages`` — and why
+is why the venv must be created with ``--system-site-packages``, and why
 ``python -m pepperwatch.doctor`` probes for the numpy ABI mismatch that flag
 can introduce.
 
 Telemetry reads real sensors and degrades to ``None`` for anything absent,
-never to a plausible-looking zero. An INA219 over I²C supplies the voltage and
-current that Chapter IV's power analysis needs; without one those fields stay
-``None`` and the dashboard shows a dash rather than inventing a number.
+never to a plausible-looking zero.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -32,6 +28,8 @@ import psutil
 
 from ..config import Config
 from .base import CameraError, CameraInfo, CameraSource, Frame, Telemetry, TelemetrySource
+from .discovery import CameraCandidate, choose_camera, discover_cameras
+from .power import Vcgencmd, parse_pmic_adc, parse_throttled, read_cpu_freq_mhz, read_fan_rpm
 
 log = logging.getLogger(__name__)
 
@@ -64,13 +62,13 @@ class CsiCamera(CameraSource):
     each time.
     """
 
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, candidate: CameraCandidate) -> None:
         self.cfg = cfg
+        self.candidate = candidate
         self._camera = None
         self._seq = 0
         self._started = False
         self._lock = threading.Lock()
-        self._model = "unknown"
 
     def start(self) -> None:
         with self._lock:
@@ -87,25 +85,29 @@ class CsiCamera(CameraSource):
                     f"  ({exc})"
                 ) from exc
 
-            camera = Picamera2()
-            self._model = str(camera.camera_properties.get("Model", "unknown"))
+            try:
+                camera = Picamera2(camera_num=int(self.candidate.device))
+                config = camera.create_video_configuration(
+                    main={
+                        "size": (self.cfg.camera.still_width, self.cfg.camera.still_height),
+                        "format": "RGB888",
+                    },
+                    lores={
+                        "size": (self.cfg.camera.preview_width, self.cfg.camera.preview_height),
+                        "format": "RGB888",
+                    },
+                    # Only one buffered frame: the worker always wants the
+                    # newest, and a deeper queue would just add latency between
+                    # what the camera sees and what the boxes describe.
+                    buffer_count=2,
+                    # libcamera clamps this to what the sensor mode allows.
+                    controls={"FrameRate": float(self.cfg.camera.preview_fps)},
+                )
+                camera.configure(config)
+                camera.start()
+            except Exception as exc:  # noqa: BLE001
+                raise CameraError(f"CSI camera {self.candidate.device} would not start: {exc}") from exc
 
-            config = camera.create_video_configuration(
-                main={
-                    "size": (self.cfg.camera.still_width, self.cfg.camera.still_height),
-                    "format": "RGB888",
-                },
-                lores={
-                    "size": (self.cfg.camera.preview_width, self.cfg.camera.preview_height),
-                    "format": "RGB888",
-                },
-                # Only one buffered frame: the worker always wants the newest,
-                # and a deeper queue would just add latency between what the
-                # camera sees and what the boxes describe.
-                buffer_count=2,
-            )
-            camera.configure(config)
-            camera.start()
             # Auto exposure and white balance need a moment to settle, or the
             # first several frames come out badly exposed.
             time.sleep(1.5)
@@ -113,9 +115,10 @@ class CsiCamera(CameraSource):
             self._camera = camera
             self._started = True
             log.info(
-                "CSI camera started: %s, preview %dx%d, still %dx%d",
-                self._model,
+                "CSI camera started: %s, preview %dx%d @ %s fps, still %dx%d",
+                self.candidate.model,
                 self.cfg.camera.preview_width, self.cfg.camera.preview_height,
+                self.cfg.camera.preview_fps,
                 self.cfg.camera.still_width, self.cfg.camera.still_height,
             )
 
@@ -151,49 +154,53 @@ class CsiCamera(CameraSource):
     def info(self) -> CameraInfo:
         return CameraInfo(
             kind="csi",
-            description=f"MIPI CSI via Picamera2 ({self._model})",
+            description=f"MIPI CSI camera {self.candidate.device} ({self.candidate.model})",
             width=self.cfg.camera.preview_width,
             height=self.cfg.camera.preview_height,
             fps=float(self.cfg.camera.preview_fps),
-            synthetic=False,
-            detail={"model": self._model, "rotate": self.cfg.camera.rotate},
+            detail={**self.candidate.as_dict(), "rotate": self.cfg.camera.rotate},
         )
 
 
 class UsbCamera(CameraSource):
-    """USB camera via OpenCV, matching Figure 3.3's "Web Camera" block.
+    """USB (UVC) webcam via OpenCV's V4L2 backend, Figure 3.3's "Web Camera"."""
 
-    Also the fallback when Picamera2 will not import, which on a Pi is usually
-    a numpy ABI mismatch introduced by pip-installing numpy into a
-    ``--system-site-packages`` venv.
-    """
-
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, candidate: CameraCandidate) -> None:
         self.cfg = cfg
+        self.candidate = candidate
         self._capture: cv2.VideoCapture | None = None
         self._seq = 0
         self._lock = threading.Lock()
+        self._actual: tuple[int, int, float] | None = None
 
     def start(self) -> None:
         with self._lock:
             if self._capture is not None:
                 return
-            capture = cv2.VideoCapture(self.cfg.camera.device_index)
+            capture = cv2.VideoCapture(self.candidate.device, cv2.CAP_V4L2)
             if not capture.isOpened():
-                raise CameraError(f"could not open USB camera {self.cfg.camera.device_index}")
+                raise CameraError(f"could not open USB camera {self.candidate.device}")
 
+            # FOURCC first: V4L2 picks the frame sizes and rates on offer per
+            # pixel format, and most webcams reach 30 fps only in MJPG.
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera.preview_width)
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera.preview_height)
             capture.set(cv2.CAP_PROP_FPS, self.cfg.camera.preview_fps)
             # A driver-side buffer would hand us stale frames; the worker wants
             # the newest one and drops the rest itself.
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            # MJPG lets the camera do the compression, which matters on a CPU
-            # already saturated by inference.
-            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
+            self._actual = (
+                int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+                float(capture.get(cv2.CAP_PROP_FPS)),
+            )
             self._capture = capture
-            log.info("USB camera %d opened", self.cfg.camera.device_index)
+            log.info(
+                "USB camera %s (%s) opened at %dx%d @ %.0f fps",
+                self.candidate.device, self.candidate.model, *self._actual,
+            )
 
     def read(self) -> Frame | None:
         if self._capture is None:
@@ -218,29 +225,58 @@ class UsbCamera(CameraSource):
 
     @property
     def info(self) -> CameraInfo:
+        width, height, fps = self._actual or (
+            self.cfg.camera.preview_width,
+            self.cfg.camera.preview_height,
+            float(self.cfg.camera.preview_fps),
+        )
         return CameraInfo(
             kind="usb",
-            description=f"USB camera (OpenCV device {self.cfg.camera.device_index})",
-            width=self.cfg.camera.preview_width,
-            height=self.cfg.camera.preview_height,
-            fps=float(self.cfg.camera.preview_fps),
-            synthetic=False,
-            detail={"device_index": self.cfg.camera.device_index},
+            description=f"USB camera {self.candidate.device} ({self.candidate.model})",
+            width=width,
+            height=height,
+            fps=fps,
+            detail={**self.candidate.as_dict(), "rotate": self.cfg.camera.rotate},
         )
 
 
-def build_pi_camera(cfg: Config) -> CameraSource:
-    """Open the configured camera, falling back to USB if CSI will not start."""
-    if cfg.camera.kind == "usb":
-        return UsbCamera(cfg)
+def open_camera(cfg: Config) -> tuple[CameraSource, list[CameraCandidate]]:
+    """Find the attached cameras and start the preferred one.
 
-    camera = CsiCamera(cfg)
-    try:
-        camera.start()
-        return camera
-    except CameraError as exc:
-        log.error("CSI camera unavailable (%s) — falling back to USB", exc)
-        return UsbCamera(cfg)
+    Returns the started camera and everything that was found, for the session
+    record. If the preferred camera will not start, the next one is tried, so a
+    CSI module with a loose ribbon does not stop a session that has a webcam.
+    """
+    candidates = discover_cameras()
+    for found in candidates:
+        log.info("found camera: %s", found.describe())
+
+    kind = str(cfg.camera.kind)
+    device = str(cfg.camera.device or "")
+    preferred = choose_camera(candidates, kind=kind, device=device)
+    if preferred is None:
+        wanted = kind if not device else f"{kind} {device}"
+        seen = ", ".join(c.describe() for c in candidates) or "none"
+        raise CameraError(
+            f"no camera matching [camera] kind={wanted!r}; found: {seen}. "
+            "Check the ribbon cable or USB connection, and `rpicam-hello --list-cameras`."
+        )
+
+    ordered = [preferred] + [
+        c for c in candidates
+        if c is not preferred and (kind == "auto" or c.kind == kind) and not device
+    ]
+    errors = []
+    for candidate in ordered:
+        camera: CameraSource = CsiCamera(cfg, candidate) if candidate.kind == "csi" else UsbCamera(cfg, candidate)
+        try:
+            camera.start()
+            return camera, candidates
+        except CameraError as exc:
+            log.error("%s would not start: %s", candidate.describe(), exc)
+            errors.append(f"{candidate.describe()}: {exc}")
+            camera.stop()
+    raise CameraError("no camera would start — " + "; ".join(errors))
 
 
 def _to_bgr(array: np.ndarray, rotate: int) -> np.ndarray:
@@ -267,21 +303,18 @@ def _rotate(image: np.ndarray, degrees: int) -> np.ndarray:
 
 
 class PiTelemetry(TelemetrySource):
-    """Real sensor readings from the Pi, plus an INA219 if one is fitted."""
+    """Readings from the Pi's own sensors, plus an INA219 if one is fitted."""
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self._ina219 = None
         self._ina219_tried = False
-        self._vcgencmd_available = True
+        self._vcgencmd = Vcgencmd()
 
     def sample(self) -> Telemetry:
-        cpu_temp = self._cpu_temp()
-        throttled, detail = self._throttle_state()
         memory = psutil.virtual_memory()
-
         try:
-            disk_free_mb = psutil.disk_usage("/").free / 1e6
+            disk_free_mb = round(psutil.disk_usage("/").free / 1e6, 1)
         except OSError:
             disk_free_mb = None
 
@@ -295,21 +328,28 @@ class PiTelemetry(TelemetrySource):
             except Exception as exc:  # noqa: BLE001 — an I2C glitch is not fatal
                 log.debug("INA219 read failed: %s", exc)
 
+        pmic_text = self._vcgencmd.run("pmic_read_adc")
+        pmic = parse_pmic_adc(pmic_text) if pmic_text else None
+
+        flags = parse_throttled(self._vcgencmd.run("get_throttled") or "")
+        throttled, detail = _decode_throttle(flags)
+
         return Telemetry(
             ts=time.time(),
-            synthetic=False,
-            cpu_temp_c=cpu_temp,
+            cpu_temp_c=self._cpu_temp(),
             cpu_percent=psutil.cpu_percent(interval=None),
+            cpu_freq_mhz=read_cpu_freq_mhz(),
             mem_used_mb=round((memory.total - memory.available) / 1e6, 1),
             mem_total_mb=round(memory.total / 1e6, 1),
-            disk_free_mb=round(disk_free_mb, 1) if disk_free_mb is not None else None,
+            disk_free_mb=disk_free_mb,
             voltage_v=voltage_v,
             current_ma=current_ma,
             power_w=power_w,
-            # Deliberately None rather than a guess: without a battery monitor
-            # there is no honest state of charge to report.
-            battery_pct=None,
+            pmic_power_w=pmic.rails_w if pmic else None,
+            input_voltage_v=pmic.input_voltage_v if pmic else None,
+            fan_rpm=read_fan_rpm(),
             throttled=throttled,
+            throttled_flags=flags,
             throttle_detail=detail,
         )
 
@@ -318,35 +358,6 @@ class PiTelemetry(TelemetrySource):
             return round(int(THERMAL_ZONE.read_text().strip()) / 1000.0, 1)
         except (OSError, ValueError):
             return None
-
-    def _throttle_state(self) -> tuple[bool, str]:
-        """Decode ``vcgencmd get_throttled``.
-
-        The latched "has occurred" bits are the valuable ones: they survive the
-        event, so an 8-hour soak can be reviewed afterwards for under-voltage
-        or thermal capping that would otherwise have gone unnoticed.
-        """
-        if not self._vcgencmd_available:
-            return False, ""
-        try:
-            result = subprocess.run(
-                ["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=2
-            )
-        except (OSError, subprocess.SubprocessError):
-            self._vcgencmd_available = False
-            return False, ""
-
-        match = re.search(r"0x([0-9a-fA-F]+)", result.stdout)
-        if not match:
-            return False, ""
-
-        flags = int(match.group(1), 16)
-        if flags == 0:
-            return False, ""
-
-        reasons = [label for bit, label in THROTTLE_BITS.items() if flags & (1 << bit)]
-        active = any(flags & (1 << bit) for bit in (0, 1, 2, 3))
-        return active, "; ".join(reasons)
 
     def _get_ina219(self):
         """Lazily open the INA219, once. Absence is normal, not an error."""
@@ -362,9 +373,23 @@ class PiTelemetry(TelemetrySource):
             log.info("INA219 power monitor detected")
         except Exception as exc:  # noqa: BLE001
             log.info(
-                "no INA219 power monitor (%s) — voltage, current and power will "
-                "be reported as unavailable rather than estimated",
+                "no INA219 power monitor (%s); power comes from the Pi 5 PMIC "
+                "rail readings only",
                 type(exc).__name__,
             )
             self._ina219 = None
         return self._ina219
+
+
+def _decode_throttle(flags: int | None) -> tuple[bool, str]:
+    """Whether the SoC is throttled now, and every reason set since boot.
+
+    The latched "has occurred" bits are the valuable ones: they survive the
+    event, so an 8-hour soak can be reviewed afterwards for under-voltage or
+    thermal capping that would otherwise have gone unnoticed.
+    """
+    if not flags:
+        return False, ""
+    reasons = [label for bit, label in THROTTLE_BITS.items() if flags & (1 << bit)]
+    active = any(flags & (1 << bit) for bit in (0, 1, 2, 3))
+    return active, "; ".join(reasons)

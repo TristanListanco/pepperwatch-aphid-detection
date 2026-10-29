@@ -53,11 +53,13 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     from .routes_api import bp as api_bp
     from .routes_pages import bp as pages_bp
     from .routes_portal import bp as portal_bp
+    from .routes_sessions import bp as sessions_bp
     from .routes_stream import bp as stream_bp
 
     # Portal first: its probe routes must win over the catch-all.
     app.register_blueprint(portal_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(sessions_bp)
     app.register_blueprint(stream_bp)
     app.register_blueprint(pages_bp)
 
@@ -94,8 +96,5 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         return response
 
-    log.info(
-        "web app ready: site=%s platform=%s db=%s",
-        cfg.site.name, cfg.platform_kind, database.path,
-    )
+    log.info("web app ready: site=%s db=%s", cfg.site.name, database.path)
     return app

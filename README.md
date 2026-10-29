@@ -6,15 +6,22 @@
 (*Capsicum annuum*) for smallholder farms.**
 
 A Raspberry Pi 5 watches the crop canopy through a camera and runs a YOLOv8n
-model on every frame it can. It also broadcasts its own Wi-Fi network and serves
-a live dashboard to any phone that joins. No internet, cloud account or app
-install is needed: a farmer or agricultural officer joins the `PepperWatch`
-network and the dashboard opens.
+model on every frame it can, on its CPU or on a Raspberry Pi AI HAT+ when one
+is fitted. It also broadcasts its own Wi-Fi network and serves a live dashboard
+to any phone that joins. No internet, cloud account or app install is needed: a
+farmer or agricultural officer joins the `PepperWatch` network and the dashboard
+opens.
+
+Every run is recorded as a **session**: per-inference timings, frame rates,
+power and temperatures go to CSV files for the results chapter.
 
 ```
- camera ──► Raspberry Pi 5 ──────────────────────────────► phone browser
-            detect → score severity → log → serve dashboard   (over the Pi's own Wi-Fi)
+ camera ──► Raspberry Pi 5 (+ AI HAT+) ──────────────────────► phone browser
+            detect → score severity → log → record CSV → serve dashboard
 ```
+
+This system runs on the Raspberry Pi only. The test suite runs anywhere with
+Python 3.11+, since it needs no hardware.
 
 ---
 
@@ -27,8 +34,9 @@ network and the dashboard opens.
   - [Which data travels where](#which-data-travels-where)
   - [Data model](#data-model)
   - [Networking and the captive portal](#networking-and-the-captive-portal)
-- [Quick start on a development machine](#quick-start-on-a-development-machine)
 - [Deploying to a Raspberry Pi 5](#deploying-to-a-raspberry-pi-5)
+- [AI HAT+ acceleration](#ai-hat-acceleration)
+- [Measurements: session CSV files](#measurements-session-csv-files)
 - [Configuration](#configuration)
 - [Adding the trained model](#adding-the-trained-model)
 - [Using the dashboard](#using-the-dashboard)
@@ -55,8 +63,10 @@ network and the dashboard opens.
     │   └── recommendations.json  Advisory text (English + Cebuano)
     ├── pepperwatch/
     │   ├── worker.py           Capture + inference + persistence process
-    │   ├── detect/             ONNX detector, letterbox/NMS/decoding, stub detector
-    │   ├── hal/                Camera and sensor drivers: Pi (Picamera2/USB, INA219) and mock
+    │   ├── accel.py            AI HAT+ detection; CPU-or-Hailo choice per session
+    │   ├── session.py          Per-session CSV recorder (inference, system, summary)
+    │   ├── detect/             Hailo and ONNX detectors, letterbox/NMS/decoding, stub
+    │   ├── hal/                Camera discovery (CSI/USB), drivers, PMIC/INA219 power
     │   ├── frames.py           Shared-memory frame transport (worker → web)
     │   ├── mqtt_bus.py         MQTT topics and client wrapper
     │   ├── db.py, schema.sql   SQLite (WAL) access layer and schema
@@ -67,9 +77,9 @@ network and the dashboard opens.
     │   ├── maintenance.py      Nightly WAL truncation + log pruning
     │   └── web/                Flask app: REST, SSE, MJPEG, pages, captive portal
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
-    ├── scripts/                dev.sh, prepare_mock_frames.py, bench_fps.py, check_js.sh
-    ├── models/                 Drop pepperwatch.onnx here (not committed)
-    └── tests/                  281 unit/API tests + 19 Selenium browser tests
+    ├── scripts/                bench_fps.py (CPU vs AI HAT+), check_js.sh
+    ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
+    └── tests/                  344 hardware-free unit and API tests
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -83,11 +93,13 @@ deliberate differences from the thesis manuscript.
 
 | Component | Role |
 |---|---|
-| Raspberry Pi 5 (8 or 16 GB) | Runs everything. Four Cortex-A76 cores, no accelerator; inference is CPU-only |
-| Camera Module (MIPI CSI) or USB webcam | Image source, selected with `[camera].kind` |
+| Raspberry Pi 5 (8 or 16 GB) | Runs everything. Inference runs on its four Cortex-A76 cores unless an AI HAT+ is fitted |
+| Raspberry Pi AI HAT+ (optional) | Hailo-8L (13 TOPS), Hailo-8 (26 TOPS) or Hailo-10H (AI HAT+ 2) on PCIe. Detected at the start of each session and used automatically |
+| Camera Module (MIPI CSI) or USB webcam | Image source. Detected at the start of each session; CSI preferred when both are attached |
 | On-board Wi-Fi | Runs as an access point (`PepperWatch`, 2.4 GHz) that phones join |
 | RTC coin cell (J5 connector) | Keeps the clock correct offline, since there is no NTP |
-| INA219 (optional, I²C) | Voltage/current/power for the energy analysis |
+| Pi 5 PMIC (built in) | Per-rail voltage and current, so every session has a power figure with no extra hardware |
+| INA219 (optional, I²C) | Whole-device voltage, current and power, which the PMIC cannot see |
 
 Four long-running pieces of software run on the Pi, all managed by systemd
 under one target, `pepperwatch.target`:
@@ -112,10 +124,13 @@ flowchart LR
             TT[telemetry thread]
         end
 
+        HAT[[AI HAT+<br/>Hailo, optional]] <-.->|PCIe| IT
         CT -->|clean JPEG| SHM[(shared memory<br/>2-slot seqlock)]
         IT -->|detections, flags| MQ{{Mosquitto<br/>127.0.0.1:1883}}
         TT -->|temps, CPU, power| MQ
         IT -->|events + boxes| DB[(SQLite WAL<br/>+ media/ JPEGs)]
+        IT -->|every inference| CSV[(sessions/&lt;id&gt;/<br/>CSV files)]
+        TT -->|1 Hz| CSV
 
         subgraph WEB["pepperwatch-web (Flask)"]
             HUB[EventHub<br/>one MQTT subscription]
@@ -142,6 +157,25 @@ flowchart LR
 This follows one frame from the lens to the farmer's screen. File references are
 relative to `websystem/pepperwatch/`.
 
+#### 0. Session start: what hardware is attached (`accel.py`, `hal/discovery.py`)
+
+Each time the worker starts (at boot, or when *New session* is pressed on the
+dashboard), it checks the hardware before any frame is taken:
+
+1. **Accelerator.** It looks for Hailo's PCI vendor ID (`0x1e60`) in sysfs. If an
+   AI HAT+ is there, its driver is loaded (`/dev/hailo0`), HailoRT imports, and
+   a compiled model matching the chip is in `models/`, the session runs on the
+   HAT. Otherwise it runs on the CPU, and the reason is recorded.
+2. **Profile.** The matching `[profiles.hailo]` or `[profiles.cpu]` table is
+   applied: the HAT profile captures at up to 60 fps because inference keeps
+   up; the CPU profile captures at 25 fps and gives ONNX Runtime 3 threads.
+3. **Camera.** CSI cameras are listed through libcamera and USB webcams through
+   sysfs (`uvcvideo` driver). The CSI camera is used if present, otherwise the
+   webcam; if the preferred one won't start, the next is tried.
+4. **Recording.** A session folder is created and every inference and a
+   once-a-second system sample are written to CSV (see
+   [Measurements](#measurements-session-csv-files)).
+
 #### 1. Capture (`worker.py` → capture thread, `hal/`)
 
 The capture thread reads the camera as fast as it delivers (target
@@ -158,9 +192,6 @@ further behind what the camera currently sees. With a single slot, a new frame
 replaces any frame the detector hasn't taken yet, so inference always works on
 the newest image. Dropped frames are counted and reported.
 
-On a development Mac, `hal/mock.py` stands in for the camera by replaying the
-Naawan field photographs.
-
 #### 2. Inference (`worker.py` → inference thread, `detect/`)
 
 The inference thread takes the newest frame and runs the pipeline:
@@ -173,6 +204,13 @@ The inference thread takes the newest frame and runs the pipeline:
 | Decode | `decode_yolov8` | Reads the raw `(1, 4+classes, anchors)` head and applies the **confidence threshold** (default 0.25) |
 | NMS | `non_max_suppression` | Per-class non-maximum suppression at `iou_threshold` (default 0.45) |
 | Un-letterbox | `Letterbox.to_frame` | Maps boxes back to frame coordinates, then normalises them to 0–1 |
+
+**On the AI HAT+** (`detect/hailo_detector.py`) the same letterbox runs on the
+CPU, but the frame goes to the HAT as plain uint8 RGB: normalisation is folded
+into the compiled HEF, and so is NMS. `decode_hailo_nms` then applies the
+confidence threshold and maps boxes back through the same letterbox inverse.
+Every detector reports its own preprocess / inference / postprocess times, which
+go into the session CSV.
 
 If no model file exists, `detect/stub_detector.py` takes over: a classical
 computer-vision heuristic that finds pale speckling on green leaves. Everything
@@ -204,11 +242,13 @@ messages travel over MQTT.
 | `detect/frame` | 0 | every inference | boxes, severity, damaged area, inference ms |
 | `detect/flag` | 1 | when severity changes | new/previous severity, count, max confidence |
 | `event/persisted` | 1 | when a row is saved | event id, image/thumbnail paths |
-| `telemetry/system` | 0 | ~1 s | CPU temp, CPU %, memory, disk, power, throttling, thermal level |
+| `telemetry/system` | 0 | ~1 s | CPU and Hailo temp, CPU %, clock, power (INA219 and PMIC), throttle flags, thermal level |
 | `telemetry/pipeline` | 0 | ~1 s | preview fps, inference fps, inference ms, dropped frames, paused |
 | `status/worker` | 1, retained, Last Will | on connect / disconnect / crash | `online` / `offline` |
 | `status/detector` | 1, retained | on start | model version, detector kind, synthetic flag |
-| `cmd/capture`, `cmd/inference`, `cmd/config` | 1 | from the dashboard | snapshot, pause/resume, threshold changes |
+| `status/session` | 1, retained | session start | accelerator, camera, model, settings, session id |
+| `session/summary` | 0 | every 15 s | the running session's means, p95 latency, power, energy |
+| `cmd/capture`, `cmd/inference`, `cmd/config`, `cmd/session` | 1 | from the dashboard | snapshot, pause/resume, threshold changes, new session |
 
 The retained status topics mean a dashboard that connects late immediately
 learns whether the detector is alive and which model it runs. The Last Will
@@ -268,8 +308,10 @@ from the Pi.
   `<canvas>` overlay, scaled to the phone's screen. Boxes are stored normalised
   (0–1), so they line up at any resolution.
 - Panels update from the same event stream: KPI tiles, distribution donut,
-  history gallery, system health, and the advisory panel, which picks text from
-  `recommendations.json` by severity and language (English or Cebuano).
+  history gallery, Performance & Power, the Session card (from
+  `status/session` and the 15-second `session/summary`), and the advisory
+  panel, which picks text from `recommendations.json` by severity and language
+  (English or Cebuano).
 
 #### 8. Commands back to the worker
 
@@ -322,7 +364,7 @@ sequenceDiagram
 - **Thermal governor (`thermal.py`).** Above 75 °C the worker stretches the gap
   between inferences: 2× at 75 °C, 4× at 78 °C, 8× at 81 °C, recovering with a
   4 °C margin so it doesn't flip back and forth. The live preview keeps its full
-  rate. Every level change is logged and shown in the System Health panel, so a
+  rate. Every level change is logged and shown on the Performance & Power card, so a
   drop in fps has a visible cause.
 - **Degrade, don't crash.** If the broker is down, the worker keeps detecting
   and the dashboard keeps serving history.
@@ -412,54 +454,17 @@ Detection events are never pruned automatically; they're the research record.
 
 ---
 
-## Quick start on a development machine
-
-Everything runs on a Mac without a Pi or camera. The mock camera replays the
-field photographs and the mock telemetry models a day's temperatures.
-
-**Prerequisites:** Python 3.11+, [Homebrew](https://brew.sh), Git, and Chrome
-(only for the Selenium tests).
-
-```bash
-git clone https://github.com/TristanListanco/pepperwatch-aphid-detection.git
-cd pepperwatch-aphid-detection/websystem
-
-python3.11 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-brew install mosquitto
-
-./scripts/dev.sh            # builds the mock frames, starts broker + worker + web
-```
-
-Open <http://localhost:8000> and tap **Start Camera**. Then:
-
-```bash
-./scripts/dev.sh status     # what's running
-./scripts/dev.sh stop       # stop everything
-tail -f var/worker.log var/web.log
-.venv/bin/python -m pepperwatch.doctor   # check the setup
-```
-
-> The first `dev.sh` run builds `var/mock_frames/` from about 300 photos at the
-> `datasets-v1` tag. A full clone already has them. To build from a folder of
-> images instead, run
-> `.venv/bin/python scripts/prepare_mock_frames.py --source /path/to/photos`.
-
-You can also run the processes by hand: start `mosquitto`, then
-`python -m pepperwatch.worker` and `python -m pepperwatch.web` in separate
-terminals.
-
----
-
 ## Deploying to a Raspberry Pi 5
 
 ### What you need
 
 - Raspberry Pi 5 (8 or 16 GB), official 27 W power supply, active cooler
-- Camera Module on the CSI port, or a USB webcam (set `[camera].kind = "usb"`)
+- Camera Module on the CSI port, or a USB webcam. Both are found automatically
+- Optional: a Raspberry Pi **AI HAT+** (Hailo-8L, Hailo-8, or the AI HAT+ 2's
+  Hailo-10H), fitted with the Pi **powered off**
 - 64 GB+ microSD card, or a USB SSD for long field runs (more write endurance)
 - RTC coin cell on the J5 connector
-- Optional: INA219 power monitor on I²C
+- Optional: INA219 power monitor on I²C, for whole-device power
 
 ### 1. Prepare the OS
 
@@ -491,7 +496,8 @@ git sparse-checkout set websystem
 cd websystem
 ```
 
-If you have a trained model, put it at `models/pepperwatch.onnx` now (see
+If you have trained models, put them in `models/` now: `pepperwatch.onnx` for
+the CPU, and `pepperwatch_<chip>.hef` for an AI HAT+ (see
 [Adding the trained model](#adding-the-trained-model)).
 
 ### 3. Install
@@ -504,19 +510,26 @@ The installer:
 
 1. detects the board and RAM and refuses to run on a 32-bit userland;
 2. installs apt packages (Picamera2, libcamera, Mosquitto, NetworkManager, …);
-3. sets up the clock (hardware RTC or `fake-hwclock`);
-4. creates the `pepperwatch` system user (groups `video`, `i2c`, `gpio`);
-5. copies the app to `/opt/pepperwatch` and builds a virtualenv with
-   `--system-site-packages` (Picamera2 only comes from apt);
-6. writes `/opt/pepperwatch/config/local.toml` with a random Flask secret;
-7. **generates the Wi-Fi password** in `/etc/pepperwatch/ap.psk` and prints it;
+3. **if an AI HAT+ is on the PCIe bus**, installs its runtime: `hailo-all` for
+   the Hailo-8/8L, `hailo-h10-all` for the Hailo-10H, and warns if the PCIe link
+   is below Gen 3;
+4. sets up the clock (hardware RTC or `fake-hwclock`);
+5. creates the `pepperwatch` system user (groups `video`, `i2c`, `gpio`) and the
+   data folders, including `/var/lib/pepperwatch/sessions`;
+6. copies the app to `/opt/pepperwatch` and builds a virtualenv with
+   `--system-site-packages` (Picamera2 and HailoRT only come from apt);
+7. writes `/opt/pepperwatch/config/local.toml` with a random Flask secret;
+8. **generates the Wi-Fi password** in `/etc/pepperwatch/ap.psk` and prints it;
    write it down;
-8. installs the systemd units (plus board-specific overrides for smaller Pis) and
+9. installs the systemd units (plus board-specific overrides for smaller Pis) and
    enables `pepperwatch.target` and the maintenance timer;
-9. runs `pepperwatch.doctor --camera-probe`.
+10. runs `pepperwatch.doctor --camera-probe`.
+
+If it just installed the AI HAT+ driver, it ends with **"Reboot required"**:
+run `sudo reboot` so `/dev/hailo0` appears.
 
 It's safe to run more than once. Re-running upgrades the install and keeps the
-database, images, `local.toml` and Wi-Fi password.
+database, images, session records, `local.toml` and Wi-Fi password.
 
 ### 4. Headless for measurements (desktop image only)
 
@@ -550,8 +563,11 @@ to **<http://192.168.4.1:8000/>**.
 - [ ] `doctor` passes:
       `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/python -m pepperwatch.doctor`
 - [ ] The RTC battery is fitted (the clock is right after a power cut)
-- [ ] `models/pepperwatch.onnx` is installed. With the stub detector, results are
-      flagged synthetic and are **not** data
+- [ ] `models/pepperwatch.onnx` is installed, plus `models/pepperwatch_<chip>.hef`
+      if an AI HAT+ is fitted. With the stub detector, results are flagged
+      synthetic and are **not** data
+- [ ] The dashboard's Performance card shows the accelerator you expect
+      (e.g. **Hailo-8L**, not **CPU**)
 - [ ] A control PIN is set (see [Configuration](#configuration))
 - [ ] `config/recommendations.json` has been signed off by an agriculturist. Until
       then the dashboard shows a draft banner
@@ -570,6 +586,116 @@ sudo ./deploy/update.sh
 re-runs `install.sh`, and restarts the worker and web server if they were
 running. It refuses to run over local edits to tracked files. To try an untested
 commit on a bench Pi, run `sudo PW_DEPLOY_BRANCH=main ./deploy/update.sh`.
+
+---
+
+## AI HAT+ acceleration
+
+A Raspberry Pi AI HAT+ is used automatically when it's usable. Nothing in the
+config needs to change; the check runs at the start of every session.
+
+| Chip | Board | Runtime package | Model file it looks for |
+|---|---|---|---|
+| Hailo-8L, 13 TOPS | AI HAT+ (13 TOPS), AI Kit | `hailo-all` | `models/pepperwatch_hailo8l.hef` |
+| Hailo-8, 26 TOPS | AI HAT+ (26 TOPS) | `hailo-all` | `models/pepperwatch_hailo8.hef`, then the `hailo8l` one |
+| Hailo-10H | AI HAT+ 2 | `hailo-h10-all` | `models/pepperwatch_hailo10h.hef` |
+
+`models/pepperwatch.hef` is tried last for any chip. A HEF compiled for the
+Hailo-8L also runs on the Hailo-8 (at Hailo-8L speed), but not the other way
+round. When `hailortcli` can't tell the 8 from the 8L, the 8L build is tried
+first.
+
+**What changes on the HAT.** The HAT runs YOLOv8n well above the camera's frame
+rate, so the camera becomes the limit. The `hailo` profile therefore captures
+at up to 60 fps (the sensor caps it), the network and NMS run on the chip, and
+the CPU is left with letterboxing and decoding. The `cpu` profile keeps capture
+at 25 fps, since CPU inference can't use more frames and JPEG-encoding them
+would only compete with it. Both profiles are in `config/default.toml` under
+`[profiles.*]`; override them in `local.toml`.
+
+**When the HAT isn't used**, the session runs on the CPU and says why: on the
+dashboard (Session card), in `session.json`, and in `doctor`. The usual reasons:
+
+| Reason shown | Fix |
+|---|---|
+| `driver is not loaded (no /dev/hailo0)` | `sudo apt install hailo-all` (or `hailo-h10-all`), then `sudo reboot` |
+| `HailoRT Python bindings unavailable` | Same package; the venv sees it through `--system-site-packages` |
+| `no compiled model for the Hailo-8L` | Compile a HEF (below) and put it in `models/` with the chip in its name |
+| `failed to start …hef` | The HEF was compiled for a different chip or HailoRT version |
+
+**PCIe Gen 3.** The HAT is faster on a Gen 3 link. `doctor` and the installer
+check the link speed; if it shows `5.0 GT/s`, add `dtparam=pciex1_gen=3` to
+`/boot/firmware/config.txt` and reboot.
+
+To compare the two backends on the same camera:
+
+```bash
+sudo systemctl stop pepperwatch-worker
+cd /opt/pepperwatch
+sudo -u pepperwatch .venv/bin/python scripts/bench_fps.py --accelerator hailo --seconds 60
+sudo -u pepperwatch .venv/bin/python scripts/bench_fps.py --accelerator cpu --seconds 60
+```
+
+---
+
+## Measurements: session CSV files
+
+Every run of the worker is a **session**, recorded under
+`/var/lib/pepperwatch/sessions/<session_id>/`. The id is the UTC start time plus
+the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
+
+| File | Contents |
+|---|---|
+| `inference.csv` | One row per inference |
+| `system.csv` | One row per second |
+| `session.json` | Hardware, accelerator, camera, model (file name and SHA-256), settings, OS |
+| `summary.json` | Means, p50/p95 latency, power, energy; rewritten every 15 s |
+| `../sessions.csv` | One row per session, rebuilt from every `summary.json`: the table to start a results chapter from |
+
+**`inference.csv`**
+
+| Column | Meaning |
+|---|---|
+| `timestamp`, `elapsed_s` | UTC time, seconds since the session started |
+| `frame_seq` | Camera frame number |
+| `preprocess_ms` | Letterbox and colour conversion (and tensor building on the CPU) |
+| `infer_ms` | The model call alone, on the CPU or the HAT |
+| `postprocess_ms` | Decoding, thresholding, NMS (CPU) and mapping boxes back |
+| `total_ms` | The three above together |
+| `end_to_end_ms` | From the frame being captured to its result being ready, including time waiting for the detector |
+| `inference_fps`, `preview_fps` | Rolling 3-second rates at that moment |
+| `dropped_frames` | Running count of camera frames the detector never saw |
+| `detections`, `damage_boxes`, `max_confidence`, `damaged_area`, `severity` | What the frame contained |
+| `thermal_level` | Thermal governor back-off level (0 = none) |
+
+**`system.csv`**
+
+| Column | Meaning |
+|---|---|
+| `cpu_temp_c`, `hailo_temp_c` | SoC and Hailo die temperatures |
+| `cpu_percent`, `cpu_freq_mhz`, `mem_used_mb`, `fan_rpm` | Load, current ARM clock, memory, Active Cooler speed |
+| `throttled_now`, `throttled_flags` | Whether the SoC is throttled, and the raw `vcgencmd get_throttled` bits |
+| `ina219_voltage_v`, `ina219_current_ma`, `ina219_power_w` | Whole-device supply, when an INA219 is fitted |
+| `pmic_power_w`, `input_voltage_v` | Sum of the Pi 5 PMIC's rail readings, and the 5 V input. Always present, but it covers the board's internal rails only: not the HAT, USB devices or the fan |
+| `power_w`, `power_source` | The figure used for energy: INA219 if present, otherwise the PMIC estimate |
+| `energy_wh` | Running energy for the session, integrated from `power_w` |
+| `preview_fps`, `inference_fps`, `inference_ms`, `dropped_frames`, `thermal_level`, `paused` | Pipeline state at that second |
+
+**Getting the files:** on the dashboard's Session card (*Inference CSV*,
+*Power & system CSV*, *All sessions CSV*), from the API, or straight off the Pi:
+
+```bash
+rsync -av <user>@<pi-address>:/var/lib/pepperwatch/sessions/ ./sessions/
+```
+
+**Running a comparison:** label each run so `sessions.csv` reads clearly. Type
+a label on the Session card and press *New session*; the worker closes the
+current session and starts the next, detecting the camera and the HAT again.
+For a CPU-only run with the HAT still fitted, set `[accelerator] mode = "cpu"`
+in `local.toml` and restart the worker.
+
+Disk use is about 200 bytes per inference: roughly 170 MB for an 8-hour day at
+30 fps. Sessions are never pruned automatically.
 
 ---
 
@@ -626,16 +752,23 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 | Key | Default | Notes |
 |---|---|---|
 | `site.name` | `Naawan` | Saved with every event |
-| `camera.kind` | `csi` | `csi` (Picamera2) or `usb` (OpenCV, `device_index`) |
-| `camera.preview_width/height/fps` | 640×480 @ 25 | Live preview capture |
+| `camera.kind` | `auto` | `auto` (CSI if attached, else USB), `csi` (Picamera2) or `usb` (OpenCV V4L2) |
+| `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`) |
+| `camera.preview_width/height` | 640×480 | Live preview and inference input |
+| `camera.preview_fps` | 25 | Overridden per session by `[profiles.*]` |
 | `camera.still_width/height` | 2304×1296 | Manual snapshot resolution |
 | `camera.rotate` | 0 | 0, 90, 180 or 270 |
 | `inference.model_path` | `models/pepperwatch.onnx` | Missing file → stub detector |
 | `inference.input_size` | 640 | A static-shape model's own size takes priority |
 | `inference.conf_threshold` | 0.25 | Also live-adjustable on the Settings page |
 | `inference.iou_threshold` | 0.45 | NMS overlap; also live-adjustable |
-| `inference.intra_op_threads` | 3 | ONNX threads; leave one core free |
+| `inference.intra_op_threads` | 3 | ONNX threads on the CPU; leave one core free |
 | `inference.class_names` | `["healthy", "aphid_damage"]` | Must match the model's class order |
+| `accelerator.mode` | `auto` | `auto` (AI HAT+ when usable), `hailo` (falls back to CPU with a reason), `cpu` |
+| `accelerator.hef_path` | `models/pepperwatch.hef` | Base name; `pepperwatch_<chip>.hef` beside it is tried first |
+| `profiles.cpu.*`, `profiles.hailo.*` | see `default.toml` | Applied at session start for the accelerator found: capture rate, ONNX threads |
+| `sessions.root` | `var/sessions` | Set to `/var/lib/pepperwatch/sessions` by the systemd units |
+| `sessions.system_interval_s` | 1.0 | `system.csv` sample period |
 | `severity.*` | see above | Band thresholds by count and area |
 | `persist.heartbeat_detected_s` / `heartbeat_clean_s` | 30 / 300 | Periodic saves |
 | `persist.min_write_interval_s` | 8 | Hard cap on automatic saves |
@@ -668,23 +801,51 @@ has reviewed it; the draft banner then goes away.
 
 ## Adding the trained model
 
-The worker expects a **YOLOv8 ONNX export** with two classes in this order:
-`0 = healthy`, `1 = aphid_damage`.
+Both files are trained once, as YOLOv8n with two classes in this order:
+`0 = healthy`, `1 = aphid_damage`. If the order differs, change
+`inference.class_names` to match.
+
+**For the CPU: an ONNX export.**
 
 ```bash
 # on the training machine (Ultralytics installed)
 yolo export model=best.pt format=onnx imgsz=640
 ```
 
-Copy the result to `websystem/models/pepperwatch.onnx` **in your checkout**,
-then run `sudo ./deploy/install.sh`. Don't copy it straight into
-`/opt/pepperwatch/models/`: the installer mirrors the checkout into
-`/opt/pepperwatch`, so the next install would delete it. `*.onnx` is
-gitignored, so the model won't end up in the repository by accident.
+**For an AI HAT+: a HEF compiled from that ONNX** with Hailo's Dataflow
+Compiler and Model Zoo. They run on an x86-64 Linux PC, not on the Pi, and are
+downloaded from the Hailo Developer Zone (free account). Use the Model Zoo
+release that matches the Pi's HailoRT version (`hailortcli --version` on the
+Pi), and compile for the chip on your HAT:
 
-On start, the worker logs the model file and input size and publishes them on
-`status/detector`; the dashboard's health panel shows which model is running.
-If the class order differs, change `inference.class_names` to match.
+```bash
+# on the x86 PC, inside the Hailo AI Software Suite environment
+mkdir calib && cp <~500 field photos from datasets/> calib/   # calibration images
+hailomz compile yolov8n --ckpt best.onnx --hw-arch hailo8l \
+  --calib-path calib/ --classes 2
+mv yolov8n.hef pepperwatch_hailo8l.hef     # hailo8 / hailo10h for the other chips
+```
+
+The calibration set is what quantisation to 8 bits is tuned on, so use field
+photographs like the ones the camera will see; `datasets/` has 1,143. The
+default compile keeps NMS on the chip, which is what the detector expects.
+Check the flags against the Model Zoo version you install.
+
+**Installing them:** copy the files to `websystem/models/` **in your checkout**
+on the Pi, then run `sudo ./deploy/install.sh`:
+
+```
+websystem/models/pepperwatch.onnx           # CPU sessions
+websystem/models/pepperwatch_hailo8l.hef    # AI HAT+ sessions (name the chip)
+```
+
+Don't copy them straight into `/opt/pepperwatch/models/`: the installer mirrors
+the checkout into `/opt/pepperwatch`, so the next install would delete them.
+`*.onnx` and `*.hef` are gitignored, so models won't end up in the repository by
+accident.
+
+On start, the worker logs which model and accelerator it chose; the dashboard's
+Session card shows both, and `session.json` records the model's SHA-256.
 
 ---
 
@@ -692,7 +853,7 @@ If the class order differs, change `inference.class_names` to match.
 
 | Page | Contents |
 |---|---|
-| `/` Dashboard | **Live Inference View** (frame + box overlay, Start Camera for MJPEG), **KPI tiles** (weekly detections, average confidence, trend, severity), **distribution donut**, **Historical Detection Log** (searchable gallery of saved scans), **System Health Monitor** (temperature, CPU, memory, power, thermal back-off), **Actionable Output Panel** (advice in English/Cebuano), **Capture & Export** (snapshot, pause/resume, CSV) |
+| `/` Dashboard | **KPI tiles** (weekly detections, average confidence, trend, severity) · **Live Inference View** (frame + box overlay, Start Camera for MJPEG, snapshot, pause) · **Performance & Power** (inference fps against the 17 fps target, camera fps, latency and session p95, power and its source, session energy and fps per watt, CPU and Hailo temperatures, throttling and thermal back-off) · **Session** (accelerator, camera, model, run time, CSV downloads, *New session*, table of past sessions) · **Actionable Output** (advice in English/Cebuano) · **Detection Distribution** donut · **Historical Detection Log** (searchable gallery, detections CSV) |
 | `/archived` | Scans hidden from the main gallery |
 | `/settings` | Confidence/IoU sliders, language, control PIN |
 
@@ -728,11 +889,17 @@ All responses are JSON unless noted. 🔒 = needs the control PIN (header
 | GET | `/stream/events` | Server-Sent Events (MQTT bridge) |
 | GET | `/stream/status` | Viewer counts and limits |
 | GET | `/media/<path>` | Saved annotated images and thumbnails |
+| GET | `/api/session` | The running session: accelerator, camera, model, latest summary |
+| POST 🔒 | `/api/session/new` | End this session and start another (`{"label": "…"}`) → `202` |
+| GET | `/api/sessions` | Every recorded session's summary, newest first |
+| GET | `/api/sessions/<id>/<file>` | `inference.csv`, `system.csv`, `summary.json` or `session.json` |
+| GET | `/api/sessions.csv` | One row per session, for comparing runs |
 
 ```bash
 curl http://192.168.4.1:8000/api/health
 curl -X POST -H 'X-Pepper-Pin: 4821' http://192.168.4.1:8000/api/capture
 curl -o scans.csv 'http://192.168.4.1:8000/api/export.csv'
+curl -o sessions.csv 'http://192.168.4.1:8000/api/sessions.csv'
 ```
 
 ---
@@ -757,6 +924,8 @@ journalctl -u pepperwatch-worker -n 100 --no-pager
 | `/etc/pepperwatch/ap.psk` | Wi-Fi password |
 | `/var/lib/pepperwatch/db/pepperwatch.db` | SQLite database (+ `-wal`, `-shm`) |
 | `/var/lib/pepperwatch/media/YYYY/MM/DD/` | Annotated scans and thumbnails |
+| `/var/lib/pepperwatch/sessions/` | Session CSV files and `sessions.csv` |
+| `/var/lib/pepperwatch/hailort/` | HailoRT's own log |
 | `/dev/shm/pepperwatch_frames` | Live frame buffer (RAM only) |
 
 ### Backing up results
@@ -764,8 +933,9 @@ journalctl -u pepperwatch-worker -n 100 --no-pager
 ```bash
 # consistent copy of the database while it's running (sudo apt install sqlite3 first)
 sudo sqlite3 /var/lib/pepperwatch/db/pepperwatch.db ".backup /tmp/pepperwatch-$(date +%F).db"
-# images
+# images and session records
 rsync -a /var/lib/pepperwatch/media/ /path/to/usb/media/
+rsync -a /var/lib/pepperwatch/sessions/ /path/to/usb/sessions/
 ```
 
 Or download `/api/export.csv` from a phone on the network.
@@ -777,34 +947,40 @@ sudo -u pepperwatch /opt/pepperwatch/.venv/bin/python -m pepperwatch.doctor [--c
 ```
 
 `doctor` checks the Python version, virtualenv, numpy/libcamera ABI match,
-imports, clock and RTC, board profile, whether memory limits fit the RAM, camera,
-broker, database, model, free storage, temperature, and advisory sign-off.
+imports, clock and RTC, board profile, whether memory limits fit the RAM, the
+cameras found and which will be used, the AI HAT+ (driver, runtime, HEF, PCIe
+link speed), the model, the power sources, the session folder, broker,
+database, free storage, temperature, and advisory sign-off.
 
 ---
 
 ## Testing and benchmarking
 
-From `websystem/` on the development machine:
+The tests need no camera, HAT or Pi, so they run on any machine with Python
+3.11+ (CI runs them on every push). From `websystem/`:
 
 ```bash
-.venv/bin/python -m pytest               # 281 unit/API tests (~1 min)
-.venv/bin/python -m pytest -m selenium   # 19 browser tests (needs Chrome, ~4 min)
-./scripts/check_js.sh                    # ES-module syntax check (no build step)
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest               # 344 tests (~1 min)
+./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 ```
 
-The tests cover letterbox round-trips, YOLOv8 decoding, NMS, severity, the
-persist policy, the shared-memory seqlock, SQLite concurrency (8 readers vs a
-live writer), the REST/SSE/MJPEG endpoints, the captive portal, the deploy files
-and board profiles. The Selenium suite checks the dashboard keeps updating, stays
-responsive and doesn't leak memory.
+The tests cover letterbox round-trips, YOLOv8 and Hailo NMS decoding, severity,
+the persist policy, camera discovery and AI HAT+ detection (against fake sysfs
+trees), PMIC power parsing, the session recorder and its energy integration,
+the shared-memory seqlock, SQLite concurrency (8 readers vs a live writer), the
+REST/SSE/MJPEG and session endpoints, the captive portal, the deploy files and
+board profiles.
 
 **Frame-rate benchmark**, run on the Pi booted to the console:
 
 ```bash
-sudo systemctl stop pepperwatch-worker        # free the camera
+sudo systemctl stop pepperwatch-worker        # free the camera and the HAT
 cd /opt/pepperwatch
-sudo -u pepperwatch .venv/bin/python scripts/bench_fps.py \
+sudo -u pepperwatch .venv/bin/python scripts/bench_fps.py --accelerator cpu \
   --sizes 320,416,640 --threads 2,3,4 --seconds 30
+sudo -u pepperwatch .venv/bin/python scripts/bench_fps.py --accelerator hailo --seconds 30
 ```
 
 It times each stage separately (preprocess, infer, decode, severity, encode)
@@ -825,25 +1001,23 @@ moves forward **only after every job has passed** on that exact commit.
 flowchart LR
     PUSH[push / pull request] --> T[Tests<br/>Py 3.11 + 3.13<br/>x64 + arm64]
     PUSH --> L[Lint<br/>JS modules, shellcheck]
-    PUSH --> B[Browser tests<br/>Selenium + Mosquitto]
-    T & L & B -->|all green, on main| P[Promote:<br/>fast-forward stable]
+    T & L -->|all green, on main| P[Promote:<br/>fast-forward stable]
     P --> S[(stable branch)]
     S -->|sudo ./deploy/update.sh| PI[Raspberry Pi]
 ```
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 281 unit/API tests on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 344 tests on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Lint** | Every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
-| **Browser tests** | The 19 Selenium tests against a real worker, web server and Mosquitto broker, with mock frames built from a couple of dozen `datasets-v1` photos (cached between runs). The job **fails if any test is skipped**, so a run that silently tested nothing can't promote a commit |
-| **Promote** | Runs only for pushes to `main` once the three jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
+| **Promote** | Runs only for pushes to `main` once both jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
 
 CI checks out only `websystem/` (a sparse, blob-less checkout), so the 4 GB
 dataset is never downloaded.
 
 **Pull requests** run the same jobs but never promote. To make the checks
 mandatory before merging, enable branch protection on `main` (Settings →
-Branches → require status checks: the *Tests*, *Lint* and *Browser tests* jobs).
+Branches → require status checks: the *Tests* and *Lint* jobs).
 
 The Pi can't be deployed to from GitHub: in the field it has no internet and
 isn't reachable from outside. Deployment therefore stays a pull. When the Pi
@@ -855,15 +1029,18 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| Installer stops: `Unable to locate package libatlas-base-dev` | Newer Raspberry Pi OS releases may have dropped it. Remove it from the `apt-get install` list in `deploy/install.sh` and re-run; the app doesn't need it |
 | Installer: "not aarch64" | 32-bit OS. Reflash with Raspberry Pi OS (64-bit) |
-| Dashboard says **synthetic** | No `models/pepperwatch.onnx`, so the stub detector is running. Add the model |
-| Worker exits "no frame arrived from the camera" | Check the ribbon cable or USB, `rpicam-hello --list-cameras`, and `camera.kind` |
+| Installer stops on `libatlas-base-dev` | You have an old checkout. Run `sudo ./deploy/update.sh` (or `git pull`) and install again |
+| Session runs on **CPU** with an AI HAT+ fitted | The Session card says why. See [AI HAT+ acceleration](#ai-hat-acceleration) |
+| Session card shows *heuristic stub* | No model for this accelerator: no `pepperwatch.onnx` (CPU) or HEF (HAT). Results are synthetic, not data |
+| Worker exits "no camera matching …" | It lists what it found. Check the ribbon cable or USB, `rpicam-hello --list-cameras`, `ls /dev/video*`, and `[camera] kind` / `device` |
+| Wrong camera used with two attached | `auto` prefers CSI. Set `[camera] kind = "usb"` (and `device`) in `local.toml` |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones ignore captive portals while mobile data is on |
 | `PepperWatch` network not visible | `systemctl status pepperwatch-ap`; check `/etc/pepperwatch/ap.psk` exists (≥ 8 chars); another saved Wi-Fi network may be holding `wlan0` |
 | Lost SSH when the system started | The AP took over `wlan0`. Use Ethernet, or join `PepperWatch` and SSH to `192.168.4.1` |
-| fps drops after a while | Check the System Health panel for thermal back-off. Improve cooling or ventilation |
+| fps drops after a while | Check the Performance & Power card for thermal back-off or throttling. Improve cooling or ventilation |
+| Power shows "PMIC estimate" | No INA219 found. The PMIC figure omits the HAT, USB devices and the fan; fit an INA219 for whole-device power |
 | Timestamps wrong after a power cut | No RTC battery. Fit one on J5 |
 | Live view frozen but data updates | MJPEG viewer limit reached (4). Close other tabs, or stay in the default poll mode |
 | Dashboard shows the worker offline | `journalctl -u pepperwatch-worker`; check `systemctl status mosquitto` |
@@ -874,8 +1051,8 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 
 `datasets/` contains 1,143 photographs of bell pepper leaves collected in Naawan,
 Misamis Oriental, in one folder per collector (`PHOEBIEN/`, `SHANICE/`,
-`TRISTAN/`). They're used to build the development mock camera and as the source
-for training data.
+`TRISTAN/`). They're the source for training data and for the calibration set
+used when compiling a HEF for the AI HAT+.
 
 - The set is tagged **`datasets-v1`**. Its history is split over four commits
   so each push stays under GitHub's 2 GB limit; the tag points at the commit that

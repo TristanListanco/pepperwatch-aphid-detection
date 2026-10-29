@@ -21,11 +21,20 @@ Single-slot, not a queue, is the important part: a queue would let the detector
 fall behind in *memory*, and the boxes would drift further and further from what
 the camera is currently seeing. Falling behind in time and dropping frames is the
 correct failure mode for a live monitor.
+
+Each run of the worker is one **session**. At start it checks for an AI HAT+
+(``accel.py``), applies the matching ``[profiles.*]`` table, opens whichever
+camera is attached (``hal/discovery.py``), and records every inference and a
+once-a-second system sample to CSV (``session.py``). The dashboard's "New
+session" button closes the camera and the HAT and runs that detection again
+from scratch, within the same process.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import platform
 import signal
 import threading
 import time
@@ -37,14 +46,16 @@ from typing import Any
 
 import numpy as np
 
-from .config import Config, load
+from .accel import AcceleratorChoice, choose_accelerator
+from .config import Config, is_raspberry_pi, load, read_device_model, total_memory_mb
 from .db import Database, utcnow
-from .detect import get_detector, severity_from_config
+from .detect import Detector, get_detector, severity_from_config
 from .frames import make_writer
-from .hal import Frame, get_camera, get_telemetry
+from .hal import CameraSource, Frame, get_telemetry, open_camera
 from .models import Detection, severity_rank
 from .mqtt_bus import STATUS_OFFLINE, STATUS_ONLINE, MqttBus, Topics, make_bus
 from .render import draw_detections, encode_jpeg, make_thumbnail
+from .session import SessionRecorder, request_next_label
 from .thermal import ThermalGovernor
 
 log = logging.getLogger(__name__)
@@ -202,16 +213,40 @@ class PersistPolicy:
         return self._confirmed
 
 
+def start_session_hardware(base: Config) -> tuple[Config, AcceleratorChoice, Detector]:
+    """Pick the accelerator, apply its profile, and build the detector.
+
+    If the AI HAT+ was chosen but its detector would not start, the session
+    drops to the CPU profile before the CPU detector is built, so the CPU path
+    gets its own thread count rather than the HAT profile's.
+    """
+    choice = choose_accelerator(base)
+    cfg = base.with_profile(choice.profile)
+    detector, final = get_detector(cfg, choice)
+    if final.profile != choice.profile:
+        detector.close()
+        cfg = base.with_profile(final.profile)
+        detector, final = get_detector(cfg, final)
+    log.info("accelerator: %s (%s)", final.name, final.reason)
+    return cfg, final, detector
+
+
 class Worker:
     """Runs the detection pipeline until told to stop."""
 
-    def __init__(self, cfg: Config) -> None:
-        self.cfg = cfg
+    def __init__(self, base_cfg: Config) -> None:
+        self.base_cfg = base_cfg
+        self.cfg, self.accelerator, self.detector = start_session_hardware(base_cfg)
+        cfg = self.cfg
         self.site = cfg.site.name
 
-        self.camera = get_camera(cfg)
+        try:
+            self.camera: CameraSource
+            self.camera, self.cameras_found = open_camera(cfg)
+        except Exception:
+            self.detector.close()
+            raise
         self.telemetry = get_telemetry(cfg)
-        self.detector = get_detector(cfg)
         self.db = Database(cfg)
         self.frames = make_writer(cfg)
         self.bus: MqttBus = make_bus(cfg, "worker", with_will=True)
@@ -239,6 +274,9 @@ class Worker:
         self._last_severity = "none"
         self._inference_ms = 0.0
         self._events_written = 0
+        self._frames_captured = 0
+        self.recorder: SessionRecorder | None = None
+        self.restart_requested = False
 
         self.media_root = cfg.media_root
         self.media_root.mkdir(parents=True, exist_ok=True)
@@ -249,8 +287,9 @@ class Worker:
         """Start everything and block until stopped. Returns an exit code."""
         info = self.detector.info
         log.info(
-            "worker starting: site=%s platform=%s detector=%s (%s)",
-            self.site, self.cfg.platform_kind, info.kind, info.model_version,
+            "worker starting: site=%s accelerator=%s detector=%s (%s) camera=%s",
+            self.site, self.accelerator.name, info.kind, info.model_version,
+            self.camera.info.description,
         )
         if info.synthetic:
             log.warning(
@@ -272,18 +311,20 @@ class Worker:
                 "class_names": info.class_names,
                 "synthetic": info.synthetic,
                 "camera": self.camera.info.kind,
-                "platform": self.cfg.platform_kind,
+                "accelerator": self.accelerator.name,
                 "detail": info.detail,
             },
             qos=1,
             retain=True,
         )
 
-        self.camera.start()
         self.db.log_system(
             event="startup",
             source="worker",
-            detail=f"detector={info.kind}:{info.model_version} platform={self.cfg.platform_kind}",
+            detail=(
+                f"detector={info.kind}:{info.model_version} accelerator={self.accelerator.name} "
+                f"camera={self.camera.info.description}"
+            ),
         )
 
         # Warm up before measuring anything: the first ONNX call allocates
@@ -294,6 +335,21 @@ class Worker:
             log.error("no frame arrived from the camera; aborting")
             return 1
         self.detector.warmup(primer.bgr, rounds=2)
+
+        # Recording starts after warm-up, so first-call allocation does not
+        # land in the session's latency figures.
+        self.recorder = SessionRecorder(
+            self.cfg.sessions_root,
+            self._session_meta(),
+            flush_interval_s=self.cfg.sessions.flush_interval_s,
+            summary_interval_s=self.cfg.sessions.summary_interval_s,
+        )
+        self.bus.publish(
+            Topics.STATUS_SESSION,
+            {**self.recorder.meta, "directory": str(self.recorder.directory)},
+            qos=1,
+            retain=True,
+        )
 
         threads = [
             threading.Thread(target=self._capture_loop, name="capture", daemon=True),
@@ -324,6 +380,13 @@ class Worker:
     def shutdown(self) -> None:
         log.info("worker stopping after %d events", self._events_written)
         self._stopping.set()
+        if self.recorder is not None:
+            try:
+                self.recorder.update_counters(**self._counters())
+                summary = self.recorder.close()
+                self.bus.publish(Topics.SESSION_SUMMARY, summary, qos=1)
+            except Exception:  # noqa: BLE001
+                log.exception("could not close the session record")
         try:
             self.db.log_system(event="shutdown", source="worker", detail=f"events={self._events_written}")
         except Exception:  # noqa: BLE001
@@ -356,6 +419,7 @@ class Worker:
                 continue
 
             self.preview_fps.mark()
+            self._frames_captured += 1
 
             # Published CLEAN. The browser draws boxes on a canvas over this,
             # which keeps encode cost off the inference budget and lets the
@@ -375,7 +439,9 @@ class Worker:
     def _telemetry_loop(self) -> None:
         """Sample sensors, drive the thermal governor, and log on an interval."""
         interval = float(self.cfg.persist.telemetry_interval_s)
+        period = float(self.cfg.sessions.system_interval_s)
         last_logged = 0.0
+        chip_temperature = getattr(self.detector, "chip_temperature", None)
 
         while not self._stopping.is_set():
             try:
@@ -386,12 +452,15 @@ class Worker:
                 continue
 
             payload = sample.as_dict()
+            payload["hailo_temp_c"] = chip_temperature() if chip_temperature else None
+            payload["accelerator"] = self.accelerator.name
             self._last_telemetry = payload
 
             state = self.governor.update(sample.cpu_temp_c)
             payload["thermal_level"] = state.level
             payload["thermal_multiplier"] = state.multiplier
             payload["backing_off"] = state.backing_off
+            self._record_system(sample, payload, state.level)
 
             self.bus.publish(Topics.TELEMETRY_SYSTEM, payload, qos=0)
             self.bus.publish(
@@ -426,7 +495,47 @@ class Worker:
                 self.db.log_system(event="telemetry", source="worker", telemetry=payload)
                 last_logged = now
 
-            self._stopping.wait(timeout=min(1.0, interval))
+            if self.recorder is not None and self.recorder.summary_due():
+                self.recorder.update_counters(**self._counters())
+                self.bus.publish(Topics.SESSION_SUMMARY, self.recorder.write_summary(), qos=0)
+
+            self._stopping.wait(timeout=min(period, interval))
+
+    def _record_system(self, sample, payload: dict[str, Any], thermal_level: int) -> None:
+        if self.recorder is None:
+            return
+        self.recorder.record_system(
+            {
+                "cpu_temp_c": sample.cpu_temp_c,
+                "hailo_temp_c": payload.get("hailo_temp_c"),
+                "cpu_percent": sample.cpu_percent,
+                "cpu_freq_mhz": sample.cpu_freq_mhz,
+                "mem_used_mb": sample.mem_used_mb,
+                "fan_rpm": sample.fan_rpm,
+                "throttled_now": sample.throttled,
+                "throttled_flags": hex(sample.throttled_flags) if sample.throttled_flags is not None else None,
+                "ina219_voltage_v": sample.voltage_v,
+                "ina219_current_ma": sample.current_ma,
+                "ina219_power_w": sample.power_w,
+                "pmic_power_w": sample.pmic_power_w,
+                "input_voltage_v": sample.input_voltage_v,
+                "power_w": sample.best_power_w,
+                "power_source": sample.power_source,
+                "preview_fps": round(self.preview_fps.fps, 2),
+                "inference_fps": round(self.inference_fps.fps, 2),
+                "inference_ms": round(self._inference_ms, 2),
+                "dropped_frames": self.latest.dropped,
+                "thermal_level": thermal_level,
+                "paused": self._paused.is_set(),
+            }
+        )
+
+    def _counters(self) -> dict[str, int]:
+        return {
+            "frames_captured": self._frames_captured,
+            "dropped_frames": self.latest.dropped,
+            "events_persisted": self._events_written,
+        }
 
     def _inference_loop(self) -> None:
         """Detect on the newest frame available, forever."""
@@ -458,6 +567,7 @@ class Worker:
             self.inference_fps.mark()
 
             severity, damaged_area = severity_from_config(detections, self.cfg)
+            self._record_inference(frame, detections, severity, damaged_area)
             self._publish_detections(frame, detections, severity, damaged_area)
             self._maybe_persist(frame, detections, severity, info)
 
@@ -468,6 +578,80 @@ class Worker:
                 self._stopping.wait(timeout=base_interval * (state.multiplier - 1.0))
 
     # -- publishing and persistence ---------------------------------------
+
+    def _record_inference(
+        self, frame: Frame, detections: list[Detection], severity: str, damaged_area: float
+    ) -> None:
+        if self.recorder is None:
+            return
+        timings = self.detector.timings
+        damaged = [d for d in detections if d.class_name != "healthy"]
+        self.recorder.record_inference(
+            {
+                "frame_seq": frame.seq,
+                "preprocess_ms": timings.preprocess_ms,
+                "infer_ms": timings.infer_ms,
+                "postprocess_ms": timings.postprocess_ms,
+                "total_ms": timings.total_ms,
+                # Capture to result: queueing in the one-slot buffer plus the
+                # whole detect call. What an observer of the live view waits.
+                "end_to_end_ms": (time.time() - frame.ts) * 1000.0,
+                "inference_fps": self.inference_fps.fps,
+                "preview_fps": self.preview_fps.fps,
+                "dropped_frames": self.latest.dropped,
+                "detections": len(detections),
+                "damage_boxes": len(damaged),
+                "max_confidence": max((d.confidence for d in damaged), default=None),
+                "damaged_area": damaged_area,
+                "severity": severity,
+                "thermal_level": self._last_thermal_level,
+            }
+        )
+
+    def _session_meta(self) -> dict[str, Any]:
+        """Everything a reader of the CSV needs to know about this run."""
+        info = self.detector.info
+        camera = self.camera.info
+        model_path = Path(info.detail.get("hef_path") or info.detail.get("model_path") or "")
+        return {
+            "accelerator": self.accelerator.as_dict(),
+            "camera": {
+                "kind": camera.kind,
+                "model": camera.detail.get("model"),
+                "device": camera.detail.get("device"),
+                "description": camera.description,
+                "width": camera.width,
+                "height": camera.height,
+                "fps": camera.fps,
+                "found": [c.as_dict() for c in self.cameras_found],
+            },
+            "detector": {
+                "kind": info.kind,
+                "description": info.description,
+                "model_version": info.model_version,
+                "model_file": model_path.name or None,
+                "model_sha256": _sha256(model_path) if model_path.is_file() else None,
+                "input_size": info.input_size,
+                "class_names": info.class_names,
+                "synthetic": info.synthetic,
+            },
+            "settings": {
+                "profile": self.cfg.get("session_profile"),
+                "preview_fps": self.cfg.camera.preview_fps,
+                "conf_threshold": self.cfg.inference.conf_threshold,
+                "iou_threshold": self.cfg.inference.iou_threshold,
+                "intra_op_threads": self.cfg.inference.intra_op_threads if info.kind == "onnx" else None,
+                "target_fps": self.cfg.inference.target_fps,
+            },
+            "host": {
+                "board": read_device_model(),
+                "ram_mb": round(total_memory_mb() or 0),
+                "os": _os_name(),
+                "kernel": platform.release(),
+                "python": platform.python_version(),
+            },
+            "site": self.site,
+        }
 
     def _publish_detections(
         self, frame: Frame, detections: list[Detection], severity: str, damaged_area: float
@@ -560,7 +744,7 @@ class Worker:
             inference_ms=round(self._inference_ms, 2),
             preview_fps=round(self.preview_fps.fps, 2),
             inference_fps=round(self.inference_fps.fps, 2),
-            synthetic=info.synthetic or bool(self._last_telemetry.get("synthetic")),
+            synthetic=info.synthetic,
             note=note,
         )
         self._events_written += 1
@@ -605,6 +789,18 @@ class Worker:
 
         elif topic == Topics.CMD_CONFIG:
             self._apply_config(payload)
+
+        elif topic == Topics.CMD_SESSION:
+            # Stop this session cleanly; main() then builds a new Worker, which
+            # detects the camera and the AI HAT+ afresh. In-process rather than
+            # via a systemd restart, whose start limit a few quick clicks would
+            # exhaust.
+            label = str(payload.get("label") or "").strip()
+            request_next_label(self.cfg.sessions_root, label)
+            log.info("new session requested%s", f" ({label})" if label else "")
+            self.db.log_system(event="session_restart", source="web", detail=label or None)
+            self.restart_requested = True
+            self.request_stop()
 
     def _apply_config(self, payload: dict[str, Any]) -> None:
         conf = payload.get("conf_threshold")
@@ -658,13 +854,42 @@ class Worker:
         log.info("snapshot stored as event %d (%d detections)", event_id, len(detections))
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()[:16]
+
+
+def _os_name() -> str:
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("PRETTY_NAME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return platform.platform()
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    return Worker(load()).run()
+    if not is_raspberry_pi():
+        log.error(
+            "Pepper Watch runs on a Raspberry Pi; this machine's device tree says %r",
+            read_device_model() or "nothing",
+        )
+        return 2
+    while True:
+        worker = Worker(load())
+        code = worker.run()
+        if code != 0 or not worker.restart_requested:
+            return code
+        log.info("starting a new session")
 
 
 if __name__ == "__main__":

@@ -20,8 +20,8 @@ backends implement the same interface:
     inode churn. Kept because it is a genuinely useful fallback and because
     benchmarking the two against each other is nearly free.
 
-Both work on macOS and Linux, so the choice is a config value rather than a
-platform fork.
+Both are plain Linux mechanisms (``/dev/shm`` is a tmpfs on Raspberry Pi OS),
+so the choice is a config value rather than a platform fork.
 """
 
 from __future__ import annotations
@@ -48,11 +48,10 @@ _VERSION = 1
 _SLOTS = 2
 _READ_RETRIES = 8
 
-# macOS caps POSIX shared-memory object names at 31 bytes including the leading
-# slash it prepends (SHM_NAME_MAX), and over-running that raises ENAMETOOLONG
-# rather than anything a caller would think to catch. Linux allows far more, so
-# validating against the stricter limit keeps one config value portable.
-_MAX_SHM_NAME = 30
+# A POSIX shared-memory object is a file in /dev/shm, so its name is bounded by
+# NAME_MAX. Over-running it raises ENAMETOOLONG, which nothing would think to
+# catch, so the limit is checked up front against the config key that set it.
+_MAX_SHM_NAME = 255
 
 
 def _check_shm_name(name: str) -> None:
@@ -61,7 +60,7 @@ def _check_shm_name(name: str) -> None:
     if len(name) > _MAX_SHM_NAME:
         raise ValueError(
             f"[frames].shm_name {name!r} is {len(name)} characters; "
-            f"macOS allows at most {_MAX_SHM_NAME}"
+            f"Linux allows at most {_MAX_SHM_NAME}"
         )
 
 
@@ -204,8 +203,41 @@ class ShmFrameReader(FrameReader):
         self._name = name
         self._shm: shared_memory.SharedMemory | None = None
         self._warned = False
+        self._checked_at = 0.0
+
+    def _replaced(self) -> bool:
+        """Has the worker recreated the segment since we attached?
+
+        A worker that stops cleanly unlinks its segment, and the next one (a
+        restart, or a new session) creates a fresh one under the same name.
+        Without this check the web process would keep its mapping of the old,
+        unlinked segment and serve its last frame forever. Checked at most
+        once a second: one stat() against /dev/shm.
+        """
+        now = time.monotonic()
+        if now - self._checked_at < 1.0 or self._shm is None:
+            return False
+        self._checked_at = now
+        try:
+            current = os.stat(f"/dev/shm/{self._name}").st_ino
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        try:
+            mine = os.fstat(self._shm._fd).st_ino  # type: ignore[attr-defined]
+        except (AttributeError, OSError):
+            return False
+        return current != mine
 
     def _attach(self) -> bool:
+        if self._shm is not None and self._replaced():
+            log.info("frame segment %s was recreated; reattaching", self._name)
+            try:
+                self._shm.close()
+            except (BufferError, OSError):
+                pass
+            self._shm = None
         if self._shm is not None:
             return True
         try:

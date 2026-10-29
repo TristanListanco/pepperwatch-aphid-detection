@@ -2,8 +2,6 @@
 
 pytest>=8.4,<9
 pytest-timeout>=2.3,<3     # SSE and MJPEG tests must never hang the suite
-selenium>=4.27,<5           # §3.5.1's mobile-browser simulation — run on the Mac only,
-                            # since Selenium Manager fetches chromedriver over the network
 requests>=2.32,<3           # test client for the streaming endpoints
 
 # Generates the synthetic YOLOv8-shaped ONNX fixture that exercises the real

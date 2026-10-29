@@ -1,11 +1,11 @@
-"""Exercise the HAL on whatever platform this is.
+"""Exercise the camera, accelerator detection and sensors on this Pi.
 
-    python -m pepperwatch.hal.selftest [--seconds 5]
+    python -m pepperwatch.hal.selftest [--seconds 5] [--still]
 
-Reports the camera it opened, the frame rate it actually achieved, and one
-telemetry sample. Run it after changing camera configuration, and on the Pi
-after installing Picamera2 — it is the fastest way to tell a configuration
-problem from a code problem.
+Lists every camera found, says whether an AI HAT+ is usable, opens the camera
+the worker would use and measures the frame rate it actually achieves, then
+prints one telemetry sample. Run it after plugging in a camera or the HAT: it
+is the fastest way to tell a hardware problem from a code problem.
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ import argparse
 import logging
 import time
 
+from ..accel import choose_accelerator
 from ..config import load
-from . import get_camera, get_telemetry
+from . import discover_cameras, get_telemetry, open_camera
 
 
 def main() -> int:
@@ -30,16 +31,24 @@ def main() -> int:
         format="%(levelname)-7s %(name)s: %(message)s",
     )
 
-    cfg = load()
-    print(f"platform : {cfg.platform_kind}")
+    base = load()
+    choice = choose_accelerator(base)
+    print(f"accel    : {choice.name} — {choice.reason}")
+    cfg = base.with_profile(choice.profile)
+    print(f"profile  : {choice.profile} (preview target {cfg.camera.preview_fps} fps)")
 
-    camera = get_camera(cfg)
+    found = discover_cameras()
+    print(f"cameras  : {len(found)} found")
+    for candidate in found:
+        print(f"           {candidate.describe()}")
+
+    camera, _ = open_camera(cfg)
     telemetry = get_telemetry(cfg)
 
     with camera:
         info = camera.info
         print(f"camera   : {info.kind} — {info.description}")
-        print(f"           {info.width}x{info.height} target {info.fps:.1f} fps  synthetic={info.synthetic}")
+        print(f"           {info.width}x{info.height} target {info.fps:.1f} fps")
         for key, value in sorted(info.detail.items()):
             print(f"           {key}: {value}")
 
@@ -78,8 +87,6 @@ def main() -> int:
     for key, value in sample.as_dict().items():
         shown = "—" if value is None else value
         print(f"           {key:<16} {shown}")
-    if sample.synthetic:
-        print("           NOTE synthetic=True — modelled values, not measurements")
 
     telemetry.close()
     return 0

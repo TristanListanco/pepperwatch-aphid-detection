@@ -74,16 +74,16 @@ def test_shm_reader_returns_none_when_no_segment_exists() -> None:
     reader.close()
 
 
-def test_shm_name_over_the_macos_limit_is_rejected_at_construction() -> None:
-    """macOS SHM_NAME_MAX is 31 including its leading slash.
+def test_shm_name_over_name_max_is_rejected_at_construction() -> None:
+    """A shm object is a file in /dev/shm, so NAME_MAX (255) bounds its name.
 
     Over-running it raises ENAMETOOLONG, which nothing would think to catch, so
     the limit is checked up front and reported against the config key that set it.
     """
-    too_long = "pw_" + "x" * 40
+    too_long = "pw_" + "x" * 300
     with pytest.raises(ValueError, match=r"shm_name"):
         ShmFrameReader(too_long)
-    with pytest.raises(ValueError, match=r"at most 30"):
+    with pytest.raises(ValueError, match=r"at most 255"):
         ShmFrameWriter(too_long, SLOT_BYTES)
 
 
@@ -245,3 +245,29 @@ def test_factory_pairs_match_across_both_backends(transport: str, tmp_path: Path
     finally:
         reader.close()
         writer.close()
+
+
+def test_reader_follows_a_segment_the_worker_recreated() -> None:
+    """A new session (or a worker restart) unlinks and recreates the segment.
+
+    The web process must notice and reattach, or it serves the old session's
+    last frame forever.
+    """
+    name = f"pw_test_re_{int(time.time() * 1000) % 100000}"
+    first = ShmFrameWriter(name, SLOT_BYTES)
+    reader = ShmFrameReader(name)
+    try:
+        first.publish(b"old-frame", seq=7, preview_fps=25.0, inference_fps=5.0)
+        assert reader.read().jpeg == b"old-frame"
+
+        first.close()
+        second = ShmFrameWriter(name, SLOT_BYTES)
+        try:
+            second.publish(b"new-frame", seq=1, preview_fps=60.0, inference_fps=30.0)
+            reader._checked_at = 0.0  # noqa: SLF001 — skip the once-a-second throttle
+            packet = reader.read()
+            assert packet is not None and packet.jpeg == b"new-frame"
+        finally:
+            second.close()
+    finally:
+        reader.close()

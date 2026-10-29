@@ -1,8 +1,8 @@
 /* Pepper Watch dashboard.
  *
  * Built to manuscript Figure 3.4: dark surface, left sidebar, four KPI tiles,
- * a plain-language insight banner, the live feed card, and the detection
- * distribution donut.
+ * the live feed card, and the detection distribution donut, plus the
+ * performance, power and session figures the results chapter reports.
  *
  * Three constraints shaped this file, all from the deployment rather than taste:
  *
@@ -567,8 +567,14 @@ button {
   color: var(--text);
   font-size: 13px;
   font-weight: 550;
+  text-decoration: none;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.btn[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .btn:hover:not(:disabled) {
@@ -710,6 +716,7 @@ button {
 
 .advisory-body {
   margin: 10px 0 0;
+  max-width: 70ch;
   font-size: 13.5px;
   color: var(--text-dim);
   line-height: 1.6;
@@ -776,12 +783,23 @@ button {
   display: inline-block;
 }
 
-/* -- health -------------------------------------------------------------- */
+/* -- performance & power ------------------------------------------------- */
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 16px 14px;
+}
+
+.metrics + .banner {
+  margin-top: 16px;
+}
+
+.metric-note {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-label {
@@ -818,6 +836,148 @@ button {
 
 .meter.is-danger > i {
   background: var(--danger);
+}
+
+/* The inference meter spans twice the target, so the tick at its midpoint is
+ * the 17 fps line: past it is a pass, short of it a measured shortfall. */
+.meter.has-target {
+  position: relative;
+  overflow: visible;
+}
+
+.meter.has-target > i {
+  border-radius: 999px;
+}
+
+.meter.has-target > b {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text-dim);
+}
+
+.meter.is-short > i {
+  background: var(--warn);
+}
+
+/* -- session ------------------------------------------------------------- */
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px 18px;
+  margin: 0;
+}
+
+.facts dt {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.facts dd {
+  margin: 2px 0 0;
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+
+.facts dd .muted {
+  font-size: 12px;
+}
+
+[data-session-reason] {
+  margin: 12px 0 0;
+}
+
+.downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.session-new {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 560px;
+}
+
+.session-new input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border-bright);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  min-height: 40px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.session-new input::placeholder {
+  color: var(--text-faint);
+}
+
+.session-new input:focus-visible {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: -1px;
+}
+
+.table-wrap {
+  margin: 18px -15px -15px;
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.table th,
+.table td {
+  padding: 9px 15px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.table tr.is-current td:first-child {
+  color: var(--accent);
+}
+
+.table .empty {
+  padding: 22px 15px;
+}
+
+.table a {
+  color: var(--text-dim);
+  margin-right: 10px;
+}
+
+.table a:hover {
+  color: var(--text);
 }
 
 /* -- gallery ------------------------------------------------------------- */

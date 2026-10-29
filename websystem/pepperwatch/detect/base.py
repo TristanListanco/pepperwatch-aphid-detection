@@ -12,6 +12,24 @@ from ..models import Detection
 
 
 @dataclass(frozen=True, slots=True)
+class StageTimings:
+    """Milliseconds spent in each stage of the last :meth:`Detector.detect`.
+
+    Split three ways so a session's CSV shows where the time goes: on the CPU
+    path ``infer_ms`` dominates, while on the AI HAT+ it shrinks to a few
+    milliseconds and pre/post-processing on the CPU becomes the larger share.
+    """
+
+    preprocess_ms: float = 0.0
+    infer_ms: float = 0.0
+    postprocess_ms: float = 0.0
+
+    @property
+    def total_ms(self) -> float:
+        return self.preprocess_ms + self.infer_ms + self.postprocess_ms
+
+
+@dataclass(frozen=True, slots=True)
 class DetectorInfo:
     """What a detector reports about itself.
 
@@ -31,6 +49,9 @@ class DetectorInfo:
 
 class Detector(ABC):
     """Turns a BGR frame into normalized detections."""
+
+    #: Set by every :meth:`detect` call.
+    timings: StageTimings = StageTimings()
 
     @abstractmethod
     def detect(self, bgr: np.ndarray) -> list[Detection]:

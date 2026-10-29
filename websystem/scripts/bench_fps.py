@@ -21,9 +21,13 @@ up defending a number it never measured:
 
 All three are reported side by side. Quote ``pipeline_fps`` if you quote one.
 
-    python scripts/bench_fps.py                       # quick default sweep
-    python scripts/bench_fps.py --sizes 320,416,640 --threads 1,2,3,4
-    python scripts/bench_fps.py --seconds 60 --out benchmarks/pi5_int8.csv
+    python scripts/bench_fps.py                       # whatever this session would use
+    python scripts/bench_fps.py --accelerator cpu --sizes 320,416,640 --threads 1,2,3,4
+    python scripts/bench_fps.py --accelerator hailo   # the AI HAT+ (input size is fixed by the HEF)
+    python scripts/bench_fps.py --seconds 60 --out benchmarks/pi5_cpu.csv
+
+Stop the worker first (``sudo systemctl stop pepperwatch-worker``): the camera
+and the AI HAT+ each serve one process at a time.
 """
 
 from __future__ import annotations
@@ -47,10 +51,10 @@ import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pepperwatch.accel import AcceleratorChoice, choose_accelerator  # noqa: E402
 from pepperwatch.config import load  # noqa: E402
-from pepperwatch.detect import severity_from_config  # noqa: E402
-from pepperwatch.detect.postprocess import letterbox, to_tensor  # noqa: E402
-from pepperwatch.hal import get_camera, get_telemetry  # noqa: E402
+from pepperwatch.detect import get_detector, severity_from_config  # noqa: E402
+from pepperwatch.hal import get_telemetry, open_camera  # noqa: E402
 from pepperwatch.render import encode_jpeg  # noqa: E402
 
 log = logging.getLogger("bench")
@@ -126,38 +130,29 @@ def describe_host() -> dict[str, str]:
     }
 
 
-def build_detector(cfg, size: int, threads: int):
-    """Detector honouring the sweep's size and thread count."""
-    model_path = cfg.model_path
-    class_names = list(cfg.inference.class_names)
+def build_detector(cfg, size: int, threads: int, accelerator: str):
+    """Detector for one sweep cell: the AI HAT+, or the CPU at a size and thread count."""
+    if accelerator == "hailo":
+        choice = choose_accelerator(cfg)
+        if choice.kind != "hailo":
+            raise SystemExit(f"--accelerator hailo, but the AI HAT+ is unusable: {choice.reason}")
+        detector, final = get_detector(cfg.with_profile("hailo"), choice)
+        if final.kind != "hailo":
+            raise SystemExit(f"the AI HAT+ would not start: {final.reason}")
+        return detector, final.name
 
-    if model_path.exists():
-        from pepperwatch.detect.onnx_detector import OnnxDetector
-
-        return OnnxDetector(
-            model_path,
-            class_names,
-            input_size=size,
-            conf_threshold=cfg.inference.conf_threshold,
-            iou_threshold=cfg.inference.iou_threshold,
-            max_detections=cfg.inference.max_detections,
-            intra_op_threads=threads,
-        )
-
-    from pepperwatch.detect.stub_detector import StubDetector
-
-    return StubDetector(
-        class_names,
-        input_size=size,
-        conf_threshold=cfg.inference.conf_threshold,
-        max_detections=cfg.inference.max_detections,
+    cpu = cfg.with_profile("cpu")  # a copy, so the overrides below stay in this cell
+    cpu.inference._data["input_size"] = size  # noqa: SLF001
+    cpu.inference._data["intra_op_threads"] = threads  # noqa: SLF001
+    detector, _ = get_detector(
+        cpu, AcceleratorChoice(kind="cpu", name="CPU", profile="cpu", reason="benchmark")
     )
+    return detector, "CPU"
 
 
 def measure_capture_only(cfg, seconds: float) -> float:
     """Camera throughput with no inference attached, as the upper bound."""
-    camera = get_camera(cfg)
-    camera.start()
+    camera, _ = open_camera(cfg)
     frames = 0
     started = time.monotonic()
     try:
@@ -172,14 +167,12 @@ def measure_capture_only(cfg, seconds: float) -> float:
     return frames / elapsed if elapsed else 0.0
 
 
-def run_case(cfg, *, size: int, threads: int, seconds: float, quality: int) -> dict:
+def run_case(cfg, *, size: int, threads: int, seconds: float, quality: int, accelerator: str) -> dict:
     """One sweep cell: a sustained pipeline run at a given size and thread count."""
-    camera = get_camera(cfg)
-    telemetry = get_telemetry(cfg)
-    detector = build_detector(cfg, size, threads)
+    detector, accelerator_name = build_detector(cfg, size, threads, accelerator)
     info = detector.info
-
-    camera.start()
+    camera, _ = open_camera(cfg)
+    telemetry = get_telemetry(cfg)
     timings = StageTimings()
     pipeline_ms: list[float] = []
     infer_ms: list[float] = []
@@ -211,39 +204,14 @@ def run_case(cfg, *, size: int, threads: int, seconds: float, quality: int) -> d
 
             loop_began = time.perf_counter()
 
-            if info.kind == "onnx":
-                # Time the model in isolation from its pre/post-processing.
-                mark = time.perf_counter()
-                canvas, transform = letterbox(frame.bgr, size)
-                tensor = to_tensor(canvas)
-                timings.add("preprocess", (time.perf_counter() - mark) * 1000)
-
-                mark = time.perf_counter()
-                raw = detector._session.run(  # noqa: SLF001 — deliberate, to isolate the model
-                    [detector._output_name], {detector._input_name: tensor}  # noqa: SLF001
-                )
-                model_ms = (time.perf_counter() - mark) * 1000
-                timings.add("infer", model_ms)
-                infer_ms.append(model_ms)
-
-                mark = time.perf_counter()
-                from pepperwatch.detect.postprocess import decode_yolov8
-
-                detections = decode_yolov8(
-                    raw[0], transform, info.class_names,
-                    conf_threshold=cfg.inference.conf_threshold,
-                    iou_threshold=cfg.inference.iou_threshold,
-                    max_detections=cfg.inference.max_detections,
-                )
-                timings.add("decode", (time.perf_counter() - mark) * 1000)
-            else:
-                mark = time.perf_counter()
-                detections = detector.detect(frame.bgr)
-                model_ms = (time.perf_counter() - mark) * 1000
-                timings.add("preprocess", 0.0)
-                timings.add("infer", model_ms)
-                timings.add("decode", 0.0)
-                infer_ms.append(model_ms)
+            # Each detector times its own stages, so the model is measured in
+            # isolation from letterboxing and decoding on every backend.
+            detections = detector.detect(frame.bgr)
+            stage = detector.timings
+            timings.add("preprocess", stage.preprocess_ms)
+            timings.add("infer", stage.infer_ms)
+            timings.add("decode", stage.postprocess_ms)
+            infer_ms.append(stage.infer_ms)
 
             mark = time.perf_counter()
             severity_from_config(detections, cfg)
@@ -273,8 +241,9 @@ def run_case(cfg, *, size: int, threads: int, seconds: float, quality: int) -> d
     pipeline_fps = frames / elapsed if elapsed else 0.0
     inference_fps = 1000.0 / statistics.fmean(infer_ms) if infer_ms else 0.0
     row = {
-        "input_size": size,
-        "threads": threads,
+        "accelerator": accelerator_name,
+        "input_size": info.input_size,
+        "threads": threads if info.kind == "onnx" else None,
         "seconds": round(elapsed, 2),
         "frames": frames,
         "pipeline_fps": round(pipeline_fps, 2),
@@ -309,10 +278,17 @@ def main() -> int:
     parser.add_argument("--quality", type=int, default=None, help="JPEG quality (default: configured)")
     parser.add_argument("--out", type=Path, default=None, help="CSV path (default: benchmarks/<timestamp>.csv)")
     parser.add_argument("--no-capture-baseline", action="store_true", help="Skip the camera-only measurement")
+    parser.add_argument("--accelerator", choices=("auto", "cpu", "hailo"), default="auto",
+                        help="auto: the AI HAT+ if usable, else the CPU (default)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    cfg = load()
+    base = load()
+    accelerator = args.accelerator
+    if accelerator == "auto":
+        accelerator = choose_accelerator(base).kind
+    # The matching profile sets the camera rate, as the worker would.
+    cfg = base.with_profile(accelerator)
 
     sizes = (
         [int(s) for s in args.sizes.split(",")] if args.sizes else [cfg.inference.input_size]
@@ -326,9 +302,14 @@ def main() -> int:
 
     host = describe_host()
     print(f"host     : {host['host_model']}  ({host['cpu_count']} logical cores)")
-    print(f"platform : {cfg.platform_kind}   python {host['python']}   opencv {host['opencv']}")
-    print(f"model    : {cfg.model_path if cfg.model_path.exists() else 'none (stub detector)'}")
-    print(f"sweep    : sizes {sizes} x threads {threads}, {args.seconds:.0f}s each")
+    print(f"python   : {host['python']}   opencv {host['opencv']}")
+    if accelerator == "hailo":
+        # The HEF fixes the input size and the HAT has no thread knob.
+        sizes, threads = [cfg.inference.input_size], [0]
+        print("backend  : AI HAT+ (input size fixed by the HEF)")
+    else:
+        print(f"backend  : CPU, model {cfg.model_path if cfg.model_path.exists() else 'none (stub detector)'}")
+        print(f"sweep    : sizes {sizes} x threads {threads}, {args.seconds:.0f}s each")
     print()
 
     capture_fps = 0.0
@@ -343,13 +324,16 @@ def main() -> int:
 
     for size in sizes:
         for thread_count in threads:
-            row = run_case(cfg, size=size, threads=thread_count, seconds=args.seconds, quality=quality)
+            row = run_case(
+                cfg, size=size, threads=thread_count, seconds=args.seconds,
+                quality=quality, accelerator=accelerator,
+            )
             row["capture_fps"] = round(capture_fps, 2)
             row.update(host)
             rows.append(row)
             temp = row["cpu_temp_peak_c"]
             print(
-                f"{size:>5} {thread_count:>4} {row['pipeline_fps']:>9.2f} "
+                f"{row['input_size']:>5} {thread_count or '-':>4} {row['pipeline_fps']:>9.2f} "
                 f"{row['inference_fps']:>10.2f} {row['pipeline_ms_p95']:>8.2f} "
                 f"{row['peak_rss_mb']:>7.1f} {(f'{temp:.0f}C' if temp else '-'):>6}"
             )
@@ -366,8 +350,8 @@ def main() -> int:
 
     best = max(rows, key=lambda r: r["pipeline_fps"])
     print(
-        f"best     : {best['pipeline_fps']:.2f} pipeline fps at "
-        f"{best['input_size']}px / {best['threads']} threads"
+        f"best     : {best['pipeline_fps']:.2f} pipeline fps on {best['accelerator']} at "
+        f"{best['input_size']}px" + (f" / {best['threads']} threads" if best["threads"] else "")
     )
     if any(row["synthetic"] for row in rows):
         print("NOTE     : stub detector — these are NOT model timings. Not for Chapter IV.")

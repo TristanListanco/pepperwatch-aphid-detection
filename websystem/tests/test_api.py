@@ -41,7 +41,8 @@ def test_every_get_route_succeeds(client, route) -> None:
 def test_health_reports_provenance(client) -> None:
     body = client.get("/api/health").get_json()
     assert body["status"] == "ok"
-    assert body["platform"] == "mock"
+    # No worker in the test app, so no session has been announced.
+    assert body["session"] is None
     assert "database" in body and body["database"]["journal_mode"] == "wal"
     # The advisory content is an unvalidated draft; the API must say so.
     assert body["advisory_validated"] is False

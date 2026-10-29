@@ -15,17 +15,16 @@ name = "Naawan"
 operator = "Tristan Listanco"
 role = "Agricultural Officer"
 
-[platform]
-# "auto" reads /proc/device-tree/model and picks "pi" when it says Raspberry Pi,
-# otherwise "mock". Force either with PW_PLATFORM_KIND.
-kind = "auto"
-
 [camera]
-kind = "csi"          # csi | usb  — only consulted on the Pi
-device_index = 0      # for kind = "usb"
+# "auto" probes at the start of every session: a MIPI CSI camera on the ribbon
+# connector first, then a USB (UVC) webcam. Force one with "csi" or "usb".
+kind = "auto"         # auto | csi | usb
+# Which one, when several are attached: a CSI camera number ("0", "1") or a USB
+# device path ("/dev/video0"). Empty takes the first found.
+device = ""
 preview_width = 640
 preview_height = 480
-preview_fps = 25      # capture thread target; decoupled from inference
+preview_fps = 25      # capture target; the session profile below may raise it
 still_width = 2304    # manual high-res snapshot
 still_height = 1296
 jpeg_quality = 75
@@ -40,6 +39,39 @@ max_detections = 100
 target_fps = 17         # the §3.2 requirement, reported against, not assumed
 intra_op_threads = 3    # leave one of the Pi 5's four cores for Flask + OS
 class_names = ["healthy", "aphid_damage"]
+
+[accelerator]
+# "auto" uses a Raspberry Pi AI HAT+ (Hailo-8L, Hailo-8 or Hailo-10H) when one
+# is attached, its runtime is installed and a compiled .hef model is present,
+# and falls back to ONNX Runtime on the CPU otherwise. Checked once per session.
+mode = "auto"           # auto | hailo | cpu
+# Searched in order: models/pepperwatch_<arch>.hef (e.g. pepperwatch_hailo8l.hef),
+# then this path. A HEF must be compiled for the chip it runs on.
+hef_path = "models/pepperwatch.hef"
+timeout_ms = 1000
+
+# Applied over everything above when a session starts, according to the
+# accelerator it found. Override a value in local.toml under the same table,
+# e.g. [profiles.hailo] camera.preview_fps = 30.
+[profiles.cpu]
+# CPU inference tops out well below the camera rate, so capturing faster would
+# only spend CPU on JPEG encoding that inference then has to compete with.
+camera.preview_fps = 25
+inference.intra_op_threads = 3
+
+[profiles.hailo]
+# The HAT runs YOLOv8n far faster than the camera delivers frames, so the
+# camera becomes the limit: capture as fast as the sensor allows.
+camera.preview_fps = 60
+inference.intra_op_threads = 1
+
+[sessions]
+# One folder of CSV files per session (each worker start). On the Pi the
+# systemd units point this at /var/lib/pepperwatch/sessions.
+root = "var/sessions"
+system_interval_s = 1.0      # system.csv sample period
+flush_interval_s = 2.0       # how often buffered rows reach the disk
+summary_interval_s = 15.0    # live summary to the dashboard and summary.json
 
 [severity]
 # Derived in software from box count and affected area, since the model itself

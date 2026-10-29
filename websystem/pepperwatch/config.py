@@ -9,8 +9,8 @@ becomes ``PW_CAMERA_PREVIEW_FPS``. Values are coerced to the type of the
 default they replace, so ``PW_WEB_PORT=9000`` arrives as an int and a bogus
 value fails loudly at startup rather than halfway through a field trial.
 
-Targets Python 3.11 (the version Raspberry Pi OS Bookworm ships) so the same
-source runs unchanged on the development Mac and on the Pi.
+Targets Python 3.11 and 3.13, the versions Raspberry Pi OS Bookworm and Trixie
+ship.
 """
 
 from __future__ import annotations
@@ -109,29 +109,37 @@ class Config(Section):
         return self.path(self.inference.model_path)
 
     @property
-    def platform_kind(self) -> str:
-        """Resolved platform: ``"pi"`` or ``"mock"``, never ``"auto"``."""
-        kind = self.platform.kind
-        return detect_platform() if kind == "auto" else kind
+    def hef_path(self) -> Path:
+        return self.path(self.accelerator.hef_path)
 
     @property
-    def is_pi(self) -> bool:
-        return self.platform_kind == "pi"
+    def sessions_root(self) -> Path:
+        return self.path(self.sessions.root)
+
+    @property
+    def board_profile(self) -> str | None:
+        return self._data.get("board", {}).get("profile")
+
+    def with_profile(self, name: str) -> "Config":
+        """A copy with ``[profiles.<name>]`` merged over it.
+
+        The worker calls this once per session, after it has found out whether
+        an AI HAT+ is attached, so capture rate and thread counts suit the
+        hardware actually present.
+        """
+        data = _deep_copy(self._data)
+        _merge(data, _deep_copy(data.get("profiles", {}).get(name, {})))
+        data["session_profile"] = name
+        return Config(data)
 
 
-def detect_platform() -> str:
-    """Return ``"pi"`` on Raspberry Pi hardware, else ``"mock"``.
+def is_raspberry_pi() -> bool:
+    """True on Raspberry Pi hardware, judged by the device tree model.
 
-    Reads the device tree model rather than checking ``platform.machine()``,
-    which reports ``aarch64`` on plenty of things that are not a Pi.
+    ``platform.machine()`` would say ``aarch64`` on plenty of things that are
+    not a Pi.
     """
-    model = Path("/proc/device-tree/model")
-    try:
-        # The device tree string is NUL-terminated.
-        text = model.read_bytes().decode("utf-8", "replace").rstrip("\x00")
-    except OSError:
-        return "mock"
-    return "pi" if "raspberry pi" in text.lower() else "mock"
+    return "raspberry pi" in read_device_model().lower()
 
 
 def read_device_model() -> str:
@@ -216,7 +224,7 @@ def load(overrides: dict[str, Any] | None = None, *, use_env: bool = True) -> Co
     profile = profile_path(board)
     if profile is not None:
         _merge(data, _load_toml(profile))
-        data.setdefault("platform", {})["profile"] = board
+        data.setdefault("board", {})["profile"] = board
 
     if LOCAL_CONFIG.exists():
         _merge(data, _load_toml(LOCAL_CONFIG))

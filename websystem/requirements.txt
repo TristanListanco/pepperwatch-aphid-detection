@@ -22,11 +22,12 @@ Pillow>=11.1,<12           # thumbnails for the historical gallery
 # numpy is deliberately loose. On a --system-site-packages venv, pip-installing
 # a pinned numpy SHADOWS apt's numpy, and libcamera's C bindings were compiled
 # against apt's. That ABI mismatch is a real and common Picamera2 failure, so
-# prefer whatever apt already provides on the Pi and let pip fill in only on
-# the Mac. `python -m pepperwatch.doctor` probes for exactly this.
+# prefer whatever apt already provides on the Pi and let pip fill in only where
+# apt has none (CI). `python -m pepperwatch.doctor` probes for exactly this.
 numpy>=1.24,<3
 
-# Pi-only, installed by deploy/install.sh rather than pinned here, because both
-# need hardware that does not exist on the development machine:
-#   adafruit-circuitpython-ina219   real voltage/current/power for §4's analysis
-#   (python3-picamera2 comes from apt, not pip)
+# Installed by deploy/install.sh rather than pinned here:
+#   adafruit-circuitpython-ina219   only when an INA219 answers on I2C
+#   python3-picamera2               apt, not pip (libcamera bindings)
+#   HailoRT (hailo_platform)        apt: hailo-all or hailo-h10-all, when an
+#                                   AI HAT+ is on the PCIe bus

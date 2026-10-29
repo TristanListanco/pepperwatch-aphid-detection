@@ -102,9 +102,8 @@ def health():
         {
             "status": "ok",
             "site": cfg.site.name,
-            "platform": cfg.platform_kind,
             "board": detect_board(),
-            "board_profile": cfg.platform.get("profile"),
+            "board_profile": cfg.board_profile,
             "total_memory_mb": round(total_memory_mb() or 0.0),
             "uptime_s": round(time.time() - current_app.config["PW_STARTED_AT"], 1),
             "worker": _hub().worker_state(),
@@ -112,6 +111,7 @@ def health():
             "sse_clients": _hub().client_count,
             "database": _db().stats(),
             "detector": _hub().detector,
+            "session": _hub().session or None,
             "advisory_validated": _advisory().validated,
             "server_time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }

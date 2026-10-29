@@ -12,7 +12,10 @@ tend to bite:
 * **The clock.** No internet means no NTP. A Pi with no RTC battery boots to a
   meaningless date, which silently makes every timestamp in the Historical
   Detection Log worthless.
-* Camera, broker, database, disk, and thermals.
+* Which cameras are attached, and whether an AI HAT+ is usable: on the bus,
+  driver loaded, runtime installed, a compiled model present, and the PCIe
+  link running at Gen 3.
+* Power sources, the session folder, broker, database, disk, and thermals.
 
 Exit code is 0 when everything passes, 1 if anything failed.
 """
@@ -285,45 +288,111 @@ def check_memory_budget() -> Check:
 
 
 def check_camera(probe: bool) -> Check:
-    """Optionally open the camera and take one real frame."""
+    """List the attached cameras; optionally open the chosen one for a frame."""
     from .config import load
+    from .hal.discovery import choose_camera, discover_cameras
 
     cfg = load()
-    if not cfg.is_pi:
-        frames = cfg.path("var/mock_frames/preview")
-        count = len(list(frames.glob("*.jpg"))) if frames.exists() else 0
-        if count == 0:
-            return Check(
-                "camera", FAIL, "mock platform with no frame cache",
-                "run: python scripts/prepare_mock_frames.py",
-            )
-        return Check("camera", OK, f"mock replay, {count} frames cached")
-
+    found = discover_cameras()
+    listed = ", ".join(c.describe() for c in found) or "none"
+    chosen = choose_camera(found, kind=str(cfg.camera.kind), device=str(cfg.camera.device or ""))
+    if chosen is None:
+        return Check(
+            "camera", FAIL, f"no camera for kind={cfg.camera.kind!r}; found: {listed}",
+            "check the CSI ribbon (a Pi 5 needs the narrow 22-pin cable) or the USB "
+            "cable, then `rpicam-hello --list-cameras` and `ls /dev/video*`",
+        )
     if not probe:
-        return Check("camera", WARN, f"configured as {cfg.camera.kind}, not probed",
-                     "re-run with --camera-probe to capture a test frame")
+        return Check("camera", OK, f"will use {chosen.describe()}; found: {listed}")
 
     try:
-        from .hal import get_camera
+        from .hal import open_camera
 
-        camera = get_camera(cfg)
-        camera.start()
+        camera, _ = open_camera(cfg)
         try:
             frame = None
             deadline = time.monotonic() + 6
             while frame is None and time.monotonic() < deadline:
                 frame = camera.read()
             if frame is None:
-                return Check("camera", FAIL, "opened but produced no frame within 6s",
-                             "check the ribbon cable seating and `rpicam-hello --list-cameras`")
-            info = camera.info
+                return Check("camera", FAIL, f"{chosen.describe()} opened but produced no frame within 6s",
+                             "check the cable seating and `rpicam-hello --list-cameras`")
             return Check("camera", OK,
-                         f"{info.kind}: captured {frame.width}x{frame.height} ({info.description})")
+                         f"captured {frame.width}x{frame.height} from {camera.info.description}")
         finally:
             camera.stop()
     except Exception as exc:  # noqa: BLE001
         return Check("camera", FAIL, f"{type(exc).__name__}: {exc}",
                      "if this mentions numpy or libcamera, see the numpy check above")
+
+
+def check_accelerator() -> Check:
+    """Is an AI HAT+ attached, and can this session use it?"""
+    from .accel import ARCH_PACKAGES, choose_accelerator, probe_hailo
+    from .config import load
+
+    cfg = load()
+    probe = probe_hailo()
+    if not probe.present:
+        return Check("accelerator", OK, "no AI HAT+ found; inference runs on the CPU")
+
+    choice = choose_accelerator(cfg, probe)
+    link = probe.pcie_link or "unknown link"
+    if choice.kind != "hailo":
+        package = ARCH_PACKAGES.get(probe.arch or "hailo8", "hailo-all")
+        return Check(
+            "accelerator", WARN, f"{probe.name} found ({link}) but not usable: {choice.reason}",
+            f"sudo apt install {package} && sudo reboot, then put a HEF compiled for the "
+            f"{probe.name} in models/ (see README: Adding the trained model)",
+        )
+    if link.startswith("5.0") or link.startswith("2.5"):
+        return Check(
+            "accelerator", WARN, f"{choice.reason}; HEF {choice.hef_path.name}",
+            "the PCIe link is below Gen 3, which roughly halves the HAT's bandwidth: "
+            "add dtparam=pciex1_gen=3 to /boot/firmware/config.txt and reboot",
+        )
+    return Check("accelerator", OK, f"{choice.reason}; HEF {choice.hef_path.name}")
+
+
+def check_power() -> Check:
+    """Which power readings the session CSV will contain."""
+    from .hal.power import Vcgencmd, parse_pmic_adc
+
+    sources = []
+    text = Vcgencmd().run("pmic_read_adc")
+    reading = parse_pmic_adc(text) if text else None
+    if reading and reading.rails_w is not None:
+        supply = f", supply {reading.input_voltage_v} V" if reading.input_voltage_v else ""
+        sources.append(f"PMIC rails {reading.rails_w:.2f} W{supply}")
+    try:
+        import board  # type: ignore[import-not-found]  # noqa: F401
+        from adafruit_ina219 import INA219  # type: ignore[import-not-found]
+
+        sensor = INA219(board.I2C())
+        sources.append(f"INA219 {float(sensor.power):.2f} W")
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not sources:
+        return Check("power", WARN, "no power readings available",
+                     "vcgencmd pmic_read_adc should work on any Pi 5; check the user is in group video")
+    if len(sources) == 1:
+        return Check("power", OK, sources[0] + " (no INA219: whole-device draw is not measured)")
+    return Check("power", OK, "; ".join(sources))
+
+
+def check_sessions() -> Check:
+    """Can the worker write its session CSV files?"""
+    from .config import load
+
+    root = load().sessions_root
+    probe_dir = root if root.exists() else root.parent
+    if not os.access(probe_dir, os.W_OK):
+        return Check("sessions", FAIL, f"{root} is not writable",
+                     "the systemd units set PW_SESSIONS_ROOT=/var/lib/pepperwatch/sessions; "
+                     "re-run sudo ./deploy/install.sh")
+    count = len(list(root.glob("*/session.json"))) if root.exists() else 0
+    return Check("sessions", OK, f"{root} ({count} recorded)")
 
 
 def check_broker() -> Check:
@@ -402,9 +471,6 @@ def check_storage() -> Check:
 
 
 def check_thermal() -> Check:
-    if not _is_pi():
-        return Check("thermal", OK, "not applicable off-device")
-
     try:
         celsius = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text()) / 1000.0
     except (OSError, ValueError):
@@ -434,9 +500,9 @@ def check_advisory() -> Check:
 
 
 def _is_pi() -> bool:
-    from .config import detect_platform
+    from .config import is_raspberry_pi
 
-    return detect_platform() == "pi"
+    return is_raspberry_pi()
 
 
 def main() -> int:
@@ -448,12 +514,11 @@ def main() -> int:
 
     logging.basicConfig(level=logging.ERROR)
 
-    from .config import detect_board, detect_platform
+    from .config import detect_board, read_device_model
 
-    print(f"Pepper Watch diagnostics")
+    print("Pepper Watch diagnostics")
     print(f"  host     : {platform.node()} ({platform.machine()})")
-    print(f"  board    : {detect_board()}")
-    print(f"  platform : {detect_platform()}")
+    print(f"  board    : {read_device_model() or 'not a Raspberry Pi'} [{detect_board()}]")
     print(f"  cwd      : {os.getcwd()}")
     print()
 
@@ -463,7 +528,10 @@ def main() -> int:
         check_memory_budget(),
         check_clock(),
         check_camera(args.camera_probe),
+        check_accelerator(),
         check_model(),
+        check_power(),
+        check_sessions(),
         check_broker(),
         check_database(),
         check_storage(),

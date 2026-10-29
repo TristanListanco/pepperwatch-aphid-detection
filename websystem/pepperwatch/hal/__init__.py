@@ -1,14 +1,11 @@
-"""HAL factories.
+"""Hardware access for the Raspberry Pi 5.
 
-``get_camera`` and ``get_telemetry`` are the only entry points the rest of the
-system uses. Platform modules are imported lazily so that importing this
-package on a Mac never touches Picamera2, and importing it on a Pi never
-requires the mock frame cache to exist.
+``open_camera`` and ``get_telemetry`` are the entry points the rest of the
+system uses. Picamera2 is imported lazily, inside the camera driver, so tools
+that only need telemetry or discovery do not pay its start-up cost.
 """
 
 from __future__ import annotations
-
-import logging
 
 from ..config import Config
 from .base import (
@@ -19,51 +16,30 @@ from .base import (
     Telemetry,
     TelemetrySource,
 )
+from .discovery import CameraCandidate, discover_cameras
 
 __all__ = [
+    "CameraCandidate",
     "CameraError",
     "CameraInfo",
     "CameraSource",
     "Frame",
     "Telemetry",
     "TelemetrySource",
-    "get_camera",
+    "discover_cameras",
     "get_telemetry",
+    "open_camera",
 ]
 
-log = logging.getLogger(__name__)
 
+def open_camera(cfg: Config) -> tuple[CameraSource, list[CameraCandidate]]:
+    """Discover the attached cameras and start the preferred one."""
+    from .pi import open_camera as _open
 
-def get_camera(cfg: Config, *, hold: bool = False) -> CameraSource:
-    """Build the camera for this platform.
-
-    ``hold`` freezes the mock on a single frame; the overlay-alignment tests
-    rely on it and it is ignored on real hardware.
-    """
-    kind = cfg.platform_kind
-    if kind == "pi":
-        from .pi import build_pi_camera
-
-        return build_pi_camera(cfg)
-
-    from .mock import MockCamera
-
-    return MockCamera(
-        cache_dir=cfg.path("var/mock_frames"),
-        width=cfg.camera.preview_width,
-        height=cfg.camera.preview_height,
-        fps=cfg.camera.preview_fps,
-        hold=hold,
-    )
+    return _open(cfg)
 
 
 def get_telemetry(cfg: Config) -> TelemetrySource:
-    """Build the telemetry source for this platform."""
-    if cfg.platform_kind == "pi":
-        from .pi import PiTelemetry
+    from .pi import PiTelemetry
 
-        return PiTelemetry(cfg)
-
-    from .mock import MockTelemetry
-
-    return MockTelemetry()
+    return PiTelemetry(cfg)

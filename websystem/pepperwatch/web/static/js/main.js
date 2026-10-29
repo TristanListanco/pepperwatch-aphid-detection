@@ -3,11 +3,12 @@
 import { Bus, poll, fetchJson } from './bus.js';
 import { Controls, toast } from './controls.js';
 import { renderDonut } from './donut.js';
-import { renderHealth, renderPipeline } from './health.js';
 import { History } from './history.js';
 import { renderKpis } from './kpis.js';
 import { LiveView } from './liveview.js';
 import { renderAdvisory } from './advisory.js';
+import { renderPipeline, renderSummary, renderTelemetry } from './performance.js';
+import { SessionPanel } from './session.js';
 import { initSettings } from './settings.js';
 import { relative } from './fmt.js';
 
@@ -60,13 +61,29 @@ function bootDashboard() {
     });
   }
 
-  // -- telemetry and pipeline -------------------------------------------
+  // -- performance, power and the session --------------------------------
 
-  bus.on('telemetry', (payload) => renderHealth(document, payload));
+  bus.on('telemetry', (payload) => renderTelemetry(document, payload));
   bus.on('pipeline', (payload) => {
     renderPipeline(document, payload);
     controls.setPaused(payload.paused);
   });
+  bus.on('summary', (payload) => renderSummary(document, payload));
+
+  const sessionRoot = document.querySelector('[data-session]');
+  if (sessionRoot) {
+    const session = new SessionPanel(sessionRoot, { onToast: toast });
+    bus.on('session', (meta) => session.render(meta));
+    bus.on('summary', () => session.loadTable());
+    setInterval(() => session.tick(), 1000);
+    // The retained MQTT message arrives with the SSE hello, but ask directly
+    // too, so the card fills even before the stream connects.
+    fetchJson('/api/session').then((data) => {
+      if (data && data.session) session.render(data.session);
+      if (data && data.summary) renderSummary(document, data.summary);
+    }).catch(() => {});
+    session.loadTable();
+  }
 
   bus.on('worker', (state) => {
     const chip = document.querySelector('[data-worker-chip]');

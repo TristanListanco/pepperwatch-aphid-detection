@@ -15,12 +15,13 @@ else — see the ``CPUAffinity`` note in the deploy units.
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 import numpy as np
 
 from ..models import Detection
-from .base import Detector, DetectorInfo
+from .base import Detector, DetectorInfo, StageTimings
 from .postprocess import decode_yolov8, letterbox, to_tensor
 
 log = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class OnnxDetector(Detector):
         self._conf_threshold = float(conf_threshold)
         self._iou_threshold = float(iou_threshold)
         self._max_detections = int(max_detections)
+        self._threads = int(intra_op_threads)
 
         options = ort.SessionOptions()
         options.intra_op_num_threads = int(intra_op_threads)
@@ -86,10 +88,13 @@ class OnnxDetector(Detector):
         )
 
     def detect(self, bgr: np.ndarray) -> list[Detection]:
+        began = time.perf_counter()
         canvas, transform = letterbox(bgr, self._input_size)
         tensor = to_tensor(canvas)
+        prepared = time.perf_counter()
         outputs = self._session.run([self._output_name], {self._input_name: tensor})
-        return decode_yolov8(
+        inferred = time.perf_counter()
+        detections = decode_yolov8(
             outputs[0],
             transform,
             self._class_names,
@@ -97,6 +102,12 @@ class OnnxDetector(Detector):
             iou_threshold=self._iou_threshold,
             max_detections=self._max_detections,
         )
+        self.timings = StageTimings(
+            preprocess_ms=(prepared - began) * 1000.0,
+            infer_ms=(inferred - prepared) * 1000.0,
+            postprocess_ms=(time.perf_counter() - inferred) * 1000.0,
+        )
+        return detections
 
     def set_thresholds(self, *, conf: float | None = None, iou: float | None = None) -> None:
         """Adjust thresholds at runtime, for the Settings page and sweeps."""
@@ -110,7 +121,7 @@ class OnnxDetector(Detector):
         return DetectorInfo(
             kind="onnx",
             model_version=self._model_path.stem,
-            description=f"ONNX Runtime ({', '.join(self._providers)})",
+            description=f"ONNX Runtime on the CPU ({self._threads} threads)",
             input_size=self._input_size,
             class_names=list(self._class_names),
             synthetic=False,
@@ -120,6 +131,7 @@ class OnnxDetector(Detector):
                 "conf_threshold": self._conf_threshold,
                 "iou_threshold": self._iou_threshold,
                 "providers": self._providers,
+                "intra_op_threads": self._threads,
             },
         )
 

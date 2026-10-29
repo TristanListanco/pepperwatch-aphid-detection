@@ -16,7 +16,6 @@ def _context() -> dict:
         "site_name": cfg.site.name,
         "operator": cfg.site.operator,
         "role": cfg.site.role,
-        "platform": cfg.platform_kind,
         "locales": advisory.locales,
         "advisory_validated": advisory.validated,
         "class_names": list(cfg.inference.class_names),

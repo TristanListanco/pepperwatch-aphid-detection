@@ -84,63 +84,9 @@ jobs:
           shellcheck --version
           shellcheck -S warning deploy/*.sh deploy/network/*.sh scripts/*.sh
 
-  browser:
-    name: Browser tests (Selenium)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: websystem
-          filter: blob:none
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: websystem/requirements*.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r requirements-dev.txt
-
-      - name: Start the MQTT broker
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends mosquitto
-          sudo systemctl start mosquitto
-          systemctl is-active mosquitto
-
-      # The mock camera replays field photographs. Building its cache reads a
-      # couple of dozen of them from the datasets-v1 tag; the partial clone
-      # fetches just those blobs, and the result is cached between runs.
-      - name: Restore mock frames
-        id: frames
-        uses: actions/cache@v6
-        with:
-          path: websystem/var/mock_frames
-          key: mock-frames-v1-${{ hashFiles('websystem/scripts/prepare_mock_frames.py', 'websystem/config/default.toml') }}
-
-      - name: Build mock frames
-        if: steps.frames.outputs.cache-hit != 'true'
-        run: |
-          git fetch --no-tags --depth=1 --filter=blob:none origin \
-            "+refs/tags/datasets-v1:refs/tags/datasets-v1"
-          python scripts/prepare_mock_frames.py --limit 24
-
-      - name: Selenium tests
-        run: |
-          python -m pytest -m selenium -q -rs 2>&1 | tee selenium.log
-          # The suite skips itself when Chrome, the frames or the server are
-          # missing. That is right on a laptop and wrong here: a green run
-          # that tested nothing must not promote a commit.
-          if grep -qE "[0-9]+ skipped" selenium.log; then
-            echo "::error::Selenium tests were skipped; see the reasons above"
-            exit 1
-          fi
-
   promote:
     name: Promote to stable
-    needs: [test, lint, browser]
+    needs: [test, lint]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5

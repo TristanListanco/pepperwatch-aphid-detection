@@ -49,6 +49,9 @@ class Topics:
     CMD_CAPTURE = f"{ROOT}/cmd/capture"
     CMD_INFERENCE = f"{ROOT}/cmd/inference"
     CMD_CONFIG = f"{ROOT}/cmd/config"
+    CMD_SESSION = f"{ROOT}/cmd/session"
+    # The running session's figures, every [sessions].summary_interval_s.
+    SESSION_SUMMARY = f"{ROOT}/session/summary"
 
     # Retained, plus the Last Will: a dashboard that connects late immediately
     # learns whether the detector is alive, and learns within the keepalive
@@ -59,6 +62,8 @@ class Topics:
     # health endpoint cannot report provenance, and "which model produced this
     # result" is exactly the question Chapter IV has to answer.
     STATUS_DETECTOR = f"{ROOT}/status/detector"
+    # Retained: which accelerator, camera and model this session runs on.
+    STATUS_SESSION = f"{ROOT}/status/session"
 
     ALL = f"{ROOT}/#"
     COMMANDS = f"{ROOT}/cmd/#"
@@ -72,6 +77,8 @@ class Topics:
         (EVENT_PERSISTED, 1),
         (STATUS_WORKER, 1),
         (STATUS_DETECTOR, 1),
+        (STATUS_SESSION, 1),
+        (SESSION_SUMMARY, 0),
     )
 
 

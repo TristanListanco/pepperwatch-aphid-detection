@@ -1,10 +1,6 @@
-// The four KPI tiles and the insight banner (Figure 3.4).
+// The four KPI tiles (Figure 3.4).
 //
-// The tiles are Weekly Detections, Avg. Confidence, Trend, and Severity. The
-// banner beneath them restates the same numbers as one plain sentence, which is
-// what makes the row legible to someone who does not read dashboards for a
-// living -- the server composes it, so the wording stays consistent with the
-// Cebuano translation.
+// The tiles are Weekly Detections, Avg. Confidence, Trend, and Severity.
 
 import { num, pct, severityLabel, signedPct, trendGlyph } from './fmt.js';
 
@@ -37,8 +33,6 @@ export function renderKpis(root, stats) {
     eventsNote.textContent = `${events} scan${events === 1 ? '' : 's'} logged`;
   }
 
-  const banner = root.querySelector('[data-insight]');
-  if (banner) banner.textContent = stats.insight || '';
 }
 
 function confidenceBand(value) {

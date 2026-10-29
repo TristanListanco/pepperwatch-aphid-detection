@@ -12,6 +12,7 @@ config/local.toml
 # Generated at runtime: database, captured media, mock frame cache, benchmarks
 var/
 models/*.onnx
+models/*.hef
 models/*.pt
 benchmarks/*.csv
 

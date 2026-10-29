@@ -91,12 +91,16 @@ export class Bus {
       // The snapshot lets the page paint at once rather than showing empty
       // tiles until the next publication.
       if (payload.worker) this.emit('worker', payload.worker);
+      if (payload.session && payload.session.session_id) this.emit('session', payload.session);
       Object.entries(payload.latest || {}).forEach(([topic, data]) => {
         this.dispatchTopic(topic, data);
       });
     });
 
-    ['telemetry/system', 'telemetry/pipeline', 'detect/frame', 'detect/flag', 'event/persisted', 'status/worker'].forEach(
+    [
+      'telemetry/system', 'telemetry/pipeline', 'detect/frame', 'detect/flag',
+      'event/persisted', 'status/worker', 'status/session', 'session/summary',
+    ].forEach(
       (topic) => {
         source.addEventListener(topic, (event) => {
           window.__pw.sseMessages += 1;
@@ -155,6 +159,12 @@ export class Bus {
       case 'status/worker':
         this.emit('worker', { status: payload.value, alive: payload.value === 'online' });
         break;
+      case 'status/session':
+        this.emit('session', payload);
+        break;
+      case 'session/summary':
+        this.emit('summary', payload);
+        break;
       default:
         break;
     }
@@ -169,15 +179,18 @@ export class Bus {
     const tick = async () => {
       window.__pw.intervalFires += 1;
       try {
-        const [telemetry, pipeline, detections] = await Promise.all([
+        const [telemetry, pipeline, detections, session] = await Promise.all([
           fetchJson('/api/telemetry'),
           fetchJson('/api/pipeline'),
           fetchJson('/api/detections/latest'),
+          fetchJson('/api/session'),
         ]);
         window.__pw.pollTicks += 1;
         if (telemetry) this.emit('telemetry', telemetry);
         if (pipeline) this.emit('pipeline', pipeline);
         if (detections) this.emit('detections', detections);
+        if (session && session.session) this.emit('session', session.session);
+        if (session && session.summary) this.emit('summary', session.summary);
 
         const health = await fetchJson('/api/health');
         if (health && health.worker) this.emit('worker', health.worker);

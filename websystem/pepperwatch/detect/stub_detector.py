@@ -25,11 +25,13 @@ into ``models/``.
 
 from __future__ import annotations
 
+import time
+
 import cv2
 import numpy as np
 
 from ..models import Detection
-from .base import Detector, DetectorInfo
+from .base import Detector, DetectorInfo, StageTimings
 
 MODEL_VERSION = "stub-heuristic-1"
 
@@ -68,6 +70,13 @@ class StubDetector(Detector):
         )
 
     def detect(self, bgr: np.ndarray) -> list[Detection]:
+        began = time.perf_counter()
+        detections = self._detect(bgr)
+        # One undivided stage: there is no model call to separate out.
+        self.timings = StageTimings(infer_ms=(time.perf_counter() - began) * 1000.0)
+        return detections
+
+    def _detect(self, bgr: np.ndarray) -> list[Detection]:
         height, width = bgr.shape[:2]
         frame_area = float(height * width)
         if frame_area <= 0:

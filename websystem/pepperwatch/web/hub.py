@@ -74,6 +74,7 @@ class EventHub:
         self._worker_status = "unknown"
         self._worker_seen_at = 0.0
         self._detector: dict[str, Any] = {}
+        self._session: dict[str, Any] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -113,6 +114,8 @@ class EventHub:
             self._worker_seen_at = time.time()
         elif topic == Topics.STATUS_DETECTOR:
             self._detector = dict(payload)
+        elif topic == Topics.STATUS_SESSION:
+            self._session = dict(payload)
         else:
             self._latest[short] = payload
             if "telemetry" in short or short == "detect/frame":
@@ -173,6 +176,7 @@ class EventHub:
         return {
             "worker": self.worker_state(),
             "detector": dict(self._detector),
+            "session": dict(self._session),
             "latest": dict(self._latest),
             "mqtt_connected": self.connected,
         }
@@ -201,6 +205,11 @@ class EventHub:
     def detector(self) -> dict[str, Any]:
         """What the worker last announced about its model. Empty if none has."""
         return dict(self._detector)
+
+    @property
+    def session(self) -> dict[str, Any]:
+        """The running session's metadata, as the worker last announced it."""
+        return dict(self._session)
 
     @property
     def client_count(self) -> int:

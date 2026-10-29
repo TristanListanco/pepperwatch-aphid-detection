@@ -33,13 +33,6 @@
   </div>
 </section>
 
-{# -- insight banner, composed server-side so it stays consistent with the
-      Cebuano wording ------------------------------------------------------ #}
-<div class="banner">
-  <span class="banner-icon" aria-hidden="true">◆</span>
-  <div data-insight>Gathering data…</div>
-</div>
-
 <div class="grid-2">
 
   {# -- Live Inference View (Table 3.4) ------------------------------- #}
@@ -84,36 +77,131 @@
         <button class="btn is-primary" type="button" data-action-start-camera>Start Camera</button>
         <button class="btn" type="button" data-action-snapshot>Snapshot</button>
         <button class="btn" type="button" data-action-pause>Pause inference</button>
-        <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
       </div>
-
-      <p class="note" style="margin-top:10px">
-        Inference rate <span class="mono" data-pipeline-latency>—</span> per frame,
-        <span class="mono" data-pipeline-dropped>0</span> frames dropped —
-        <span data-pipeline-target>—</span>.
-        The preview runs faster than inference on purpose, so the feed stays smooth
-        while the model works at whatever rate the processor allows.
-      </p>
     </div>
   </section>
 
-  {# -- Detection distribution donut (Figure 3.4) --------------------- #}
-  <section class="card">
+  {# -- Performance & Power: the System Health Monitor (Table 3.4), cut
+        to the figures the results chapter reports ------------------------ #}
+  <section class="card" data-performance>
     <div class="card-head">
-      <h2>Detection Distribution</h2>
-      <span class="card-sub">Breakdown by classification type</span>
+      <h2>Performance &amp; Power</h2>
+      <div class="card-head-actions">
+        <span class="chip" data-accelerator-chip title="What runs inference this session">
+          <span class="dot"></span><span data-accelerator-label>—</span>
+        </span>
+      </div>
     </div>
     <div class="card-body">
-      <div class="donut-wrap">
-        <div data-donut></div>
-        <div class="legend" data-legend></div>
+      <div class="metrics">
+        <div>
+          <div class="metric-label">Inference</div>
+          <div class="metric-value" data-pipeline-inference-rate>—</div>
+          <div class="meter has-target" data-pipeline-inference-meter
+               title="Scaled to twice the target; the tick marks the target">
+            <i style="width:0"></i><b aria-hidden="true"></b>
+          </div>
+          <div class="metric-note" data-pipeline-target>—</div>
+        </div>
+        <div>
+          <div class="metric-label">Camera</div>
+          <div class="metric-value" data-pipeline-preview-rate>—</div>
+          <div class="metric-note"><span data-pipeline-dropped>0</span> frames not inferred</div>
+        </div>
+        <div>
+          <div class="metric-label">Latency per frame</div>
+          <div class="metric-value" data-pipeline-latency>—</div>
+          <div class="metric-note">p95 <span data-session-p95>—</span> this session</div>
+        </div>
+        <div>
+          <div class="metric-label">Power</div>
+          <div class="metric-value" data-health-power>—</div>
+          <div class="metric-note" data-health-power-source>—</div>
+        </div>
+        <div>
+          <div class="metric-label">Energy this session</div>
+          <div class="metric-value" data-session-energy>—</div>
+          <div class="metric-note" data-session-efficiency>—</div>
+        </div>
+        <div>
+          <div class="metric-label">CPU</div>
+          <div class="metric-value" data-health-temp>—</div>
+          <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
+          <div class="metric-note"><span data-health-cpu>—</span> load</div>
+        </div>
+        <div data-health-hailo hidden>
+          <div class="metric-label">AI HAT+</div>
+          <div class="metric-value" data-health-hailo-temp>—</div>
+          <div class="meter" data-health-hailo-temp-meter><i style="width:0"></i></div>
+        </div>
+      </div>
+
+      <div class="banner is-caution" data-health-backoff hidden></div>
+      <div class="banner is-offline" data-health-throttled hidden>
+        <span class="banner-icon" aria-hidden="true">!</span>
+        <div>
+          <strong>The processor is throttled.</strong>
+          <span data-health-throttle-detail></span>
+          Frame rates now are lower than the hardware can sustain.
+        </div>
       </div>
     </div>
   </section>
 </div>
 
-<div class="grid-2">
+{# -- Session: what this run is recorded on, and its CSV files ---------- #}
+<section class="card" data-session>
+  <div class="card-head">
+    <h2>Session</h2>
+    <span class="card-sub mono" data-session-id>—</span>
+  </div>
+  <div class="card-body">
+    <dl class="facts">
+      <div><dt>Accelerator</dt><dd data-session-accelerator>—</dd></div>
+      <div><dt>Camera</dt><dd data-session-camera>—</dd></div>
+      <div><dt>Model</dt><dd data-session-model>—</dd></div>
+      <div><dt>Running for</dt><dd data-session-duration>—</dd></div>
+    </dl>
+    <p class="note" data-session-reason hidden></p>
 
+    <div class="downloads" data-session-downloads>
+      <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">Inference CSV</a>
+      <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">Power &amp; system CSV</a>
+      <a class="btn is-quiet" data-session-file="summary.json" href="#" download aria-disabled="true">Summary</a>
+      <a class="btn is-quiet" href="{{ url_for('sessions.sessions_csv') }}" download>All sessions CSV</a>
+    </div>
+
+    <form class="session-new" data-session-new>
+      <label class="sr-only" for="session-label">Label for the new session</label>
+      <input id="session-label" name="label" maxlength="80" autocomplete="off"
+             placeholder="Label, e.g. hailo-row3-noon">
+      <button class="btn" type="submit">New session</button>
+    </form>
+
+    <div class="table-wrap">
+      <table class="table" data-session-table>
+        <caption class="sr-only">Recorded sessions</caption>
+        <thead>
+          <tr>
+            <th scope="col">Started</th>
+            <th scope="col">Accelerator</th>
+            <th scope="col" class="num">Length</th>
+            <th scope="col" class="num">Inference fps</th>
+            <th scope="col" class="num">p95 ms</th>
+            <th scope="col" class="num">Power W</th>
+            <th scope="col" class="num">Energy Wh</th>
+            <th scope="col"><span class="sr-only">Files</span></th>
+          </tr>
+        </thead>
+        <tbody data-session-rows>
+          <tr><td colspan="8" class="empty">No sessions recorded yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div class="grid-2">
   {# -- Actionable Output Panel (Table 3.4) --------------------------- #}
   <section class="card">
     <div class="card-head">
@@ -139,57 +227,16 @@
     </div>
   </section>
 
-  {# -- System Health Monitor (Table 3.4) ----------------------------- #}
+  {# -- Detection distribution donut (Figure 3.4) --------------------- #}
   <section class="card">
     <div class="card-head">
-      <h2>System Health</h2>
-      <div class="card-head-actions">
-        <span class="chip is-warn" data-health-synthetic hidden
-              title="These values are modelled by the mock hardware layer, not measured">
-          <span class="dot"></span>synthetic
-        </span>
-      </div>
+      <h2>Detection Distribution</h2>
+      <span class="card-sub">By class, last 7 days</span>
     </div>
     <div class="card-body">
-      <div class="metrics">
-        <div>
-          <div class="metric-label">CPU temperature</div>
-          <div class="metric-value" data-health-temp>—</div>
-          <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
-        </div>
-        <div>
-          <div class="metric-label">CPU load</div>
-          <div class="metric-value" data-health-cpu>—</div>
-          <div class="meter" data-health-cpu-meter><i style="width:0"></i></div>
-        </div>
-        <div>
-          <div class="metric-label">Memory</div>
-          <div class="metric-value" data-health-mem>—</div>
-          <div class="meter" data-health-mem-meter><i style="width:0"></i></div>
-        </div>
-        <div>
-          <div class="metric-label">Power draw</div>
-          <div class="metric-value" data-health-power>—</div>
-          <div class="kpi-sub"><span data-health-voltage>—</span></div>
-        </div>
-        <div>
-          <div class="metric-label">Battery</div>
-          <div class="metric-value" data-health-battery>—</div>
-        </div>
-        <div>
-          <div class="metric-label">Storage</div>
-          <div class="metric-value" data-health-disk>—</div>
-        </div>
-      </div>
-
-      <div class="banner is-caution" data-health-backoff hidden style="margin-top:14px"></div>
-      <div class="banner is-offline" data-health-throttled hidden style="margin-top:14px">
-        <span class="banner-icon" aria-hidden="true">!</span>
-        <div>
-          <strong>The processor is thermally throttled.</strong>
-          Frame rates below are lower than the hardware can otherwise sustain.
-          Check the enclosure's ventilation and that the fan is running.
-        </div>
+      <div class="donut-wrap">
+        <div data-donut></div>
+        <div class="legend" data-legend></div>
       </div>
     </div>
   </section>
@@ -201,6 +248,7 @@
     <h2>Historical Detection Log</h2>
     <span class="card-sub">Recent scans</span>
     <div class="card-head-actions">
+      <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
       <a class="btn is-quiet" href="{{ url_for('pages.archived') }}">View all →</a>
     </div>
   </div>
