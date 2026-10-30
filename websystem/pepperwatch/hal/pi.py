@@ -60,6 +60,11 @@ class CsiCamera(CameraSource):
     front means a manual high-resolution capture does not have to stop and
     reconfigure the camera, which would drop the live feed for a second or two
     each time.
+
+    The Pi 5's ISP can deliver ``lores`` as RGB. The VideoCore ISP on a Pi 4,
+    Pi 3 or Zero 2 W only produces it as YUV420, so if RGB is refused the
+    stream is configured as YUV420 and converted on read, which costs about a
+    millisecond at 640x480.
     """
 
     def __init__(self, cfg: Config, candidate: CameraCandidate) -> None:
@@ -69,6 +74,25 @@ class CsiCamera(CameraSource):
         self._seq = 0
         self._started = False
         self._lock = threading.Lock()
+        self._lores_yuv = False
+
+    def _configuration(self, camera, lores_format: str):
+        return camera.create_video_configuration(
+            main={
+                "size": (self.cfg.camera.still_width, self.cfg.camera.still_height),
+                "format": "RGB888",
+            },
+            lores={
+                "size": (self.cfg.camera.preview_width, self.cfg.camera.preview_height),
+                "format": lores_format,
+            },
+            # Only one buffered frame: the worker always wants the newest, and
+            # a deeper queue would just add latency between what the camera
+            # sees and what the boxes describe.
+            buffer_count=2,
+            # libcamera clamps this to what the sensor mode allows.
+            controls={"FrameRate": float(self.cfg.camera.preview_fps)},
+        )
 
     def start(self) -> None:
         with self._lock:
@@ -87,23 +111,12 @@ class CsiCamera(CameraSource):
 
             try:
                 camera = Picamera2(camera_num=int(self.candidate.device))
-                config = camera.create_video_configuration(
-                    main={
-                        "size": (self.cfg.camera.still_width, self.cfg.camera.still_height),
-                        "format": "RGB888",
-                    },
-                    lores={
-                        "size": (self.cfg.camera.preview_width, self.cfg.camera.preview_height),
-                        "format": "RGB888",
-                    },
-                    # Only one buffered frame: the worker always wants the
-                    # newest, and a deeper queue would just add latency between
-                    # what the camera sees and what the boxes describe.
-                    buffer_count=2,
-                    # libcamera clamps this to what the sensor mode allows.
-                    controls={"FrameRate": float(self.cfg.camera.preview_fps)},
-                )
-                camera.configure(config)
+                try:
+                    camera.configure(self._configuration(camera, "RGB888"))
+                except Exception as exc:  # noqa: BLE001 — VideoCore ISP: lores must be YUV
+                    log.info("RGB lores refused (%s); using YUV420, as on a Pi 4 or earlier", exc)
+                    camera.configure(self._configuration(camera, "YUV420"))
+                    self._lores_yuv = True
                 camera.start()
             except Exception as exc:  # noqa: BLE001
                 raise CameraError(f"CSI camera {self.candidate.device} would not start: {exc}") from exc
@@ -131,6 +144,10 @@ class CsiCamera(CameraSource):
             raise CameraError(f"CSI capture failed: {exc}") from exc
 
         self._seq += 1
+        if self._lores_yuv:
+            # I420 arrives as one (height * 3/2, width) plane stack.
+            array = cv2.cvtColor(array, cv2.COLOR_YUV2BGR_I420)
+            return Frame(seq=self._seq, ts=time.time(), bgr=_rotate(array, self.cfg.camera.rotate))
         return Frame(seq=self._seq, ts=time.time(), bgr=_to_bgr(array, self.cfg.camera.rotate))
 
     def capture_still(self) -> np.ndarray:
@@ -158,7 +175,11 @@ class CsiCamera(CameraSource):
             width=self.cfg.camera.preview_width,
             height=self.cfg.camera.preview_height,
             fps=float(self.cfg.camera.preview_fps),
-            detail={**self.candidate.as_dict(), "rotate": self.cfg.camera.rotate},
+            detail={
+                **self.candidate.as_dict(),
+                "rotate": self.cfg.camera.rotate,
+                "lores_format": "YUV420" if self._lores_yuv else "RGB888",
+            },
         )
 
 

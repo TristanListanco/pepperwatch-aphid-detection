@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from pathlib import Path
 
 from ..accel import AcceleratorChoice
 from ..config import Config
@@ -35,6 +36,7 @@ __all__ = [
     "decode_yolov8",
     "derive_severity",
     "get_detector",
+    "onnx_model_path",
     "letterbox",
     "non_max_suppression",
     "severity_from_config",
@@ -42,6 +44,22 @@ __all__ = [
 ]
 
 log = logging.getLogger(__name__)
+
+
+def onnx_model_path(cfg: Config) -> Path | None:
+    """The ONNX model to use on the CPU, preferring one exported at this board's size.
+
+    Slower boards run a smaller input size (``config/profiles/<tier>.toml``),
+    but an export with a fixed 640x640 input forces 640 regardless. So
+    ``models/pepperwatch_320.onnx`` is tried before ``models/pepperwatch.onnx``
+    when the input size is 320, and likewise for any other size.
+    """
+    configured = cfg.model_path
+    sized = configured.with_name(f"{configured.stem}_{cfg.inference.input_size}{configured.suffix}")
+    for candidate in (sized, configured):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def get_detector(cfg: Config, choice: AcceleratorChoice) -> tuple[Detector, AcceleratorChoice]:
@@ -80,8 +98,8 @@ def get_detector(cfg: Config, choice: AcceleratorChoice) -> tuple[Detector, Acce
                 reason=f"{choice.name} failed to start {choice.hef_path.name}: {exc}",
             )
 
-    model_path = cfg.model_path
-    if model_path.exists():
+    model_path = onnx_model_path(cfg)
+    if model_path is not None:
         from .onnx_detector import OnnxDetector
 
         detector = OnnxDetector(
@@ -100,7 +118,7 @@ def get_detector(cfg: Config, choice: AcceleratorChoice) -> tuple[Detector, Acce
     log.warning(
         "no model at %s — falling back to the heuristic stub. "
         "Results are NOT model output and every event will be flagged synthetic.",
-        model_path,
+        cfg.model_path,
     )
     detector = StubDetector(
         class_names,

@@ -54,10 +54,9 @@ timeout_ms = 1000
 # accelerator it found. Override a value in local.toml under the same table,
 # e.g. [profiles.hailo] camera.preview_fps = 30.
 [profiles.cpu]
-# CPU inference tops out well below the camera rate, so capturing faster would
-# only spend CPU on JPEG encoding that inference then has to compete with.
-camera.preview_fps = 25
-inference.intra_op_threads = 3
+# Empty on purpose: a CPU session uses the settings above as adjusted for the
+# board's tier (config/profiles/<tier>.toml). Putting values here would undo
+# that tuning on slower boards.
 
 [profiles.hailo]
 # The HAT runs YOLOv8n far faster than the camera delivers frames, so the

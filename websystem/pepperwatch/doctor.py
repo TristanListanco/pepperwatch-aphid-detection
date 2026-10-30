@@ -51,8 +51,8 @@ class Check:
 def check_python() -> Check:
     version = sys.version_info
     text = f"{version.major}.{version.minor}.{version.micro} at {sys.executable}"
-    if version < (3, 11):
-        return Check("python", FAIL, text, "Python 3.11 or newer is required")
+    if version < (3, 10):
+        return Check("python", FAIL, text, "Python 3.10 or newer is required")
     if version >= (3, 14):
         return Check("python", WARN, text, "3.14+ is untested; onnxruntime and cv2 wheels lag")
     return Check("python", OK, text)
@@ -200,13 +200,16 @@ def _effective_memory_max(unit: str) -> tuple[float | None, str]:
     except (OSError, subprocess.SubprocessError):
         pass
 
-    from .config import PROJECT_ROOT, detect_board
+    from .board import memory_class
+    from .config import PROJECT_ROOT, total_memory_mb
 
     limit = None
-    for candidate in (
-        PROJECT_ROOT / "deploy" / "systemd" / unit,
-        PROJECT_ROOT / "deploy" / "systemd" / detect_board() / f"{unit}.d" / "10-{}.conf".format(detect_board()),
-    ):
+    mem_mb = total_memory_mb()
+    mem_class = memory_class(int(mem_mb)) if mem_mb else None
+    candidates = [PROJECT_ROOT / "deploy" / "systemd" / unit]
+    if mem_class:
+        candidates.append(PROJECT_ROOT / "deploy" / "systemd" / mem_class / f"{unit}.d" / "10-memory.conf")
+    for candidate in candidates:
         if not candidate.exists():
             continue
         for line in candidate.read_text().splitlines():
@@ -218,25 +221,24 @@ def _effective_memory_max(unit: str) -> tuple[float | None, str]:
 
 
 def check_board() -> Check:
-    """Report the board and whether a tuning profile is in effect."""
-    from .config import detect_board, profile_path, read_device_model, total_memory_mb
+    """Report the board, its tier, and which settings profiles apply."""
+    from .config import detect_board_info, load
 
-    board = detect_board()
-    memory_mb = total_memory_mb()
-    memory = f"{memory_mb / 1024:.1f} GB RAM" if memory_mb else "unknown RAM"
+    info = detect_board_info()
+    memory = f"{info.mem_mb / 1024:.1f} GB RAM" if info.mem_mb else "unknown RAM"
+    detail = f"{info.model or 'unknown'} ({info.family}; {info.cpu}; {memory}) -> {info.tier} tier"
 
-    if board == "unknown":
-        model = read_device_model() or platform.machine()
-        return Check("board", OK, f"{model} ({memory}) — no profile, using defaults")
-
-    profile = profile_path(board)
-    if profile is None:
-        return Check(
-            "board", WARN, f"{board}, {memory} — no profile ships for this board",
-            f"defaults are sized for a Pi 5; add config/profiles/{board}.toml if "
-            "this board differs materially",
-        )
-    return Check("board", OK, f"{board}, {memory} — profile {profile.name} applied")
+    if not info.supported:
+        return Check("board", FAIL, detail, info.reason)
+    applied = load().board_profile
+    if applied:
+        return Check("board", OK, f"{detail}, profile {applied}")
+    if info.tier == "high":
+        return Check("board", OK, f"{detail}, default settings")
+    return Check(
+        "board", WARN, f"{detail}, but no config/profiles/{info.tier}.toml",
+        "the defaults are sized for a Pi 5 and will run slowly here",
+    )
 
 
 def check_memory_budget() -> Check:
@@ -279,8 +281,8 @@ def check_memory_budget() -> Check:
             "memory budget", FAIL, detail,
             f"the service ceilings exceed physical RAM once ~{reserve_mb:.0f}M is "
             "reserved for the OS, so they will never engage and the OOM killer "
-            "will fire instead. Install the board drop-ins: "
-            "deploy/systemd/<board>/",
+            "will fire instead. Re-run sudo ./deploy/install.sh, which applies "
+            "the deploy/systemd/mem-*/ limits for this much RAM",
         )
     if capped_mb + reserve_mb > total_mb * 0.92:
         return Check("memory budget", WARN, detail, "very little headroom left for the OS")
@@ -374,8 +376,15 @@ def check_power() -> Check:
         pass
 
     if not sources:
-        return Check("power", WARN, "no power readings available",
-                     "vcgencmd pmic_read_adc should work on any Pi 5; check the user is in group video")
+        from .config import detect_board
+
+        hint = (
+            "vcgencmd pmic_read_adc should work on any Pi 5; check the user is in group video"
+            if detect_board() == "pi5"
+            else "only the Pi 5 measures its own power; fit an INA219 on I2C for power and "
+            "energy figures, especially when comparing boards"
+        )
+        return Check("power", WARN, "no power readings available", hint)
     if len(sources) == 1:
         return Check("power", OK, sources[0] + " (no INA219: whole-device draw is not measured)")
     return Check("power", OK, "; ".join(sources))
@@ -514,11 +523,12 @@ def main() -> int:
 
     logging.basicConfig(level=logging.ERROR)
 
-    from .config import detect_board, read_device_model
+    from .config import detect_board_info
 
+    info = detect_board_info()
     print("Pepper Watch diagnostics")
     print(f"  host     : {platform.node()} ({platform.machine()})")
-    print(f"  board    : {read_device_model() or 'not a Raspberry Pi'} [{detect_board()}]")
+    print(f"  board    : {info.model or 'unknown'} [{info.key}, {info.tier} tier]")
     print(f"  cwd      : {os.getcwd()}")
     print()
 

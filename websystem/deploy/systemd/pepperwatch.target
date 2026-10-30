@@ -6,7 +6,11 @@ Description=Pepper Watch edge node
 #
 #   sudo systemctl enable pepperwatch.target
 #
-Requires=pepperwatch-ap.service pepperwatch-worker.service pepperwatch-web.service
+# The access point is wanted, not required: boards without a Wi-Fi radio
+# (Banana Pi M5, some Orange Pi 5 variants) serve the dashboard over Ethernet
+# instead, and install.sh leaves the AP disabled there.
+Requires=pepperwatch-worker.service pepperwatch-web.service
+Wants=pepperwatch-ap.service
 After=pepperwatch-ap.service
 
 [Install]

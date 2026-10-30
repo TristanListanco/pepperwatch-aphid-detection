@@ -1,0 +1,28 @@
+# Mid tier: Cortex-A72-class boards with 1.5 GB of RAM or more.
+#
+# Raspberry Pi 4 Model B, Pi 400 and CM4 (BCM2711, 4x A72 at 1.5-1.8 GHz), and
+# RK3399 boards. Merged over default.toml, which is sized for a Pi 5;
+# local.toml and PW_* variables still override it.
+#
+# An A72 runs YOLOv8n at roughly a third of a Pi 5's rate: about 3-4 FPS at
+# 640x640 and 8-10 at 416x416 on the CPU. RAM is rarely the constraint here
+# (2-8 GB), so this profile trims compute, not memory. A 2 GB board still gets
+# smaller service memory limits from deploy/systemd/mem-2g/.
+
+[camera]
+# Above what inference can consume at 416, and cheap enough to JPEG-encode
+# without starving it.
+preview_fps = 20
+still_width = 1920
+still_height = 1080
+
+[inference]
+# 416 roughly doubles the frame rate over 640 for a modest loss of recall on
+# the smallest clusters. Export a matching model as models/pepperwatch_416.onnx:
+# a fixed-size 640 export would override this setting.
+input_size = 416
+intra_op_threads = 3
+
+[web]
+stream_fps = 8
+max_stream_clients = 3

@@ -1,0 +1,31 @@
+# Tiny tier: boards with under 768 MB of RAM.
+#
+# Raspberry Pi Zero 2 W (4x A53 at 1 GHz, 512 MB). Best effort: the full
+# pipeline fits, but with little to spare, and the service memory limits in
+# deploy/systemd/mem-512m/ are what keep a spike from taking the board down.
+# Merged over default.toml; local.toml and PW_* variables still override it.
+
+[camera]
+preview_fps = 10
+still_width = 1024
+still_height = 768
+jpeg_quality = 65
+
+[inference]
+# Export a matching model as models/pepperwatch_320.onnx.
+input_size = 320
+intra_op_threads = 2
+max_detections = 30
+
+[frames]
+slot_bytes = 196608
+
+[persist]
+telemetry_interval_s = 30
+thumb_width = 240
+
+[web]
+stream_fps = 4
+max_stream_clients = 1
+max_sse_clients = 4
+sse_queue_size = 6

@@ -144,46 +144,54 @@ sudo ./deploy/install.sh
 sudo systemctl start pepperwatch.target
 ```
 
-### Board profiles
+### Boards and tiers
 
-`config/default.toml` is sized for a **Pi 5**. Smaller boards get a profile
-merged over it, chosen from `/proc/device-tree/model`:
+`config/default.toml` is sized for a **Pi 5**. Every other board is classified
+by `pepperwatch/board.py` from what Linux already reports: the device-tree
+model and `compatible` strings, the ARM core types in `/proc/cpuinfo`, and RAM.
+The result is a **tier**, the CPU class capped by memory:
+
+| Tier | Typical boards | Input | Preview | Threads |
+|---|---|---|---|---|
+| `high` | Pi 5, Pi 500; RK3588 boards (Orange Pi 5, Banana Pi M7) | 640 | 25 fps | 3 |
+| `mid` | Pi 4, Pi 400, CM4; RK3399 | 416 | 20 fps | 3 |
+| `low` | Pi 3, Orange Pi Zero 2/3, Banana Pi M4/M5, RK3566; any board under 1.5 GB | 320 | 15 fps | 2 |
+| `tiny` | Pi Zero 2 W; any board under 768 MB | 320 | 10 fps | 2 |
+
+The core type is what counts, not the vendor: an RK3588's A76 cores put an
+Orange Pi 5 in the same tier as a Pi 5. Profiles layer as:
 
 ```
-config/default.toml -> config/profiles/<board>.toml -> config/local.toml -> PW_* env
+config/default.toml -> profiles/<tier>.toml -> profiles/<board>.toml -> config/local.toml -> PW_* env
 ```
 
-`deploy/install.sh` also installs matching systemd drop-ins from
-`deploy/systemd/<board>/`. Force a profile for testing with `PW_BOARD=pi3`.
+`profiles/<board>.toml` is optional and named by the board key
+(`python -m pepperwatch.board` prints it, e.g. `orangepi-zero3`). Force a board
+or tier for testing with `PW_BOARD=pi3` or `PW_TIER=low`.
 
-**Pi 3** (`config/profiles/pi3.toml`, `deploy/systemd/pi3/`) — a 1 GB board with
-a Cortex-A53, against the Pi 5's 8–16 GB and Cortex-A76:
+Memory limits are chosen separately, by RAM alone. `install.sh` applies
+`deploy/systemd/mem-512m/`, `mem-1g/` or `mem-2g/` below 3 GB; the base units'
+2 G + 1 G would otherwise sit above physical memory, never engage, and leave
+the kernel's OOM killer to pick a victim by heuristic. `doctor` fails on that.
 
-| | Pi 5 default | Pi 3 |
+| RAM | worker `MemoryMax` | web `MemoryMax` |
 |---|---|---|
-| `inference.input_size` | 640 | **320** — 640 is about 1 FPS on an A53 |
-| `inference.intra_op_threads` | 3 | **2** |
-| `camera.preview_fps` | 25 | **15** |
-| `frames.slot_bytes` | 512 KB | **256 KB** (2.8× headroom on the largest test frame) |
-| `web.max_stream_clients` | 4 | **2** — single-antenna 2.4 GHz radio |
-| worker `MemoryMax` | 2 G | **460 M** |
-| web `MemoryMax` | 1 G | **200 M** |
+| ≥ 3 GB | 2 G | 1 G |
+| 1.5–3 GB (`mem-2g`) | 1000 M | 400 M |
+| 768 MB–1.5 GB (`mem-1g`) | 460 M | 200 M |
+| < 768 MB (`mem-512m`) | 240 M | 100 M (best effort) |
 
-`inference.target_fps` stays at **17** on every board. It is the §3.2
-requirement, not a tuning knob, and the dashboard reporting "below the 17 fps
-target" on a Pi 3 is correct rather than something to paper over.
+`inference.target_fps` stays at **17** on every tier. It is the §3.2
+requirement, not a tuning knob, and a slower board reporting "below the 17 fps
+target" is correct rather than something to paper over.
 
-The memory limits are the part that matters. The Pi 5 ceilings total 3 G on a
-board with roughly 940 MB visible — **3.4× physical RAM**, so they never engage
-and the kernel's OOM killer fires instead, picking its victim by heuristic.
-`python -m pepperwatch.doctor` fails on this, and `install.sh` warns when a
-board under 4 GB has no drop-ins.
-
-A Pi 3 is a development and integration target. **Its frame rates are not
-Chapter IV data** — those must come from the Pi 5. The A53 is ARMv8.0 and lacks
-the dot-product instructions the A76 has, so INT8 quantization buys less there
-too. Note also that the Pi 3 has no RTC connector at all (the Pi 5 has J5), so
-an external DS3231 is the only way to get correct timestamps across a power cut.
+A slower board is a comparison point, not a stand-in. **Its frame rates are
+reported as what that board achieves, beside the Pi 5's**: the A53/A55 cores
+lack the A76's dot-product instructions, so INT8 quantization buys less there
+too. Only the Pi 5 measures its own power (PMIC), so energy comparisons across
+boards need an INA219 on each, or the figures are not like for like. The Pi 3
+and most Orange Pi and Banana Pi boards have no RTC battery connector; an
+external DS3231 module keeps timestamps correct across a power cut.
 
 Then join the `PepperWatch` network. The dashboard should open by itself.
 

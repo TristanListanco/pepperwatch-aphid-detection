@@ -33,10 +33,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 is Raspberry Pi OS Bookworm's Python and 3.13 is Trixie's. The
-        # arm64 runner has the Pi 5's architecture, so a missing onnxruntime or
-        # opencv wheel for aarch64 fails here rather than on the device.
-        python: ["3.11", "3.13"]
+        # 3.11 is Raspberry Pi OS Bookworm's Python and 3.13 is Trixie's; 3.10
+        # is Ubuntu 22.04's, the base of many Orange Pi and Banana Pi images.
+        # The arm64 runner has these boards' architecture, so a missing
+        # onnxruntime or opencv wheel for aarch64 fails here, not on a device.
+        python: ["3.10", "3.11", "3.13"]
         arch: [x64, arm64]
         include:
           - arch: x64

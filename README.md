@@ -7,7 +7,9 @@
 
 A Raspberry Pi 5 watches the crop canopy through a camera and runs a YOLOv8n
 model on every frame it can, on its CPU or on a Raspberry Pi AI HAT+ when one
-is fitted. It also broadcasts its own Wi-Fi network and serves a live dashboard
+is fitted. It also runs on older Raspberry Pis and on other 64-bit ARM boards
+such as the Orange Pi and Banana Pi, tuning itself to each board's CPU and
+RAM. It also broadcasts its own Wi-Fi network and serves a live dashboard
 to any phone that joins. No internet, cloud account or app install is needed: a
 farmer or agricultural officer joins the `PepperWatch` network and the dashboard
 opens.
@@ -34,6 +36,7 @@ Python 3.11+, since it needs no hardware.
   - [Which data travels where](#which-data-travels-where)
   - [Data model](#data-model)
   - [Networking and the captive portal](#networking-and-the-captive-portal)
+- [Supported boards](#supported-boards)
 - [Deploying to a Raspberry Pi 5](#deploying-to-a-raspberry-pi-5)
 - [AI HAT+ acceleration](#ai-hat-acceleration)
 - [Measurements: session CSV files](#measurements-session-csv-files)
@@ -59,10 +62,11 @@ Python 3.11+, since it needs no hardware.
 └── websystem/                  The edge system: worker, dashboard, deployment
     ├── config/
     │   ├── default.toml        Every tunable, with comments
-    │   ├── profiles/pi3.toml   Overrides for smaller boards
+    │   ├── profiles/           mid.toml, low.toml, tiny.toml: settings for slower boards
     │   └── recommendations.json  Advisory text (English + Cebuano)
     ├── pepperwatch/
     │   ├── worker.py           Capture + inference + persistence process
+    │   ├── board.py            Board detection: family, CPU class, RAM -> tier
     │   ├── accel.py            AI HAT+ detection; CPU-or-Hailo choice per session
     │   ├── session.py          Per-session CSV recorder (inference, system, summary)
     │   ├── detect/             Hailo and ONNX detectors, letterbox/NMS/decoding, stub
@@ -93,7 +97,7 @@ deliberate differences from the thesis manuscript.
 
 | Component | Role |
 |---|---|
-| Raspberry Pi 5 (8 or 16 GB) | Runs everything. Inference runs on its four Cortex-A76 cores unless an AI HAT+ is fitted |
+| Raspberry Pi 5 (8 or 16 GB) | Runs everything. Inference runs on its four Cortex-A76 cores unless an AI HAT+ is fitted. Older Pis and other 64-bit ARM boards work too: see [Supported boards](#supported-boards) |
 | Raspberry Pi AI HAT+ (optional) | Hailo-8L (13 TOPS), Hailo-8 (26 TOPS) or Hailo-10H (AI HAT+ 2) on PCIe. Detected at the start of each session and used automatically |
 | Camera Module (MIPI CSI) or USB webcam | Image source. Detected at the start of each session; CSI preferred when both are attached |
 | On-board Wi-Fi | Runs as an access point (`PepperWatch`, 2.4 GHz) that phones join |
@@ -454,6 +458,44 @@ Detection events are never pruned automatically; they're the research record.
 
 ---
 
+## Supported boards
+
+The Raspberry Pi 5 is the reference device. Other boards are detected
+automatically at install and at every start: `pepperwatch/board.py` reads the
+device-tree model, the ARM core types and the RAM, and picks a **tier** of
+settings. The core type decides, not the brand, so an Orange Pi 5's Cortex-A76
+cores put it with the Pi 5.
+
+| Tier | Boards | Detection input | Notes |
+|---|---|---|---|
+| `high` | Raspberry Pi 5, Pi 500, CM5; RK3588 boards (Orange Pi 5, Banana Pi M7) | 640 px | The reference settings |
+| `mid` | Raspberry Pi 4 Model B, Pi 400, CM4; RK3399 boards | 416 px | Roughly a third of a Pi 5's CPU throughput |
+| `low` | Raspberry Pi 3, CM3; Orange Pi Zero 2/Zero 3 (H616/H618); Banana Pi M4 Berry/Zero (H618), M5 (S905X3); RK3566 (Orange Pi 3B); any board with under 1.5 GB | 320 px | |
+| `tiny` | Raspberry Pi Zero 2 W; any board with under 768 MB | 320 px | Best effort |
+| — | Raspberry Pi 1, 2, Zero/Zero W; Banana Pi M2 Zero; any 32-bit OS | | **Not supported**: ONNX Runtime has no 32-bit ARM builds |
+
+Run `python3 -m pepperwatch.board` from `websystem/` to see what a board is
+detected as. Memory limits for the services are chosen by RAM alone (see
+`websystem/README.md`).
+
+**What differs off the Raspberry Pi:**
+
+| | Raspberry Pi | Orange Pi, Banana Pi, other boards |
+|---|---|---|
+| OS | Raspberry Pi OS 64-bit (Bookworm/Trixie) | A 64-bit Debian 12+ or Ubuntu 22.04+ image (Armbian, Orange Pi OS, …) |
+| Camera | CSI camera (Picamera2) or USB webcam | **USB webcam only.** These boards' CSI cameras need vendor drivers that Picamera2 doesn't support |
+| AI HAT+ | Installed automatically | Not packaged; install HailoRT from hailo.ai yourself (boards with a PCIe slot only). The RK3588's own NPU isn't used |
+| Power figures | PMIC estimate on the Pi 5; INA219 for whole-device | INA219 only. Without one there are no power or energy figures |
+| Access point | NetworkManager hotspot | Same, if the image uses NetworkManager and the board has Wi-Fi; otherwise the installer leaves it off and the dashboard is on the wired address |
+
+**For a fair comparison across boards,** use the same camera, the same model
+export at each tier's input size, and an INA219 on every board: the Pi 5's
+PMIC figure covers the board's own rails only, so it can't be compared with an
+INA219 reading from another board. `sessions.csv` records each session's
+board, CPU and tier beside its results.
+
+---
+
 ## Deploying to a Raspberry Pi 5
 
 ### What you need
@@ -477,6 +519,10 @@ sudo apt update && sudo apt full-upgrade -y
 sudo raspi-config        # Interface Options → SSH on; I2C on if you have an INA219
 sudo reboot
 ```
+
+**On another board,** flash a 64-bit Debian 12+ or Ubuntu 22.04+ based image
+(Armbian or the vendor's), enable SSH, and plug in a USB webcam. The rest of
+this guide applies as written; the installer adapts to the board.
 
 Connect the camera with the Pi **powered off**. Use **Ethernet** during setup:
 once the access point starts it takes over `wlan0`, which drops any Wi-Fi or SSH
@@ -508,8 +554,10 @@ sudo ./deploy/install.sh
 
 The installer:
 
-1. detects the board and RAM and refuses to run on a 32-bit userland;
-2. installs apt packages (Picamera2, libcamera, Mosquitto, NetworkManager, …);
+1. identifies the board (`pepperwatch.board`): its family, CPU, RAM and tier,
+   and refuses a 32-bit OS or Python older than 3.10;
+2. installs apt packages (Mosquitto, OpenCV's dependencies, …), plus Picamera2,
+   libcamera and NetworkManager on a Raspberry Pi;
 3. **if an AI HAT+ is on the PCIe bus**, installs its runtime: `hailo-all` for
    the Hailo-8/8L, `hailo-h10-all` for the Hailo-10H, and warns if the PCIe link
    is below Gen 3;
@@ -521,8 +569,10 @@ The installer:
 7. writes `/opt/pepperwatch/config/local.toml` with a random Flask secret;
 8. **generates the Wi-Fi password** in `/etc/pepperwatch/ap.psk` and prints it;
    write it down;
-9. installs the systemd units (plus board-specific overrides for smaller Pis) and
-   enables `pepperwatch.target` and the maintenance timer;
+9. installs the systemd units, with smaller memory limits on boards under 3 GB
+   (`deploy/systemd/mem-*/`), and enables `pepperwatch.target` and the
+   maintenance timer. The access point is left off on a board with no Wi-Fi, or
+   where NetworkManager isn't managing the network;
 10. runs `pepperwatch.doctor --camera-probe`.
 
 If it just installed the AI HAT+ driver, it ends with **"Reboot required"**:
@@ -706,13 +756,16 @@ Disk use is about 200 bytes per inference: roughly 170 MB for an 8-hour day at
 Later layers win:
 
 ```
-config/default.toml  →  config/profiles/<board>.toml  →  config/local.toml  →  PW_* environment
+config/default.toml → profiles/<tier>.toml → profiles/<board>.toml → config/local.toml → PW_* environment
 ```
 
 - **`default.toml`** has every setting with comments, sized for a Pi 5. Don't
   edit it for one machine.
-- **`profiles/<board>.toml`** is applied automatically from
-  `/proc/device-tree/model` (only `pi3` ships). Force one with `PW_BOARD=pi3`.
+- **`profiles/<tier>.toml`** (`mid`, `low`, `tiny`) is applied automatically
+  for slower boards; see [Supported boards](#supported-boards).
+- **`profiles/<board>.toml`** is optional, for one board's quirks, and named by
+  the key `python3 -m pepperwatch.board` prints (e.g. `orangepi-zero3.toml`).
+  Force a board or tier for testing with `PW_BOARD=pi3` or `PW_TIER=low`.
 - **`local.toml`** holds your machine's overrides and secrets. It's gitignored;
   on the Pi it's `/opt/pepperwatch/config/local.toml`.
 - **Environment variables** are `PW_` plus the table and key in capitals:
@@ -810,6 +863,16 @@ Both files are trained once, as YOLOv8n with two classes in this order:
 ```bash
 # on the training machine (Ultralytics installed)
 yolo export model=best.pt format=onnx imgsz=640
+```
+
+Slower boards run a smaller input size (416 on the `mid` tier, 320 on `low`
+and `tiny`). An export has a fixed input size, so export one per size and name
+it after the size; the worker picks the file matching the board, then falls
+back to `pepperwatch.onnx`:
+
+```bash
+yolo export model=best.pt format=onnx imgsz=416   # rename to pepperwatch_416.onnx
+yolo export model=best.pt format=onnx imgsz=320   # rename to pepperwatch_320.onnx
 ```
 
 **For an AI HAT+: a HEF compiled from that ONNX** with Hailo's Dataflow
@@ -1029,7 +1092,11 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 
 | Symptom | Likely cause / fix |
 |---|---|
-| Installer: "not aarch64" | 32-bit OS. Reflash with Raspberry Pi OS (64-bit) |
+| Installer: "32-bit userland" or "not aarch64" | 32-bit OS. Reflash with a 64-bit image (Raspberry Pi OS 64-bit, or an arm64 Armbian/vendor image) |
+| Installer: "Python 3.10 or newer is required" | The image is too old. Use one based on Debian 12+ or Ubuntu 22.04+ |
+| Board detected in the wrong tier | Run `python3 -m pepperwatch.board` to see why. Override with `PW_TIER=…` in the worker's environment, or add `config/profiles/<board>.toml` |
+| No camera on an Orange Pi or Banana Pi | Use a USB webcam; `ls /dev/video*` and `v4l2-ctl --list-devices` should show it. CSI cameras on these boards aren't supported |
+| Very slow on a `low`-tier board | Check the worker is using `pepperwatch_320.onnx`: a 640 export forces 640 px even on a slow board |
 | Installer stops on `libatlas-base-dev` | You have an old checkout. Run `sudo ./deploy/update.sh` (or `git pull`) and install again |
 | Session runs on **CPU** with an AI HAT+ fitted | The Session card says why. See [AI HAT+ acceleration](#ai-hat-acceleration) |
 | Session card shows *heuristic stub* | No model for this accelerator: no `pepperwatch.onnx` (CPU) or HEF (HAT). Results are synthetic, not data |

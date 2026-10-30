@@ -9,17 +9,23 @@ becomes ``PW_CAMERA_PREVIEW_FPS``. Values are coerced to the type of the
 default they replace, so ``PW_WEB_PORT=9000`` arrives as an int and a bogus
 value fails loudly at startup rather than halfway through a field trial.
 
-Targets Python 3.11 and 3.13, the versions Raspberry Pi OS Bookworm and Trixie
-ship.
+Runs on Python 3.10 to 3.13: 3.11 and 3.13 are what Raspberry Pi OS Bookworm
+and Trixie ship, and 3.10 is Ubuntu 22.04's, which many Orange Pi and Banana Pi
+images are built on.
 """
 
 from __future__ import annotations
 
 import os
-import re
-import tomllib
 from pathlib import Path
 from typing import Any, Iterator
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10; requirements.txt pulls in tomli there
+    import tomli as tomllib  # type: ignore[no-redef]
+
+from . import board as _board
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "config" / "default.toml"
@@ -27,9 +33,9 @@ LOCAL_CONFIG = PROJECT_ROOT / "config" / "local.toml"
 PROFILE_DIR = PROJECT_ROOT / "config" / "profiles"
 ENV_PREFIX = "PW"
 
-# Boards this project has a tuned profile for. Anything else runs on
-# default.toml, which is sized for the Pi 5.
-KNOWN_BOARDS = ("pi5", "pi4", "pi3", "pizero2")
+# Tiers with a settings profile. The "high" tier (Pi 5 class) is what
+# default.toml is sized for, so it has none.
+TIER_PROFILES = ("mid", "low", "tiny")
 
 
 class ConfigError(RuntimeError):
@@ -118,7 +124,13 @@ class Config(Section):
 
     @property
     def board_profile(self) -> str | None:
-        return self._data.get("board", {}).get("profile")
+        """The profiles applied for this board, e.g. ``"low"`` or ``"low+pi3"``."""
+        applied = self._data.get("board", {}).get("profiles") or []
+        return "+".join(applied) or None
+
+    @property
+    def board_tier(self) -> str | None:
+        return self._data.get("board", {}).get("tier")
 
     def with_profile(self, name: str) -> "Config":
         """A copy with ``[profiles.<name>]`` merged over it.
@@ -134,54 +146,29 @@ class Config(Section):
 
 
 def is_raspberry_pi() -> bool:
-    """True on Raspberry Pi hardware, judged by the device tree model.
-
-    ``platform.machine()`` would say ``aarch64`` on plenty of things that are
-    not a Pi.
-    """
-    return "raspberry pi" in read_device_model().lower()
+    """True on Raspberry Pi hardware, judged by the device tree model."""
+    return detect_board_info().is_raspberry_pi
 
 
 def read_device_model() -> str:
     """The device tree model string, or an empty string off-device."""
-    try:
-        # The device tree string is NUL-terminated.
-        return Path("/proc/device-tree/model").read_bytes().decode("utf-8", "replace").rstrip("\x00")
-    except OSError:
-        return ""
+    return _board.read_model()
+
+
+def detect_board_info() -> _board.BoardInfo:
+    """This board: family, CPU class, RAM and tier. See ``pepperwatch.board``."""
+    return _board.detect()
 
 
 def detect_board(model: str | None = None) -> str:
-    """Identify the board, so its profile can be applied.
-
-    Returns one of :data:`KNOWN_BOARDS`, or ``"unknown"``. The distinction
-    matters because default.toml is sized for a Pi 5: a Pi 3 has an eighth of
-    the RAM and a CPU several times slower, and running the Pi 5 settings there
-    means the memory caps never engage before the kernel's OOM killer does.
+    """The board key: ``pi5``, ``pi4``, ``pi3``, ``orangepi-zero3``, ... or ``unknown``.
 
     ``PW_BOARD`` overrides detection, which is how the tests exercise each
     profile without the hardware.
     """
-    override = os.environ.get(f"{ENV_PREFIX}_BOARD", "").strip().lower()
-    if override:
-        return override
-
-    text = (model if model is not None else read_device_model()).strip()
-    if "raspberry pi" not in text.lower():
-        return "unknown"
-
-    lowered = text.lower()
-    # Check Zero before the numeric match: "Raspberry Pi Zero 2 W" contains a
-    # digit that would otherwise read as a model number.
-    if "zero 2" in lowered:
-        return "pizero2"
-    if "zero" in lowered:
-        return "pizero"
-
-    match = re.search(r"raspberry pi\s+(?:compute module\s+)?(\d+)", lowered)
-    if match:
-        return f"pi{match.group(1)}"
-    return "unknown"
+    if model is None:
+        return detect_board_info().key
+    return _board.detect(model=model, compatible=[], cpuinfo="", mem_mb=None).key
 
 
 def total_memory_mb() -> float | None:
@@ -200,9 +187,9 @@ def total_memory_mb() -> float | None:
         return None
 
 
-def profile_path(board: str) -> Path | None:
-    """The tuning profile for a board, if one ships."""
-    candidate = PROFILE_DIR / f"{board}.toml"
+def profile_path(name: str) -> Path | None:
+    """A tier or board profile, if one ships."""
+    candidate = PROFILE_DIR / f"{name}.toml"
     return candidate if candidate.exists() else None
 
 
@@ -217,14 +204,18 @@ def load(overrides: dict[str, Any] | None = None, *, use_env: bool = True) -> Co
 
     data = _load_toml(DEFAULT_CONFIG)
 
-    # Board profile sits between the shipped defaults and the operator's local
-    # overrides: it adapts to the hardware without silently overriding a
-    # deliberate choice in local.toml or the environment.
-    board = detect_board()
-    profile = profile_path(board)
-    if profile is not None:
-        _merge(data, _load_toml(profile))
-        data.setdefault("board", {})["profile"] = board
+    # Hardware profiles sit between the shipped defaults and the operator's
+    # local overrides: they adapt to the board without silently overriding a
+    # deliberate choice in local.toml or the environment. The tier's profile
+    # (CPU class and RAM) comes first, then any profile for the exact board.
+    info = detect_board_info()
+    applied = []
+    for name in (info.tier, info.key):
+        profile = profile_path(name)
+        if profile is not None and name not in applied:
+            _merge(data, _load_toml(profile))
+            applied.append(name)
+    data["board"] = {"key": info.key, "tier": info.tier, "family": info.family, "profiles": applied}
 
     if LOCAL_CONFIG.exists():
         _merge(data, _load_toml(LOCAL_CONFIG))

@@ -53,7 +53,12 @@ def csi_cameras(info_provider: Callable[[], list[dict]] | None = None) -> list[C
         try:
             from picamera2 import Picamera2  # type: ignore[import-not-found]
         except ImportError as exc:
-            log.warning("Picamera2 not importable (%s); CSI cameras cannot be listed", exc)
+            # Expected on boards other than a Raspberry Pi, where the camera
+            # is a USB webcam; worth a warning only on a Pi.
+            from ..board import detect
+
+            level = logging.WARNING if detect().is_raspberry_pi else logging.DEBUG
+            log.log(level, "Picamera2 not importable (%s); CSI cameras cannot be listed", exc)
             return []
         info_provider = Picamera2.global_camera_info
 

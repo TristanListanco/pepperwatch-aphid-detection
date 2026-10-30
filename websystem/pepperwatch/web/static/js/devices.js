@@ -65,9 +65,13 @@ export class DeviceList {
     // The board. Throttling is the thing worth flagging here.
     const board = {
       status: alive === false ? 'off' : telemetry.throttled ? 'warn' : 'ok',
-      name: shortBoard(host.board) || 'Raspberry Pi 5',
-      meta: [host.ram_mb ? `${Math.round(host.ram_mb / 1024)} GB RAM` : null,
-        accel.kind === 'cpu' ? 'runs inference' : 'host'].filter(Boolean).join(' · '),
+      name: shortBoard(host.board) || 'Single-board computer',
+      meta: [
+        host.cpu,
+        ram(host.ram_mb),
+        host.board_tier ? `${host.board_tier} tier` : null,
+        accel.kind === 'cpu' ? 'runs inference' : null,
+      ].filter(Boolean).join(' · '),
     };
     if (alive === false) board.pill = { kind: 'off', text: 'Detector offline' };
     else if (telemetry.throttled) {
@@ -158,6 +162,11 @@ function icon(id) {
   use.setAttribute('href', `#${id}`);
   svg.append(use);
   return svg;
+}
+
+function ram(mb) {
+  if (!mb) return null;
+  return mb < 1024 ? `${Math.round(mb)} MB RAM` : `${Math.round(mb / 1024)} GB RAM`;
 }
 
 // "Raspberry Pi 5 Model B Rev 1.1" -> "Raspberry Pi 5 Model B".

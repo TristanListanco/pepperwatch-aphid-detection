@@ -1,0 +1,63 @@
+# Low tier: Cortex-A53/A55-class boards, or any board with under 1.5 GB RAM.
+#
+# Raspberry Pi 3 and CM3, Orange Pi Zero 2/Zero 3 (Allwinner H616/H618),
+# Banana Pi M4 Berry/Zero (H618), RK3566 boards such as the Orange Pi 3B, and a
+# 1 GB Pi 4. Merged over default.toml (which is sized for a Pi 5) when
+# pepperwatch.board classifies the board this way; local.toml and PW_*
+# variables still override it.
+#
+# Two differences from a Pi 5 drive every value here:
+#
+#   CPU   An A53 or A55 at 1.2-1.8 GHz against an A76 at 2.4 GHz. Beyond the
+#         clock, the A53 lacks the dot-product instructions the A76 has, so
+#         INT8 quantization buys less too. Expect roughly 1 FPS at 640x640 and
+#         3-5 at 320x320 (the A55 is somewhat faster).
+#
+#   RAM   1 GB or so. The service memory limits are sized to match in
+#         deploy/systemd/mem-1g/, which install.sh applies by RAM.
+#
+# Boards in this tier are development and integration targets: report their
+# frame rates as what a low-cost board achieves, alongside, not instead of,
+# the Pi 5's.
+
+[camera]
+# The CPU cannot feed 25 fps of JPEG encoding and keep up with inference.
+# 15 is comfortably above what the dashboard's 1 fps polling default consumes.
+preview_fps = 15
+# Snapshots at Pi 5 resolution would take seconds to encode here.
+still_width = 1024
+still_height = 768
+jpeg_quality = 70
+
+[inference]
+# 640x640 on an A53 is around 1 FPS, which makes the live view useless. 320
+# keeps the loop responsive, at the cost of recall on small clusters. Export
+# a matching model as models/pepperwatch_320.onnx: a fixed-size 640 export
+# would override this setting.
+input_size = 320
+# Two of four cores. Three would leave too little for Flask and the capture
+# thread on a board this slow, and ONNX Runtime's per-thread arenas are a real
+# cost against 1 GB.
+intra_op_threads = 2
+max_detections = 50
+# target_fps is deliberately NOT lowered. It is the §3.2 requirement, and the
+# dashboard showing "below the 17 fps target" here is correct and useful
+# information rather than something to paper over.
+
+[frames]
+# 256 KB per slot. At 640x480 quality 70 a frame is well under 50 KB, and two
+# 512 KB slots would be a megabyte of a gigabyte spent on headroom never used.
+slot_bytes = 262144
+
+[persist]
+# Halve the telemetry write rate: these boards boot from SD or eMMC, which is
+# the likeliest thing to fail.
+telemetry_interval_s = 30
+
+[web]
+stream_fps = 6
+# Single-antenna 2.4 GHz radios are the norm in this class. Two concurrent
+# MJPEG viewers is a realistic ceiling; beyond that everyone's stream degrades
+# together, which is worse than refusing the third.
+max_stream_clients = 2
+max_sse_clients = 6

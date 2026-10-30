@@ -1,10 +1,10 @@
 # Pepper Watch runtime dependencies.
 #
-# Python floor is 3.11 and the ceiling is <3.14. Both current Raspberry Pi OS
-# releases are supported: Bookworm ships 3.11, Trixie (Oct 2025) ships 3.13.
-# Ranges rather than exact pins, so one manifest resolves cp311 and cp313
-# wheels alike. Development happens on 3.11 deliberately — building against
-# the floor is what stops 3.12+ syntax reaching a Bookworm field unit.
+# Python floor is 3.10 and the ceiling is <3.14. Raspberry Pi OS Bookworm ships
+# 3.11 and Trixie 3.13; 3.10 is Ubuntu 22.04's, which many Orange Pi and Banana
+# Pi images are built on. Ranges rather than exact pins, so one manifest
+# resolves cp310 to cp313 wheels alike, and CI tests the floor so newer syntax
+# cannot reach an older field unit.
 #
 # On the Pi, create the venv with --system-site-packages: Picamera2 and its
 # libcamera bindings are apt-only (sudo apt install python3-picamera2) and pip
@@ -12,6 +12,7 @@
 # note below and run `python -m pepperwatch.doctor` after installing.
 
 Flask>=3.1,<4
+tomli>=2.0,<3; python_version < "3.11"   # tomllib arrived in 3.11
 gunicorn>=23.0,<24         # gthread worker, one process, so the SSE Hub is shared
 paho-mqtt>=2.1,<3
 onnxruntime>=1.22,<2       # cp311 and cp313 aarch64 wheels both present

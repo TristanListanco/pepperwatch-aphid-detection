@@ -47,7 +47,7 @@ from typing import Any
 import numpy as np
 
 from .accel import AcceleratorChoice, choose_accelerator
-from .config import Config, is_raspberry_pi, load, read_device_model, total_memory_mb
+from .config import Config, detect_board_info, load, total_memory_mb
 from .db import Database, utcnow
 from .detect import Detector, get_detector, severity_from_config
 from .frames import make_writer
@@ -612,6 +612,7 @@ class Worker:
         """Everything a reader of the CSV needs to know about this run."""
         info = self.detector.info
         camera = self.camera.info
+        board = detect_board_info()
         model_path = Path(info.detail.get("hef_path") or info.detail.get("model_path") or "")
         return {
             "accelerator": self.accelerator.as_dict(),
@@ -644,7 +645,12 @@ class Worker:
                 "target_fps": self.cfg.inference.target_fps,
             },
             "host": {
-                "board": read_device_model(),
+                "board": board.model,
+                "board_family": board.family,
+                "board_key": board.key,
+                "board_tier": board.tier,
+                "board_profiles": self.cfg.board_profile,
+                "cpu": board.cpu,
                 "ram_mb": round(total_memory_mb() or 0),
                 "os": _os_name(),
                 "kernel": platform.release(),
@@ -878,12 +884,14 @@ def main() -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    if not is_raspberry_pi():
-        log.error(
-            "Pepper Watch runs on a Raspberry Pi; this machine's device tree says %r",
-            read_device_model() or "nothing",
-        )
+    board = detect_board_info()
+    if not board.supported:
+        log.error("Pepper Watch cannot run on this machine: %s", board.reason)
         return 2
+    log.info(
+        "board: %s (%s, %s, %s MB) -> %s tier",
+        board.model, board.family, board.cpu, board.mem_mb, board.tier,
+    )
     while True:
         worker = Worker(load())
         code = worker.run()

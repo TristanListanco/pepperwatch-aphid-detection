@@ -1,9 +1,14 @@
 [Unit]
 Description=Pepper Watch wireless access point
 Documentation=man:nmcli(1)
+# Ordering only. A Wants= here would start NetworkManager at boot even on an
+# image that deliberately runs another network stack, and the AP is skipped
+# there anyway.
 After=NetworkManager.service
-Wants=NetworkManager.service
 Before=pepperwatch-web.service
+# install.sh writes this flag on boards with no Wi-Fi radio, or where
+# NetworkManager is not in charge; the unit is then skipped, not failed.
+ConditionPathExists=!/etc/pepperwatch/ap.disabled
 PartOf=pepperwatch.target
 
 [Service]

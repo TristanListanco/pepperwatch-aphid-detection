@@ -48,9 +48,17 @@ if [ "${#PSK}" -lt 8 ]; then
 fi
 
 if ! nmcli device status | grep -qE "^${IFACE}\b"; then
-  log "ERROR: interface ${IFACE} not found. Available:"
-  nmcli device status | sed 's/^/          /'
-  exit 1
+  # Not every board names its radio wlan0 (Orange Pi images often use wlan0,
+  # but USB and SDIO radios elsewhere can be wlx... or wlp...). Use the first
+  # Wi-Fi device NetworkManager knows about.
+  FOUND="$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2 == "wifi" { print $1; exit }')"
+  if [ -z "$FOUND" ]; then
+    log "ERROR: no Wi-Fi interface found. Available:"
+    nmcli device status | sed 's/^/          /'
+    exit 1
+  fi
+  log "no ${IFACE}; using Wi-Fi interface ${FOUND}"
+  IFACE="$FOUND"
 fi
 
 # 2.4 GHz by default. 5 GHz is faster but its range is much shorter, and this

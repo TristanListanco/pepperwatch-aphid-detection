@@ -95,15 +95,23 @@ def _publish_command(topic: str, payload: dict) -> bool:
 @bp.get("/health")
 def health():
     """Liveness and provenance for the whole system."""
-    from ..config import detect_board, total_memory_mb
+    from ..config import detect_board_info, total_memory_mb
 
     cfg = _cfg()
+    board = detect_board_info()
     return jsonify(
         {
             "status": "ok",
             "site": cfg.site.name,
-            "board": detect_board(),
-            "board_profile": cfg.board_profile,
+            "board": {
+                "model": board.model,
+                "family": board.family,
+                "key": board.key,
+                "cpu": board.cpu,
+                "tier": board.tier,
+                "profiles": cfg.board_profile,
+                "supported": board.supported,
+            },
             "total_memory_mb": round(total_memory_mb() or 0.0),
             "uptime_s": round(time.time() - current_app.config["PW_STARTED_AT"], 1),
             "worker": _hub().worker_state(),

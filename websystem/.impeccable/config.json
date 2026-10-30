@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "pepperwatch/web/templates/dashboard.html"
+        ],
+        "createdAt": "2026-10-29T23:56:15.638Z",
+        "reason": "Claude: the live <img> gets its src from liveview.js when the camera starts; app.css hides it until .viewport.is-active, so no broken box is ever shown"
+      }
+    ]
+  }
+}
