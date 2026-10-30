@@ -2,6 +2,7 @@
 
 import { Bus, poll, fetchJson } from './bus.js';
 import { Controls, toast } from './controls.js';
+import { DeviceList } from './devices.js';
 import { renderDonut } from './donut.js';
 import { History } from './history.js';
 import { renderKpis } from './kpis.js';
@@ -63,7 +64,13 @@ function bootDashboard() {
 
   // -- performance, power and the session --------------------------------
 
-  bus.on('telemetry', (payload) => renderTelemetry(document, payload));
+  const deviceRoot = document.querySelector('[data-device-list]');
+  const devices = deviceRoot ? new DeviceList(deviceRoot) : null;
+
+  bus.on('telemetry', (payload) => {
+    renderTelemetry(document, payload);
+    if (devices) devices.setTelemetry(payload);
+  });
   bus.on('pipeline', (payload) => {
     renderPipeline(document, payload);
     controls.setPaused(payload.paused);
@@ -73,29 +80,27 @@ function bootDashboard() {
   const sessionRoot = document.querySelector('[data-session]');
   if (sessionRoot) {
     const session = new SessionPanel(sessionRoot, { onToast: toast });
-    bus.on('session', (meta) => session.render(meta));
+    bus.on('session', (meta) => {
+      session.render(meta);
+      if (devices) devices.setSession(meta);
+    });
     bus.on('summary', () => session.loadTable());
     setInterval(() => session.tick(), 1000);
     // The retained MQTT message arrives with the SSE hello, but ask directly
     // too, so the card fills even before the stream connects.
     fetchJson('/api/session').then((data) => {
-      if (data && data.session) session.render(data.session);
+      if (data && data.session) {
+        session.render(data.session);
+        if (devices) devices.setSession(data.session);
+      }
       if (data && data.summary) renderSummary(document, data.summary);
     }).catch(() => {});
     session.loadTable();
   }
 
   bus.on('worker', (state) => {
-    const chip = document.querySelector('[data-worker-chip]');
-    if (chip) {
-      chip.classList.toggle('is-live', state.alive === true);
-      chip.classList.toggle('is-down', state.alive !== true);
-      const label = chip.querySelector('[data-worker-label]');
-      if (label) label.textContent = state.alive ? 'Detector online' : 'Detector offline';
-    }
-
-    const banner = document.querySelector('[data-worker-banner]');
-    if (banner) banner.hidden = state.alive === true;
+    if (devices) devices.setWorker(state);
+    showWorker(state);
   });
 
   bus.on('mode', (mode) => {
@@ -147,12 +152,37 @@ function bootDashboard() {
   });
 }
 
+// The status chip in the top bar, on every page.
+function showWorker(state) {
+  const chip = document.querySelector('[data-worker-chip]');
+  if (chip) {
+    chip.classList.toggle('is-live', state.alive === true);
+    chip.classList.toggle('is-down', state.alive !== true);
+    const label = chip.querySelector('[data-worker-label]');
+    if (label) label.textContent = state.alive ? 'Detector online' : 'Detector offline';
+  }
+
+  const banner = document.querySelector('[data-worker-banner]');
+  if (banner) banner.hidden = state.alive === true;
+}
+
+// Pages without the live bus still ask once, so their chip tells the truth.
+function checkWorker() {
+  fetchJson('/api/health')
+    .then((health) => {
+      if (health && health.worker) showWorker(health.worker);
+    })
+    .catch(() => {});
+}
+
 function bootArchived() {
+  checkWorker();
   const root = document.querySelector('[data-history]');
   if (root) new History(root, { pageSize: 16 }).load();
 }
 
 function bootSettings() {
+  checkWorker();
   initSettings(document).catch((error) => console.error('[pw] settings failed', error));
 }
 

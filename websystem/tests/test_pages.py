@@ -197,3 +197,17 @@ def test_javascript_modules_import_only_local_files(client) -> None:
             assert target.startswith("./") or target.startswith("../"), (
                 f"{module}.js imports {target!r}, which is not a local path"
             )
+
+
+def test_the_typeface_and_icons_ship_with_the_app(client) -> None:
+    """No CDN on a field Pi: the font is served locally and the icons are inline."""
+    font = client.get("/static/fonts/outfit-latin-var.woff2")
+    assert font.status_code == 200 and len(font.data) > 10_000
+
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+    assert "../fonts/outfit-latin-var.woff2" in css
+    assert "http" not in re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="i-leaf"' in html and 'href="#i-leaf"' in html
+    assert client.get("/static/LICENSES.md").status_code == 200

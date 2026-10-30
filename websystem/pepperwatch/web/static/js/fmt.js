@@ -13,9 +13,9 @@ export const CLASS_LABELS = {
   aphid_damage: 'Aphid Damage',
 };
 
-// Matches --healthy / --damage in app.css and render.py's COLOUR_* constants,
-// so a box drawn in the browser is the same colour as one baked into an
-// archived JPEG.
+// Matches render.py's COLOUR_* constants, so a box drawn over the live feed is
+// the same colour as one baked into an archived JPEG. Tuned to stand out on a
+// camera image; the donut uses darker ones for the light card.
 export const CLASS_COLOURS = {
   healthy: '#5cbe6e',
   aphid_damage: '#eb8228',
@@ -103,8 +103,4 @@ export function bytes(value) {
     unit += 1;
   }
   return `${scaled.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-export function trendGlyph(trend) {
-  return { rising: '↑', falling: '↓', stable: '—' }[trend] || '—';
 }

@@ -4,7 +4,15 @@
 // on an offline device, and vendoring a chart library to draw one ring would
 // add far more bytes over the Pi's radio than the ring is worth.
 
-import { CLASS_COLOURS, classLabel } from './fmt.js';
+import { classLabel } from './fmt.js';
+
+// Darker than the overlay colours in fmt.js, which are tuned for boxes drawn
+// over a camera image: on the light card these hold 4.6:1 against the surface.
+const CHART_COLOURS = {
+  healthy: '#15803d',
+  aphid_damage: '#c2410c',
+};
+const OTHER = '#646a66';
 
 const SIZE = 120;
 const RADIUS = 46;
@@ -34,7 +42,7 @@ export function renderDonut(container, distribution, legendEl) {
         <circle
           cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}"
           fill="none"
-          stroke="${CLASS_COLOURS[name] || '#9aa8a4'}"
+          stroke="${CHART_COLOURS[name] || OTHER}"
           stroke-width="${STROKE}"
           stroke-dasharray="${length.toFixed(2)} ${(CIRCUMFERENCE - length).toFixed(2)}"
           stroke-dashoffset="${(-offset).toFixed(2)}"
@@ -49,21 +57,21 @@ export function renderDonut(container, distribution, legendEl) {
     <svg class="donut" viewBox="0 0 ${SIZE} ${SIZE}" role="img"
          aria-label="Detection distribution by class">
       <g transform="rotate(-90 ${SIZE / 2} ${SIZE / 2})">
-        <circle cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}" fill="none"
-                stroke="#232d2a" stroke-width="${STROKE}"></circle>
+        <circle class="donut-track" cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}" fill="none"
+                stroke-width="${STROKE}"></circle>
         ${arcs}
       </g>
-      <text x="${SIZE / 2}" y="${SIZE / 2 - 3}" text-anchor="middle"
-            fill="#e8efec" font-size="17" font-weight="650">${total}</text>
-      <text x="${SIZE / 2}" y="${SIZE / 2 + 11}" text-anchor="middle"
-            fill="#6b7975" font-size="7.5">DETECTIONS</text>
+      <text class="donut-total" x="${SIZE / 2}" y="${SIZE / 2 - 1}" text-anchor="middle"
+            font-size="20" font-weight="450">${total}</text>
+      <text class="donut-label" x="${SIZE / 2}" y="${SIZE / 2 + 12}" text-anchor="middle"
+            font-size="7">detections</text>
     </svg>`;
 
   if (legendEl) {
     legendEl.innerHTML = entries
       .map(
         ([name, count]) => `
-        <span><i style="background:${CLASS_COLOURS[name] || '#9aa8a4'}"></i>
+        <span><i style="background:${CHART_COLOURS[name] || OTHER}"></i>
         ${classLabel(name)} <span class="muted">${count}</span></span>`,
       )
       .join('');
@@ -73,11 +81,11 @@ export function renderDonut(container, distribution, legendEl) {
 function emptyRing() {
   return `
     <svg class="donut" viewBox="0 0 ${SIZE} ${SIZE}" role="img" aria-label="No detections">
-      <circle cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}" fill="none"
-              stroke="#232d2a" stroke-width="${STROKE}"></circle>
-      <text x="${SIZE / 2}" y="${SIZE / 2 - 3}" text-anchor="middle"
-            fill="#6b7975" font-size="17" font-weight="650">0</text>
-      <text x="${SIZE / 2}" y="${SIZE / 2 + 11}" text-anchor="middle"
-            fill="#6b7975" font-size="7.5">DETECTIONS</text>
+      <circle class="donut-track" cx="${SIZE / 2}" cy="${SIZE / 2}" r="${RADIUS}" fill="none"
+              stroke-width="${STROKE}"></circle>
+      <text class="donut-label" x="${SIZE / 2}" y="${SIZE / 2 - 1}" text-anchor="middle"
+            font-size="20" font-weight="450">0</text>
+      <text class="donut-label" x="${SIZE / 2}" y="${SIZE / 2 + 12}" text-anchor="middle"
+            font-size="7">detections</text>
     </svg>`;
 }

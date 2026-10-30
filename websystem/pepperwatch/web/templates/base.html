@@ -5,46 +5,56 @@
   <!-- viewport-fit=cover so the layout reaches under a phone's notch; this is
        held in one hand while standing in a pepper row. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#e6e7e4">
   <title>{% block title %}Pepper Watch{% endblock %} · {{ site_name }}</title>
-  <!-- Local stylesheet only. There is no internet on a field Pi, so nothing
-       may come from a CDN (§3.3.2.2). -->
+  <!-- Local stylesheet and font only. There is no internet on a field Pi, so
+       nothing may come from a CDN (§3.3.2.2). -->
+  <link rel="preload" href="{{ url_for('static', filename='fonts/outfit-latin-var.woff2') }}"
+        as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>🌿</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2315803d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z'/><path d='M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12'/></svg>">
 </head>
 <body data-page="{{ page }}">
+  {% include "_partials/icons.svg" %}
+
   <div class="shell">
-    <aside class="sidebar">
-      <div class="identity">
-        <div class="avatar" aria-hidden="true">
-          {{ operator.split(' ') | map('first') | join('') | upper | truncate(2, true, '') }}
-        </div>
-        <div class="identity-text">
-          <div class="identity-name">{{ operator }}</div>
-          <div class="identity-role">{{ role }}</div>
-        </div>
+    <nav class="rail" aria-label="Sections">
+      <a class="rail-brand" href="{{ url_for('pages.dashboard') }}" title="Pepper Watch">
+        <svg class="icon" aria-hidden="true"><use href="#i-leaf"/></svg>
+        <span class="sr-only">Pepper Watch</span>
+      </a>
+
+      <div class="rail-items">
+        <a class="rail-item" href="{{ url_for('pages.dashboard') }}" title="Dashboard"
+           {% if page == 'dashboard' %}aria-current="page"{% endif %}>
+          <svg class="icon" aria-hidden="true"><use href="#i-house"/></svg>
+          <span class="rail-label">Dashboard</span>
+        </a>
+        <a class="rail-item" href="{{ url_for('pages.archived') }}" title="Archived scans"
+           {% if page == 'archived' %}aria-current="page"{% endif %}>
+          <svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg>
+          <span class="rail-label">Archived</span>
+        </a>
+        <a class="rail-item" href="{{ url_for('pages.settings') }}" title="Settings"
+           {% if page == 'settings' %}aria-current="page"{% endif %}>
+          <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>
+          <span class="rail-label">Settings</span>
+        </a>
       </div>
 
-      <nav class="nav" aria-label="Sections">
-        <div class="nav-label">Navigation</div>
-        <a href="{{ url_for('pages.dashboard') }}"
-           {% if page == 'dashboard' %}aria-current="page"{% endif %}>
-          <span aria-hidden="true">▦</span> Dashboard
-        </a>
-        <a href="{{ url_for('pages.archived') }}"
-           {% if page == 'archived' %}aria-current="page"{% endif %}>
-          <span aria-hidden="true">▤</span> Archived
-        </a>
-        <a href="{{ url_for('pages.settings') }}"
-           {% if page == 'settings' %}aria-current="page"{% endif %}>
-          <span aria-hidden="true">⚙</span> Settings
-        </a>
-      </nav>
-    </aside>
+      <div class="rail-operator" title="{{ operator }} · {{ role }}">
+        {{ operator.split(' ') | map('first') | join('') | upper | truncate(2, true, '') }}
+        <span class="sr-only">{{ operator }}, {{ role }}</span>
+      </div>
+    </nav>
 
     <main class="main">
       <header class="topbar">
-        <h1>{{ site_name }}</h1>
+        <div class="topbar-title">
+          <h1>{{ site_name }}</h1>
+          <p class="topbar-sub">{{ operator }} · {{ role }}</p>
+        </div>
         <div class="topbar-actions">
           {% block topbar %}{% endblock %}
           <span class="chip is-down" data-worker-chip>
@@ -55,7 +65,7 @@
 
       <div class="content">
         <div class="banner is-offline" data-worker-banner hidden>
-          <span class="banner-icon" aria-hidden="true">!</span>
+          <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
           <div>
             <strong>The detector is not running.</strong>
             Stored history and past scans are still available below, but there is no live

@@ -8,37 +8,13 @@
 {% endblock %}
 
 {% block content %}
+<div class="dash">
 
-{# -- KPI tiles (Figure 3.4) ------------------------------------------- #}
-<section class="kpis" aria-label="Weekly summary">
-  <div class="kpi">
-    <div class="kpi-label">Weekly Detections</div>
-    <div class="kpi-value" data-kpi-detections>0</div>
-    <div class="kpi-sub" data-kpi-delta>—</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">Avg. Confidence</div>
-    <div class="kpi-value" data-kpi-confidence>—</div>
-    <div class="kpi-sub" data-kpi-confidence-note>No data</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">Trend</div>
-    <div class="kpi-value" data-kpi-trend>—</div>
-    <div class="kpi-sub" data-kpi-events>0 scans logged</div>
-  </div>
-  <div class="kpi">
-    <div class="kpi-label">Severity</div>
-    <div class="kpi-value sev-none" data-kpi-severity>None</div>
-    <div class="kpi-sub" data-updated>—</div>
-  </div>
-</section>
-
-<div class="grid-2">
-
-  {# -- Live Inference View (Table 3.4) ------------------------------- #}
-  <section class="card" data-live>
+  {# -- Live Inference View (Table 3.4) ---------------------------------- #}
+  <section class="card dash-live" data-live>
     <div class="card-head">
-      <h2>Live Camera Feed</h2>
+      <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
+      <h2>Live camera</h2>
       <div class="card-head-actions">
         <label class="toggle" title="Draw detection boxes over the feed">
           <input type="checkbox" data-toggle-overlay checked>
@@ -56,9 +32,9 @@
         <img data-live-image alt="Live camera feed of the bell pepper canopy">
         <canvas data-live-canvas aria-hidden="true"></canvas>
         <div class="viewport-idle">
-          <div class="glyph" aria-hidden="true">◎</div>
-          <p>Click the button below to start the camera</p>
-          <p class="muted">Camera not active</p>
+          <svg class="icon" aria-hidden="true"><use href="#i-aperture"/></svg>
+          <p>Camera feed is off</p>
+          <p class="muted">Start it to see the canopy and the detection boxes</p>
         </div>
         <div class="viewport-meta">
           <span class="chip" title="Camera capture rate">
@@ -81,136 +57,141 @@
     </div>
   </section>
 
-  {# -- Performance & Power: the System Health Monitor (Table 3.4), cut
-        to the figures the results chapter reports ------------------------ #}
-  <section class="card" data-performance>
-    <div class="card-head">
-      <h2>Performance &amp; Power</h2>
-      <div class="card-head-actions">
-        <span class="chip" data-accelerator-chip title="What runs inference this session">
+  {# -- Hardware: what this session runs on ------------------------------ #}
+  <aside class="dash-devices" aria-labelledby="devices-title">
+    <h2 class="section-title" id="devices-title">Hardware</h2>
+    <ul class="device-list" data-device-list>
+      <li class="device">
+        <span class="dot is-idle" aria-hidden="true"></span>
+        <div>
+          <div class="device-name">Waiting for the detector</div>
+          <div class="device-meta">Listed when a session starts</div>
+        </div>
+      </li>
+    </ul>
+  </aside>
+
+  {# -- Figures: field health, the weekly KPIs (Figure 3.4), and the
+        System Health Monitor (Table 3.4) cut to what Chapter IV reports -- #}
+  <section class="dash-tiles tiles" aria-label="Field and system figures" data-performance>
+
+    <article class="tile is-hero is-none" data-health-tile>
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-leaf"/></svg>
+        <h3>Leaf health</h3>
+      </div>
+      <div class="tile-figure">
+        <span class="tile-value"><span data-health-share>—</span><small>%</small></span>
+        <span class="badge" data-kpi-severity>None</span>
+      </div>
+      <p class="tile-note" data-health-note>Share of leaves found healthy this week</p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-scan-search"/></svg>
+        <h3>Detections this week</h3>
+      </div>
+      <div class="tile-figure"><span class="tile-value" data-kpi-detections>0</span></div>
+      <p class="tile-note"><span data-kpi-delta>—</span> on last week</p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-target"/></svg>
+        <h3>Avg. confidence</h3>
+      </div>
+      <div class="tile-figure"><span class="tile-value" data-kpi-confidence>—</span></div>
+      <p class="tile-note" data-kpi-confidence-note>No data</p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-trending-up"/></svg>
+        <h3>Trend</h3>
+      </div>
+      <div class="tile-figure"><span class="tile-value is-word" data-kpi-trend>—</span></div>
+      <p class="tile-note"><span data-kpi-events>0 scans logged</span> · <span data-updated>—</span></p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-gauge"/></svg>
+        <h3>Inference</h3>
+        <span class="chip tile-corner" data-accelerator-chip title="What runs inference this session">
           <span class="dot"></span><span data-accelerator-label>—</span>
         </span>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="metrics">
-        <div>
-          <div class="metric-label">Inference</div>
-          <div class="metric-value" data-pipeline-inference-rate>—</div>
-          <div class="meter has-target" data-pipeline-inference-meter
-               title="Scaled to twice the target; the tick marks the target">
-            <i style="width:0"></i><b aria-hidden="true"></b>
-          </div>
-          <div class="metric-note" data-pipeline-target>—</div>
-        </div>
-        <div>
-          <div class="metric-label">Camera</div>
-          <div class="metric-value" data-pipeline-preview-rate>—</div>
-          <div class="metric-note"><span data-pipeline-dropped>0</span> frames not inferred</div>
-        </div>
-        <div>
-          <div class="metric-label">Latency per frame</div>
-          <div class="metric-value" data-pipeline-latency>—</div>
-          <div class="metric-note">p95 <span data-session-p95>—</span> this session</div>
-        </div>
-        <div>
-          <div class="metric-label">Power</div>
-          <div class="metric-value" data-health-power>—</div>
-          <div class="metric-note" data-health-power-source>—</div>
-        </div>
-        <div>
-          <div class="metric-label">Energy this session</div>
-          <div class="metric-value" data-session-energy>—</div>
-          <div class="metric-note" data-session-efficiency>—</div>
-        </div>
-        <div>
-          <div class="metric-label">CPU</div>
-          <div class="metric-value" data-health-temp>—</div>
-          <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
-          <div class="metric-note"><span data-health-cpu>—</span> load</div>
-        </div>
-        <div data-health-hailo hidden>
-          <div class="metric-label">AI HAT+</div>
-          <div class="metric-value" data-health-hailo-temp>—</div>
-          <div class="meter" data-health-hailo-temp-meter><i style="width:0"></i></div>
-        </div>
+      <div class="tile-figure">
+        <span class="tile-value"><span data-pipeline-inference-rate>—</span><small>fps</small></span>
       </div>
+      <div class="meter has-target" data-pipeline-inference-meter
+           title="Scaled to twice the target; the tick marks the target">
+        <i style="width:0"></i><b aria-hidden="true"></b>
+      </div>
+      <p class="tile-note"><span data-pipeline-target>—</span></p>
+      <p class="tile-note">camera <span data-pipeline-preview-rate>—</span> fps ·
+        <span data-pipeline-dropped>0</span> not inferred</p>
+    </article>
 
-      <div class="banner is-caution" data-health-backoff hidden></div>
-      <div class="banner is-offline" data-health-throttled hidden>
-        <span class="banner-icon" aria-hidden="true">!</span>
-        <div>
-          <strong>The processor is throttled.</strong>
-          <span data-health-throttle-detail></span>
-          Frame rates now are lower than the hardware can sustain.
-        </div>
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-timer"/></svg>
+        <h3>Latency per frame</h3>
       </div>
-    </div>
+      <div class="tile-figure">
+        <span class="tile-value"><span data-pipeline-latency>—</span><small>ms</small></span>
+      </div>
+      <p class="tile-note">p95 <span data-session-p95>—</span> this session</p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-zap"/></svg>
+        <h3>Power</h3>
+      </div>
+      <div class="tile-figure">
+        <span class="tile-value"><span data-health-power>—</span><small>W</small></span>
+      </div>
+      <p class="tile-note" data-health-power-source>—</p>
+      <p class="tile-note"><span data-session-energy>—</span> · <span data-session-efficiency>—</span></p>
+    </article>
+
+    <article class="tile">
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-thermometer"/></svg>
+        <h3>Temperature</h3>
+      </div>
+      <div class="tile-figure">
+        <span class="tile-value"><span data-health-temp>—</span><small>°C</small></span>
+      </div>
+      <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
+      <p class="tile-note">CPU, <span data-health-cpu>—</span> load</p>
+      <p class="tile-note" data-health-hailo hidden>AI HAT+ <span data-health-hailo-temp>—</span>°C</p>
+    </article>
   </section>
-</div>
 
-{# -- Session: what this run is recorded on, and its CSV files ---------- #}
-<section class="card" data-session>
-  <div class="card-head">
-    <h2>Session</h2>
-    <span class="card-sub mono" data-session-id>—</span>
-  </div>
-  <div class="card-body">
-    <dl class="facts">
-      <div><dt>Accelerator</dt><dd data-session-accelerator>—</dd></div>
-      <div><dt>Camera</dt><dd data-session-camera>—</dd></div>
-      <div><dt>Model</dt><dd data-session-model>—</dd></div>
-      <div><dt>Running for</dt><dd data-session-duration>—</dd></div>
-    </dl>
-    <p class="note" data-session-reason hidden></p>
-
-    <div class="downloads" data-session-downloads>
-      <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">Inference CSV</a>
-      <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">Power &amp; system CSV</a>
-      <a class="btn is-quiet" data-session-file="summary.json" href="#" download aria-disabled="true">Summary</a>
-      <a class="btn is-quiet" href="{{ url_for('sessions.sessions_csv') }}" download>All sessions CSV</a>
-    </div>
-
-    <form class="session-new" data-session-new>
-      <label class="sr-only" for="session-label">Label for the new session</label>
-      <input id="session-label" name="label" maxlength="80" autocomplete="off"
-             placeholder="Label, e.g. hailo-row3-noon">
-      <button class="btn" type="submit">New session</button>
-    </form>
-
-    <div class="table-wrap">
-      <table class="table" data-session-table>
-        <caption class="sr-only">Recorded sessions</caption>
-        <thead>
-          <tr>
-            <th scope="col">Started</th>
-            <th scope="col">Accelerator</th>
-            <th scope="col" class="num">Length</th>
-            <th scope="col" class="num">Inference fps</th>
-            <th scope="col" class="num">p95 ms</th>
-            <th scope="col" class="num">Power W</th>
-            <th scope="col" class="num">Energy Wh</th>
-            <th scope="col"><span class="sr-only">Files</span></th>
-          </tr>
-        </thead>
-        <tbody data-session-rows>
-          <tr><td colspan="8" class="empty">No sessions recorded yet</td></tr>
-        </tbody>
-      </table>
+  <div class="dash-alerts">
+    <div class="banner is-caution" data-health-backoff hidden></div>
+    <div class="banner is-offline" data-health-throttled hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
+      <div>
+        <strong>The processor is throttled.</strong>
+        <span data-health-throttle-detail></span>
+        Frame rates now are lower than the hardware can sustain.
+      </div>
     </div>
   </div>
-</section>
 
-<div class="grid-2">
-  {# -- Actionable Output Panel (Table 3.4) --------------------------- #}
-  <section class="card">
+  {# -- Actionable Output Panel (Table 3.4) ----------------------------- #}
+  <section class="card dash-advice">
     <div class="card-head">
-      <h2>Actionable Output</h2>
-      <span class="card-sub">What to do about it</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-sprout"/></svg>
+      <h2>What to do</h2>
     </div>
     <div class="card-body">
       <div class="banner is-caution" data-advice-draft {% if advisory_validated %}hidden{% endif %}>
-        <span class="banner-icon" aria-hidden="true">!</span>
+        <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
         <div>
           <strong>Draft guidance.</strong>
           This advice has not yet been reviewed by an agriculturist. Confirm any
@@ -227,11 +208,12 @@
     </div>
   </section>
 
-  {# -- Detection distribution donut (Figure 3.4) --------------------- #}
-  <section class="card">
+  {# -- Detection distribution donut (Figure 3.4) ----------------------- #}
+  <section class="card dash-donut">
     <div class="card-head">
+      <svg class="icon" aria-hidden="true"><use href="#i-chart-pie"/></svg>
       <h2>Detection Distribution</h2>
-      <span class="card-sub">By class, last 7 days</span>
+      <span class="card-sub">Last 7 days</span>
     </div>
     <div class="card-body">
       <div class="donut-wrap">
@@ -240,24 +222,77 @@
       </div>
     </div>
   </section>
-</div>
 
-{# -- Historical Detection Log (Table 3.4) ----------------------------- #}
-<section class="card" data-history data-archived="false">
-  <div class="card-head">
-    <h2>Historical Detection Log</h2>
-    <span class="card-sub">Recent scans</span>
-    <div class="card-head-actions">
-      <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
-      <a class="btn is-quiet" href="{{ url_for('pages.archived') }}">View all →</a>
+  {# -- Session: what this run is recorded on, and its CSV files -------- #}
+  <section class="card dash-session" data-session>
+    <div class="card-head">
+      <svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>
+      <h2>Session</h2>
+      <span class="card-sub mono" data-session-id>—</span>
     </div>
-  </div>
-  <div class="card-body">
-    {% include "_partials/filters.html" %}
-    <div class="gallery" data-gallery style="margin-top:14px"></div>
-    <div class="pager" data-pager></div>
-  </div>
-</section>
+    <div class="card-body">
+      <dl class="facts">
+        <div><dt>Model</dt><dd data-session-model>—</dd></div>
+        <div><dt>Running for</dt><dd data-session-duration>—</dd></div>
+      </dl>
+
+      <div class="downloads" data-session-downloads>
+        <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Inference CSV</a>
+        <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Power &amp; system CSV</a>
+        <a class="btn is-quiet" data-session-file="summary.json" href="#" download aria-disabled="true">Summary</a>
+        <a class="btn is-quiet" href="{{ url_for('sessions.sessions_csv') }}" download>All sessions CSV</a>
+      </div>
+
+      <form class="session-new" data-session-new>
+        <label class="sr-only" for="session-label">Label for the new session</label>
+        <input id="session-label" name="label" maxlength="80" autocomplete="off"
+               placeholder="Label, e.g. hailo-row3-noon">
+        <button class="btn" type="submit">
+          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New session</button>
+      </form>
+
+      <div class="table-wrap">
+        <table class="table" data-session-table>
+          <caption class="sr-only">Recorded sessions</caption>
+          <thead>
+            <tr>
+              <th scope="col">Started</th>
+              <th scope="col">Accelerator</th>
+              <th scope="col" class="num">Length</th>
+              <th scope="col" class="num">Inference fps</th>
+              <th scope="col" class="num">p95 ms</th>
+              <th scope="col" class="num">Power W</th>
+              <th scope="col" class="num">Energy Wh</th>
+              <th scope="col"><span class="sr-only">Files</span></th>
+            </tr>
+          </thead>
+          <tbody data-session-rows>
+            <tr><td colspan="8" class="empty">No sessions recorded yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  {# -- Historical Detection Log (Table 3.4) ----------------------------- #}
+  <section class="card dash-history" data-history data-archived="false">
+    <div class="card-head">
+      <svg class="icon" aria-hidden="true"><use href="#i-image"/></svg>
+      <h2>Historical Detection Log</h2>
+      <div class="card-head-actions">
+        <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
+        <a class="btn is-quiet" href="{{ url_for('pages.archived') }}">View all</a>
+      </div>
+    </div>
+    <div class="card-body">
+      {% include "_partials/filters.html" %}
+      <div class="gallery" data-gallery></div>
+      <div class="pager" data-pager></div>
+    </div>
+  </section>
+</div>
 
 {% include "_partials/scan_dialog.html" %}
 {% endblock %}

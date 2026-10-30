@@ -853,7 +853,7 @@ Session card shows both, and `session.json` records the model's SHA-256.
 
 | Page | Contents |
 |---|---|
-| `/` Dashboard | **KPI tiles** (weekly detections, average confidence, trend, severity) · **Live Inference View** (frame + box overlay, Start Camera for MJPEG, snapshot, pause) · **Performance & Power** (inference fps against the 17 fps target, camera fps, latency and session p95, power and its source, session energy and fps per watt, CPU and Hailo temperatures, throttling and thermal back-off) · **Session** (accelerator, camera, model, run time, CSV downloads, *New session*, table of past sessions) · **Actionable Output** (advice in English/Cebuano) · **Detection Distribution** donut · **Historical Detection Log** (searchable gallery, detections CSV) |
+| `/` Dashboard | **Live camera** (frame + box overlay, Start Camera for MJPEG, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity), detections this week, average confidence, trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **What to do** (advice in English/Cebuano) · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
 | `/archived` | Scans hidden from the main gallery |
 | `/settings` | Confidence/IoU sliders, language, control PIN |
 

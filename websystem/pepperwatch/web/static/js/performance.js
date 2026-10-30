@@ -25,18 +25,20 @@ const POWER_SOURCES = {
 export function renderTelemetry(root, telemetry) {
   if (!telemetry) return;
 
-  setMeter(root, 'health-temp', temp(telemetry.cpu_temp_c), telemetry.cpu_temp_c, TEMP_WARN, TEMP_DANGER, 100);
+  // Figures go in as bare numbers: each tile renders its unit beside the
+  // value in a lighter weight.
+  setMeter(root, 'health-temp', num(telemetry.cpu_temp_c, 1), telemetry.cpu_temp_c, TEMP_WARN, TEMP_DANGER, 100);
   setText(root, 'health-cpu', telemetry.cpu_percent == null ? '—' : `${num(telemetry.cpu_percent, 0)}%`);
 
   const hailo = root.querySelector('[data-health-hailo]');
   if (hailo) {
     hailo.hidden = telemetry.hailo_temp_c == null;
-    setMeter(root, 'health-hailo-temp', temp(telemetry.hailo_temp_c), telemetry.hailo_temp_c,
+    setMeter(root, 'health-hailo-temp', num(telemetry.hailo_temp_c, 1), telemetry.hailo_temp_c,
       HAILO_WARN, HAILO_DANGER, 100);
   }
 
   const watts = telemetry.best_power_w ?? telemetry.power_w;
-  setText(root, 'health-power', watts == null ? '—' : `${num(watts, 2)} W`);
+  setText(root, 'health-power', num(watts, 2));
   setText(root, 'health-power-source', POWER_SOURCES[telemetry.power_source] || 'no power sensor');
 
   const backoff = root.querySelector('[data-health-backoff]');
@@ -65,9 +67,9 @@ export function renderPipeline(root, pipeline) {
   setText(root, 'pipeline-preview-fps', `${num(pipeline.preview_fps, 1)} fps`);
   setText(root, 'pipeline-inference-fps', `${num(pipeline.inference_fps, 1)} fps`);
 
-  setText(root, 'pipeline-inference-rate', `${num(pipeline.inference_fps, 1)} fps`);
-  setText(root, 'pipeline-preview-rate', `${num(pipeline.preview_fps, 1)} fps`);
-  setText(root, 'pipeline-latency', pipeline.inference_ms == null ? '—' : `${num(pipeline.inference_ms, 1)} ms`);
+  setText(root, 'pipeline-inference-rate', num(pipeline.inference_fps, 1));
+  setText(root, 'pipeline-preview-rate', num(pipeline.preview_fps, 1));
+  setText(root, 'pipeline-latency', num(pipeline.inference_ms, 1));
   setText(root, 'pipeline-dropped', String(pipeline.dropped ?? 0));
 
   const target = pipeline.target_fps;
