@@ -939,8 +939,8 @@ Session card shows both, and `session.json` records the model's SHA-256.
 | `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity), detections this week, average confidence, trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
 | `/settings` | **Display** for this device (live video, detection boxes, mirror camera) · confidence/IoU sliders · language · control PIN · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
-If a control PIN is set, Capture, Pause/Resume, the threshold sliders and
-Clear all detections ask for it.
+If a control PIN is set, Capture, Pause/Resume, New session and Clear all
+detections ask for it. The threshold sliders don't.
 
 ---
 
@@ -964,7 +964,7 @@ All responses are JSON unless noted. 🔒 = needs the control PIN (header
 | POST 🔒 | `/api/capture` | Request a high-res snapshot → `202` |
 | POST 🔒 | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST 🔒 | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
-| GET / PATCH 🔒 | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99) |
+| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99) |
 | POST 🔒 | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST 🔒 | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean) |
@@ -995,7 +995,7 @@ reachable by anyone within Wi-Fi range or on the same wired network.
 | Layer | Protection |
 |---|---|
 | Wi-Fi | WPA2 with a random 12-character password, generated at install |
-| Controls | Snapshot, pause, thresholds, new sessions, data clearing and REST ingest need the **control PIN**, generated at install and printed at the end. Five wrong guesses lock that address out for five minutes; the comparison is constant-time |
+| Controls | Snapshot, pause, new sessions, data clearing and REST ingest need the **control PIN**, generated at install and printed at the end. Five wrong guesses lock that address out for five minutes (a missing PIN is not a guess); the comparison is constant-time. The detection thresholds are deliberately left open, so anyone on the network can change them |
 | Requests | Bodies over 1 MB are refused; ingested class names must be the known ones (they are drawn into the charts); file downloads are confined to their folders by path, not string prefix |
 | Data exports | CSV cells that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) are written as plain text |
 | Broker | Mosquitto listens on `127.0.0.1` only; nothing on the network can publish commands |

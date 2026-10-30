@@ -337,8 +337,8 @@ cat <<EOF
     On the wired network: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8000/
 
     Control PIN:    ${CONTROL_PIN:-none}
-    Enter it once in Settings on each phone; snapshot, pause, new sessions,
-    thresholds and clearing data need it.
+    Enter it once in Settings on each phone; snapshot, pause, new sessions
+    and clearing data need it. Thresholds can be changed without it.
 
     Session CSV files (inference, power, fps) are written to
     $DATA_DIR/sessions and can be downloaded from the dashboard.

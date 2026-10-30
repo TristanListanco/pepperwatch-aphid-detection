@@ -96,10 +96,14 @@ def require_pin(view):
         supplied = request.headers.get("X-Pepper-Pin") or (
             body.get("pin", "") if isinstance(body, dict) else ""
         )
+        if not supplied:
+            # Not a guess: a phone that has no PIN yet. Not counted, so it
+            # cannot lock its owner out before they have typed one.
+            return jsonify({"error": "this needs the control PIN: enter it in Settings"}), 403
         if not hmac.compare_digest(str(supplied).encode(), expected.encode()):
             with _pin_lock:
                 failures.setdefault(client, []).append(now)
-            return jsonify({"error": "wrong or missing control PIN: enter it in Settings"}), 403
+            return jsonify({"error": "wrong control PIN: check it in Settings"}), 403
         return view(*args, **kwargs)
 
     return wrapper
@@ -370,7 +374,6 @@ def get_config():
 
 
 @bp.patch("/config")
-@require_pin
 def patch_config():
     """Adjust detection thresholds live.
 

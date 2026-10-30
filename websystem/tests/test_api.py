@@ -354,17 +354,17 @@ def test_mutating_endpoints_require_the_pin_when_one_is_set(cfg) -> None:
     app.config.update(TESTING=True)
     client = app.test_client()
 
-    assert client.patch("/api/config", json={"conf_threshold": 0.3}).status_code == 403
+    assert client.post("/api/inference/pause").status_code == 403
     assert client.post("/api/detections", json={"frame_seq": 1, "boxes": []}).status_code == 403
+    # Thresholds are a tuning knob, deliberately free to change.
+    assert client.patch("/api/config", json={"conf_threshold": 0.3}).status_code == 200
 
     # Reads stay open: a farmer should not need a PIN to look at their crop.
     assert client.get("/api/events").status_code == 200
     assert client.get("/api/stats/weekly").status_code == 200
 
-    ok = client.patch(
-        "/api/config", json={"conf_threshold": 0.3}, headers={"X-Pepper-Pin": "4242"}
-    )
-    assert ok.status_code == 200
+    assert client.post("/api/detections", json={"frame_seq": 1, "boxes": []},
+                       headers={"X-Pepper-Pin": "4242"}).status_code == 201
     assert client.get("/api/config").get_json()["web"]["pin_required"] is True
 
 
@@ -419,6 +419,14 @@ def test_wrong_pins_lock_the_client_out(app, client) -> None:
         assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "000000"}).status_code == 403
     locked = client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"})
     assert locked.status_code == 429
+
+
+def test_a_missing_pin_never_locks_the_owner_out(app, client) -> None:
+    """Pressing buttons before typing the PIN is a mistake, not a guess."""
+    _set_pin(app, "482913")
+    for _ in range(10):
+        assert client.post("/api/inference/pause").status_code == 403
+    assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"}).status_code == 503
 
 
 def test_the_right_pin_passes_and_a_non_json_body_does_not_crash(app, client) -> None:
