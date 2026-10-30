@@ -9,7 +9,6 @@ dashboard" without telling anybody a URL.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -51,17 +50,6 @@ def test_windows_ncsi_probe_omits_the_expected_token(client) -> None:
 @pytest.mark.parametrize("route", ["/canonical.html", "/success.txt", "/nm-check.txt"])
 def test_firefox_and_gnome_probes_redirect(client, route) -> None:
     assert client.get(route).status_code == 302
-
-
-def test_rfc8910_endpoint_uses_the_mandated_media_type(client) -> None:
-    """RFC 8910 clients check the Content-Type, so it is load-bearing here."""
-    response = client.get("/api/captive-portal")
-    assert response.status_code == 200
-    assert response.mimetype == "application/captive+json"
-
-    body = json.loads(response.get_data(as_text=True))
-    assert body["captive"] is True
-    assert body["user-portal-url"].startswith("http://192.168.4.1")
 
 
 def test_portal_landing_reaches_the_dashboard(client) -> None:

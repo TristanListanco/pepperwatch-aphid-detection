@@ -451,10 +451,16 @@ Detection events are never pruned automatically; they're the research record.
   `PepperWatch`, WPA2, 2.4 GHz channel 6, address `192.168.4.1/24`, DHCP range
   `.50–.150`. 2.4 GHz is chosen for range in an open field.
 - `dnsmasq-shared.d/00-pepperwatch-captive.conf` resolves **every** hostname to
-  the Pi and advertises the dashboard via DHCP option 114 (RFC 8910).
-- `web/routes_portal.py` answers the connectivity checks of Android, iOS/macOS
-  and Windows (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, …), so
-  phones show the "sign in to network" prompt that opens the dashboard.
+  the Pi.
+- The dashboard listens on port **80** as well as 8000, because that is where
+  every device sends its "do I have internet?" check when it joins.
+- `web/routes_portal.py` answers those checks for Android, iOS/macOS, Windows,
+  Firefox and GNOME (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, …)
+  with something other than the expected reply. Phones then show the
+  "Sign in to network" sheet and laptops open the browser, straight onto the
+  dashboard.
+- No DHCP option 114 (RFC 8910): phones only accept it over HTTPS, and an
+  offline Pi has no certificate they would trust.
 - Any unknown page redirects to the dashboard; unknown `/api/` paths still
   return 404.
 
@@ -1146,7 +1152,7 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | Worker exits "no camera matching …" | It lists what it found. Check the ribbon cable or USB, `rpicam-hello --list-cameras`, `ls /dev/video*`, and `[camera] kind` / `device` |
 | Wrong camera used with two attached | `auto` prefers CSI. Set `[camera] kind = "usb"` (and `device`) in `local.toml` |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
-| Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones ignore captive portals while mobile data is on |
+| Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |
 | `PepperWatch` network not visible | `systemctl status pepperwatch-ap`; check `/etc/pepperwatch/ap.psk` exists (≥ 8 chars); another saved Wi-Fi network may be holding `wlan0` |
 | Lost SSH when the system started | The AP took over `wlan0`. Use Ethernet, or join `PepperWatch` and SSH to `192.168.4.1` |
 | fps drops after a while | Check the Performance & Power card for thermal back-off or throttling. Improve cooling or ventilation |

@@ -23,7 +23,6 @@ GET_ROUTES = [
     "/api/recommendations/high",
     "/api/config",
     "/api/export.csv",
-    "/api/captive-portal",
     "/stream/status",
 ]
 

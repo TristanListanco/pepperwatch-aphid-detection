@@ -242,6 +242,17 @@ fi
 
 # -- services --------------------------------------------------------------
 
+# The dashboard also listens on port 80 for the captive portal. If another web
+# server already holds it, the dashboard would crash-loop on the bind, so stop
+# here instead. Our own gunicorn holding it (a re-run) is fine.
+port80="$(ss -ltnpH 'sport = :80' 2>/dev/null | grep -v gunicorn || true)"
+if [ -n "$port80" ]; then
+  note "ERROR: port 80 is already in use; the captive portal needs it:"
+  note "  $port80"
+  note "Stop that service (for example: sudo systemctl disable --now nginx), then re-run."
+  exit 1
+fi
+
 log "Installing services"
 install -m 644 "$APP_DIR/deploy/mosquitto/pepperwatch.conf" /etc/mosquitto/conf.d/
 install -d /etc/NetworkManager/dnsmasq-shared.d

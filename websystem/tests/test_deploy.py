@@ -184,10 +184,32 @@ def test_captive_dns_resolves_everything_to_the_device() -> None:
     assert "address=/#/192.168.4.1" in conf
 
 
-def test_captive_config_advertises_rfc8910() -> None:
-    """DHCP option 114 is how current iOS and Android find the portal."""
+def test_captive_config_has_no_plain_http_rfc8910_option() -> None:
+    """Phones only accept option 114 over HTTPS; an http:// one does nothing."""
     conf = (DEPLOY / "network" / "dnsmasq-shared.d" / "00-pepperwatch-captive.conf").read_text()
-    assert "dhcp-option=114" in conf
+    assert not any(line.startswith("dhcp-option=114") for line in conf.splitlines())
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "pepperwatch-web.service",
+        "mem-512m/pepperwatch-web.service.d/10-memory.conf",
+        "mem-1g/pepperwatch-web.service.d/10-memory.conf",
+    ],
+)
+def test_web_listens_on_port_80_for_the_captive_portal(path) -> None:
+    """Every OS probes for a portal on port 80; on 8000 alone none ever opens.
+    The memory drop-ins replace ExecStart, so each must keep the bind."""
+    text = (SYSTEMD / path).read_text()
+    assert "--bind 0.0.0.0:80 " in text and "--bind 0.0.0.0:8000" in text
+
+
+def test_web_may_bind_port_80_without_running_as_root() -> None:
+    service = unit("pepperwatch-web.service")["Service"]
+    assert service["User"] == "pepperwatch"
+    assert service["AmbientCapabilities"] == "CAP_NET_BIND_SERVICE"
+    assert service["CapabilityBoundingSet"] == "CAP_NET_BIND_SERVICE"
 
 
 def test_captive_config_targets_the_networkmanager_dnsmasq() -> None:

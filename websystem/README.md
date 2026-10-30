@@ -197,10 +197,11 @@ Then join the `PepperWatch` network. The dashboard should open by itself.
 
 The access point uses NetworkManager (`ipv4.method shared`), **not** the
 hostapd + dnsmasq recipe in most Raspberry Pi tutorials — those predate
-Bookworm and fight NetworkManager for the interface. Captive-portal behaviour
-comes from two mechanisms: RFC 8910 DHCP option 114 for current devices, and
-OS probe responses (`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`) for
-everything else.
+Bookworm and fight NetworkManager for the interface. The captive portal comes
+from wildcard DNS plus the dashboard listening on port 80, where every device
+sends its connectivity check; the answers in `routes_portal.py`
+(`/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, …) make phones show the
+"Sign in to network" sheet and laptops open the browser.
 
 ### Before a field trial
 
