@@ -57,6 +57,22 @@ def test_worker_status_is_rendered_truthfully_on_first_paint(app, client, path) 
     assert re.search(r"data-worker-banner\s+hidden", html)
 
 
+@pytest.mark.parametrize("path", ["/", "/settings"])
+def test_theme_is_set_before_the_stylesheet(client, path) -> None:
+    """theme.js must run before the CSS paints, or a dark phone flashes light."""
+    html = client.get(path).get_data(as_text=True)
+    script = html.index("js/theme.js")
+    assert script < html.index("css/app.css")
+    assert 'type="module"' not in html[html.rfind("<script", 0, script):script]
+
+
+def test_settings_offers_an_appearance_choice(client) -> None:
+    html = client.get("/settings").get_data(as_text=True)
+    assert "data-setting-theme" in html
+    for value in ("system", "light", "dark"):
+        assert f'value="{value}"' in html
+
+
 def test_dashboard_contains_every_table_3_4_component(client) -> None:
     """Table 3.4 names five interface components. All five must be present."""
     html = client.get("/").get_data(as_text=True)

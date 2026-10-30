@@ -40,6 +40,12 @@ export async function initSettings(root) {
 
 // Saved in this browser and read by the dashboard when it next opens.
 function bindDisplayPrefs(root) {
+  const themeSelect = root.querySelector('[data-setting-theme]');
+  if (themeSelect && window.pwTheme) {
+    themeSelect.value = window.pwTheme.get();
+    themeSelect.addEventListener('change', () => window.pwTheme.set(themeSelect.value));
+  }
+
   const prefs = displayPrefs();
   root.querySelectorAll('[data-pref]').forEach((input) => {
     input.checked = prefs[input.dataset.pref];

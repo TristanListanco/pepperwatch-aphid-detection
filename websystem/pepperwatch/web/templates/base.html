@@ -5,9 +5,11 @@
   <!-- viewport-fit=cover so the layout reaches under a phone's notch; this is
        held in one hand while standing in a pepper row. -->
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#e6e7e4">
   <title>{% block title %}Pepper Watch{% endblock %} · {{ site_name }}</title>
+  <!-- Blocking on purpose and tiny: sets light or dark before the first paint. -->
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <!-- Local stylesheet and font only. There is no internet on a field Pi, so
        nothing may come from a CDN (§3.3.2.2). -->
   <link rel="preload" href="{{ url_for('static', filename='fonts/outfit-latin-var.woff2') }}"

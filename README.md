@@ -933,7 +933,7 @@ Session card shows both, and `session.json` records the model's SHA-256.
 | Page | Contents |
 |---|---|
 | `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; detections CSV) |
-| `/settings` | **Display** for this device (live video, mirror camera; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
+| `/settings` | **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
 There's no login: anyone on the PepperWatch Wi-Fi can use every control.
 

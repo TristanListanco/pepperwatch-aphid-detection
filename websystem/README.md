@@ -240,7 +240,7 @@ listed here so they can be defended or the manuscript amended.
 | Severity bands | Defined in `[severity]` config | Ch. III never defines them, but Figure 3.4 draws a Severity tile. Rises on cluster count **or** affected area, whichever is worse. |
 | §3.3: boxes rendered "onto a localized physical display" | Any phone on the WAP | §3.2.2 mandates headless and §3.3.2.2 rejects native GUIs; a TFT plus a kiosk browser would burn exactly the resources those sections claim to save. |
 | Figure 3.6: MongoDB | SQLite | Every prose section says SQLite. The figure is stale. |
-| Figure 3.4: dark surface | Light surface, after Nija Design's "Smart Farm Monitoring Dashboard" | A light surface with dark ink stays readable in direct sun, where a dark one washes out; every text pairing is at least 4.5:1. Layout, panels and data are unchanged. |
+| Figure 3.4: dark surface | Light by default, after Nija Design's "Smart Farm Monitoring Dashboard"; dark follows the phone's setting or Settings > Appearance | A light surface with dark ink stays readable in direct sun, where a dark one washes out; dark is for dusk and indoors. Every text pairing is at least 4.5:1 in both. Layout, panels and data are unchanged. |
 | Table 3.4: Actionable Output Panel | Removed from the dashboard | Cut on request. The advice text still exists (`config/recommendations.json`, `/api/recommendations`) and the Leaf health tile shows its headline. |
 | Figure 3.4: "Start Camera" button and Live toggle | Live by default; switches in Settings | The feed opens on page load; Live video, detection boxes and mirroring are per-device settings. |
 | Figure 3.4: Detection Distribution donut | Removed | It repeated the Leaf health share and the Damaged leaves count on the tiles above it. |
