@@ -43,6 +43,20 @@ def test_page_declares_a_mobile_viewport(client, path) -> None:
     assert "width=device-width" in html
 
 
+@pytest.mark.parametrize("path", ["/", "/settings"])
+def test_worker_status_is_rendered_truthfully_on_first_paint(app, client, path) -> None:
+    """No red "offline" flash on every load: the chip and banner start from the
+    hub's own view of the worker."""
+    html = client.get(path).get_data(as_text=True)
+    assert 'chip is-down" data-worker-chip' in html
+    assert re.search(r"data-worker-banner\s*>", html)
+
+    app.config["PW_HUB"]._on_message("pepperwatch/status/worker", {"value": "online"})
+    html = client.get(path).get_data(as_text=True)
+    assert 'chip is-live" data-worker-chip' in html and "Detector online" in html
+    assert re.search(r"data-worker-banner\s+hidden", html)
+
+
 def test_dashboard_contains_every_table_3_4_component(client) -> None:
     """Table 3.4 names five interface components. All five must be present."""
     html = client.get("/").get_data(as_text=True)
@@ -65,7 +79,7 @@ def test_dashboard_contains_the_figure_3_4_elements(client) -> None:
     """Figure 3.4 draws more than Table 3.4 lists."""
     html = client.get("/").get_data(as_text=True)
     for hook in (
-        "data-kpi-detections",   # Weekly Detections tile
+        "data-kpi-damaged",      # Damaged leaves tile
         "data-kpi-confidence",   # Avg. Confidence tile
         "data-kpi-trend",        # Trend tile
         "data-kpi-severity",     # Severity tile

@@ -129,12 +129,16 @@ class Advisory:
         trend = stats.get("trend", "stable")
         severity = stats.get("severity", "none")
         delta = stats.get("delta_pct", 0.0)
+        # None: aphid damage this window and none in the one before, so no percentage.
+        if delta is None:
+            trend = "new"
 
         if locale == "ceb":
             trend_text = {
-                "rising": f"Nagsaka ang detection og {abs(delta):.0f}% kompara sa niaging {days} ka adlaw.",
-                "falling": f"Nagkunhod ang detection og {abs(delta):.0f}% kompara sa niaging {days} ka adlaw.",
-                "stable": "Wala kaayo nagbag-o ang detection sulod sa gitan-aw nga panahon.",
+                "new": f"Walay danyos sa aphid nga natala sulod sa niaging {days} ka adlaw.",
+                "rising": f"Nagsaka ang danyos sa aphid og {abs(delta or 0):.0f}% kompara sa niaging {days} ka adlaw.",
+                "falling": f"Nagkunhod ang danyos sa aphid og {abs(delta or 0):.0f}% kompara sa niaging {days} ka adlaw.",
+                "stable": "Wala kaayo nagbag-o ang danyos sa aphid sulod sa gitan-aw nga panahon.",
             }[trend]
             severity_text = {
                 "none": "Maayo ang kondisyon. Padayon sa naandang pagbantay.",
@@ -148,9 +152,10 @@ class Advisory:
             )
 
         trend_text = {
-            "rising": f"Detections are up {abs(delta):.0f}% on the previous {days} days.",
-            "falling": f"Detections are down {abs(delta):.0f}% on the previous {days} days.",
-            "stable": "Detection frequency has remained stable over the observed period.",
+            "new": f"No aphid damage was recorded in the previous {days} days.",
+            "rising": f"Aphid damage is up {abs(delta or 0):.0f}% on the previous {days} days.",
+            "falling": f"Aphid damage is down {abs(delta or 0):.0f}% on the previous {days} days.",
+            "stable": "Aphid damage has held steady over the observed period.",
         }[trend]
         severity_text = {
             "none": "Current conditions appear favourable. Maintain regular monitoring practices.",

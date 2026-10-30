@@ -182,7 +182,10 @@ export class History {
 
       const image = this.dialog.querySelector('[data-dialog-image]');
       if (image) {
-        image.src = event.image_path ? `/media/${event.image_path}` : '';
+        // No saved image: hide it rather than show a broken-image box.
+        image.hidden = !event.image_path;
+        if (event.image_path) image.src = `/media/${event.image_path}`;
+        else image.removeAttribute('src');
         image.alt = `Scan from ${dateTime(event.captured_at)}`;
       }
 

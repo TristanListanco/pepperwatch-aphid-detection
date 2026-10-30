@@ -47,20 +47,25 @@
         </div>
         <div class="topbar-actions">
           {% block topbar %}{% endblock %}
-          <span class="chip is-down" data-worker-chip>
-            <span class="dot"></span><span data-worker-label>Detector offline</span>
+          <span class="chip {{ 'is-live' if worker_alive else 'is-down' }}" data-worker-chip>
+            <span class="dot"></span><span data-worker-label>Detector {{ 'online' if worker_alive else 'offline' }}</span>
           </span>
         </div>
       </header>
 
       <div class="content">
-        <div class="banner is-offline" data-worker-banner hidden>
+        <div class="banner is-offline" data-worker-banner {% if worker_alive %}hidden{% endif %}>
           <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
           <div>
             <strong>The detector is not running.</strong>
-            Stored history and past scans are still available below, but there is no live
-            feed and no new detections are being recorded.
-            Start it with <code class="mono">systemctl start pepperwatch-worker</code>.
+            Nothing new is being recorded; the camera and live figures show their last
+            readings, and saved scans are still below. It normally restarts within
+            seconds. If it stays off, check the camera cable is firmly seated, then
+            restart the Pi.
+            <details class="banner-more">
+              <summary>Restart only the detector over SSH</summary>
+              <code class="mono">sudo systemctl restart pepperwatch-worker</code>
+            </details>
           </div>
         </div>
 

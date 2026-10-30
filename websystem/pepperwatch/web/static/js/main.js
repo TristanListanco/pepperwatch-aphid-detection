@@ -27,6 +27,18 @@ function bootDashboard() {
   const live = liveRoot ? new LiveView(liveRoot) : null;
   const controls = new Controls(document, { onToast: toast });
 
+  // Boxes show only while the detector is running and not paused; anything
+  // else would leave the last ones frozen over the picture.
+  let workerAlive = document.querySelector('[data-worker-chip].is-live') !== null;
+  let paused = false;
+  let lastReadingAt = null;
+  let lastFrameAt = null;
+  const showOverlay = () => {
+    if (live) live.toggleOverlay(workerAlive && !paused);
+  };
+  showOverlay();
+  controls.setAvailable(workerAlive);
+
   // -- live feed ---------------------------------------------------------
 
   const prefs = displayPrefs();
@@ -41,7 +53,10 @@ function bootDashboard() {
     document.addEventListener('visibilitychange', () => {
       live.setMode(document.hidden ? 'idle' : liveMode);
     });
-    bus.on('detections', (payload) => live.update(payload));
+    bus.on('detections', (payload) => {
+      if (payload.ts) lastFrameAt = payload.ts * 1000;
+      live.update(payload);
+    });
   }
 
   // -- performance, power and the session --------------------------------
@@ -50,15 +65,15 @@ function bootDashboard() {
   const devices = deviceRoot ? new DeviceList(deviceRoot) : null;
 
   bus.on('telemetry', (payload) => {
+    if (payload.ts) lastReadingAt = payload.ts * 1000;
     renderTelemetry(document, payload);
     if (devices) devices.setTelemetry(payload);
   });
   bus.on('pipeline', (payload) => {
     renderPipeline(document, payload);
     controls.setPaused(payload.paused);
-    // Paused means no new detections: hide the boxes rather than leave the
-    // last ones frozen over a moving picture.
-    if (live) live.toggleOverlay(!payload.paused);
+    paused = Boolean(payload.paused);
+    showOverlay();
   });
   bus.on('summary', (payload) => renderSummary(document, payload));
 
@@ -86,6 +101,10 @@ function bootDashboard() {
   bus.on('worker', (state) => {
     if (devices) devices.setWorker(state);
     showWorker(state);
+    workerAlive = state.alive === true;
+    controls.setAvailable(workerAlive);
+    showOverlay();
+    showStale(workerAlive, lastReadingAt, lastFrameAt);
     // MJPEG falls back to polling while the worker is down; go live again
     // once it is back.
     if (live && state.alive && liveMode === 'mjpeg' && live.mode === 'poll' && !document.hidden) {
@@ -161,6 +180,31 @@ function showWorker(state) {
 
   const banner = document.querySelector('[data-worker-banner]');
   if (banner) banner.hidden = state.alive === true;
+}
+
+// With the detector down the live tiles and the camera hold their last
+// values; dim them and say when those were, so they are not read as live.
+function showStale(alive, readingAt, frameAt) {
+  const at = (ms) => (ms ? new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null);
+  const reading = at(readingAt);
+  document.querySelectorAll('[data-live-figure]').forEach((tile) => {
+    tile.classList.toggle('is-stale', !alive);
+    const note = tile.querySelector('[data-stale-note]');
+    if (note) {
+      note.hidden = alive;
+      note.textContent = reading ? `Last reading ${reading}` : 'No live reading';
+    }
+  });
+
+  const viewport = document.querySelector('[data-viewport]');
+  if (viewport) viewport.classList.toggle('is-stale', !alive);
+  const chip = document.querySelector('[data-viewport-stale]');
+  if (chip) {
+    chip.hidden = alive;
+    const frame = at(frameAt);
+    const label = chip.querySelector('[data-viewport-stale-label]');
+    if (label) label.textContent = frame ? `Detector offline · frame from ${frame}` : 'Detector offline';
+  }
 }
 
 // Pages without the live bus still ask once, so their chip tells the truth.

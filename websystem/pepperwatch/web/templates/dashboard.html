@@ -30,8 +30,13 @@
           <span class="chip" data-pipeline-paused hidden>
             <span class="dot"></span>paused
           </span>
+          <span class="chip is-down" data-viewport-stale hidden>
+            <span class="dot"></span><span data-viewport-stale-label>Detector offline</span>
+          </span>
         </div>
       </div>
+
+      <p class="live-summary" data-live-summary aria-live="polite"></p>
 
       <div class="live-controls">
         <button class="btn" type="button" data-action-snapshot>Snapshot</button>
@@ -65,7 +70,7 @@
       </div>
       <div class="tile-figure">
         <span class="tile-value"><span data-health-share>—</span><small>%</small></span>
-        <span class="badge" data-kpi-severity>None</span>
+        <span class="badge" data-kpi-severity>No damage</span>
       </div>
       <p class="tile-note" data-health-note>Share of leaves found healthy this week</p>
     </article>
@@ -73,10 +78,11 @@
     <article class="tile">
       <div class="tile-head">
         <svg class="icon" aria-hidden="true"><use href="#i-scan-search"/></svg>
-        <h3>Detections this week</h3>
+        <h3>Damaged leaves</h3>
       </div>
-      <div class="tile-figure"><span class="tile-value" data-kpi-detections>0</span></div>
-      <p class="tile-note"><span data-kpi-delta>—</span> on last week</p>
+      <div class="tile-figure"><span class="tile-value" data-kpi-damaged>0</span></div>
+      <p class="tile-note" data-kpi-scanned>No leaves scanned this week yet</p>
+      <p class="tile-note" data-kpi-delta></p>
     </article>
 
     <article class="tile">
@@ -90,14 +96,14 @@
 
     <article class="tile">
       <div class="tile-head">
-        <svg class="icon" aria-hidden="true"><use href="#i-trending-up"/></svg>
-        <h3>Trend</h3>
+        <svg class="icon" aria-hidden="true"><use href="#i-minus" data-kpi-trend-icon/></svg>
+        <h3>Damage trend</h3>
       </div>
       <div class="tile-figure"><span class="tile-value is-word" data-kpi-trend>—</span></div>
       <p class="tile-note"><span data-kpi-events>0 scans logged</span> · <span data-updated>—</span></p>
     </article>
 
-    <article class="tile">
+    <article class="tile" data-live-figure>
       <div class="tile-head">
         <svg class="icon" aria-hidden="true"><use href="#i-gauge"/></svg>
         <h3>Inference</h3>
@@ -115,9 +121,10 @@
       <p class="tile-note"><span data-pipeline-target>—</span></p>
       <p class="tile-note">camera <span data-pipeline-preview-rate>—</span> fps ·
         <span data-pipeline-dropped>0</span> not inferred</p>
+      <p class="tile-note stale-note" data-stale-note hidden></p>
     </article>
 
-    <article class="tile">
+    <article class="tile" data-live-figure>
       <div class="tile-head">
         <svg class="icon" aria-hidden="true"><use href="#i-timer"/></svg>
         <h3>Latency per frame</h3>
@@ -126,9 +133,10 @@
         <span class="tile-value"><span data-pipeline-latency>—</span><small>ms</small></span>
       </div>
       <p class="tile-note">p95 <span data-session-p95>—</span> this session</p>
+      <p class="tile-note stale-note" data-stale-note hidden></p>
     </article>
 
-    <article class="tile">
+    <article class="tile" data-live-figure>
       <div class="tile-head">
         <svg class="icon" aria-hidden="true"><use href="#i-zap"/></svg>
         <h3>Power</h3>
@@ -138,9 +146,10 @@
       </div>
       <p class="tile-note" data-health-power-source>—</p>
       <p class="tile-note"><span data-session-energy>—</span> · <span data-session-efficiency>—</span></p>
+      <p class="tile-note stale-note" data-stale-note hidden></p>
     </article>
 
-    <article class="tile">
+    <article class="tile" data-live-figure>
       <div class="tile-head">
         <svg class="icon" aria-hidden="true"><use href="#i-thermometer"/></svg>
         <h3>Temperature</h3>
@@ -151,6 +160,7 @@
       <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
       <p class="tile-note">CPU, <span data-health-cpu>—</span> load</p>
       <p class="tile-note" data-health-hailo hidden>AI HAT+ <span data-health-hailo-temp>—</span>°C</p>
+      <p class="tile-note stale-note" data-stale-note hidden></p>
     </article>
   </section>
 

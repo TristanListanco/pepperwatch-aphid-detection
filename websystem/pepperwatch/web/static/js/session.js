@@ -48,24 +48,13 @@ export class SessionPanel {
     this.meta = meta;
 
     const accel = meta.accelerator || {};
-    const camera = meta.camera || {};
     const detector = meta.detector || {};
 
     this.set('session-id', meta.label ? `${meta.label} · ${meta.session_id}` : meta.session_id);
-    this.set('session-accelerator', accel.name || '—');
-    this.set('session-camera', camera.description || '—');
     const model = detector.model_file
       ? `${detector.model_file}, ${detector.input_size} px`
       : 'none';
     this.set('session-model', detector.synthetic ? `${model} (heuristic stub, not a trained model)` : model);
-
-    // Say why the HAT was not used, when one was there to use.
-    const reason = this.root.querySelector('[data-session-reason]');
-    if (reason) {
-      const fellBack = accel.kind === 'cpu' && accel.hailo && accel.hailo.present;
-      reason.hidden = !fellBack;
-      reason.textContent = fellBack ? `AI HAT+ not used: ${accel.reason}.` : '';
-    }
 
     this.root.querySelectorAll('[data-session-file]').forEach((link) => {
       const name = link.dataset.sessionFile;

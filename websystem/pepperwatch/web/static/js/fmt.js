@@ -52,8 +52,10 @@ export function num(value, digits = 0) {
 
 export function signedPct(value, digits = 0) {
   if (value === null || value === undefined || Number.isNaN(value)) return '—';
-  const sign = value > 0 ? '+' : '';
-  return `${sign}${Number(value).toFixed(digits)}%`;
+  const fixed = Math.abs(value).toFixed(digits);
+  // A true minus, and no sign at all on a value that rounds to zero.
+  const sign = Number(fixed) === 0 ? '' : value > 0 ? '+' : '\u2212';
+  return `${sign}${fixed}%`;
 }
 
 export function temp(celsius) {

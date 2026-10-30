@@ -7,6 +7,9 @@ export class Controls {
     this.root = root;
     this.onToast = onToast || (() => {});
     this.paused = false;
+    // False while the detector is down: a pause or snapshot request would
+    // reach the broker and be reported as done, with nothing to act on it.
+    this.available = true;
     this.bind();
   }
 
@@ -24,7 +27,7 @@ export class Controls {
         } catch (error) {
           this.onToast(`Snapshot failed: ${error.message}`, 'error');
         } finally {
-          snapshot.disabled = false;
+          snapshot.disabled = !this.available;
           snapshot.textContent = 'Snapshot';
         }
       });
@@ -43,7 +46,7 @@ export class Controls {
         } catch (error) {
           this.onToast(`Could not ${action}: ${error.message}`, 'error');
         } finally {
-          pause.disabled = false;
+          pause.disabled = !this.available;
         }
       });
     }
@@ -56,6 +59,14 @@ export class Controls {
         window.location.href = '/api/export.csv';
       });
     }
+  }
+
+  setAvailable(available) {
+    this.available = available;
+    ['[data-action-snapshot]', '[data-action-pause]'].forEach((selector) => {
+      const button = this.root.querySelector(selector);
+      if (button) button.disabled = !available;
+    });
   }
 
   setPaused(paused) {

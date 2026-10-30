@@ -20,6 +20,9 @@ def _context() -> dict:
         "advisory_validated": advisory.validated,
         "class_names": list(cfg.inference.class_names),
         "stream_fps": cfg.web.stream_fps,
+        # Rendered from the hub's own view so the first paint tells the truth,
+        # rather than flashing "offline" until the event stream says hello.
+        "worker_alive": current_app.config["PW_HUB"].worker_state()["alive"],
     }
 
 

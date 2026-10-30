@@ -89,12 +89,13 @@ export class Bus {
       const payload = safeParse(event.data);
       if (!payload) return;
       // The snapshot lets the page paint at once rather than showing empty
-      // tiles until the next publication.
-      if (payload.worker) this.emit('worker', payload.worker);
+      // tiles until the next publication. Worker state goes last, so an
+      // offline notice can say when the readings it greys out were taken.
       if (payload.session && payload.session.session_id) this.emit('session', payload.session);
       Object.entries(payload.latest || {}).forEach(([topic, data]) => {
         this.dispatchTopic(topic, data);
       });
+      if (payload.worker) this.emit('worker', payload.worker);
     });
 
     [

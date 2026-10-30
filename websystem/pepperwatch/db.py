@@ -420,6 +420,16 @@ class Database:
                 """,
                 [previous_from, current_from, *site_params],
             ).fetchone()
+            damaged_before = conn.execute(
+                f"""
+                SELECT COUNT(*) AS n
+                FROM bounding_box b
+                JOIN detection_event e ON e.id = b.event_id
+                WHERE b.class_name = 'aphid_damage'
+                  AND e.captured_at >= ? AND e.captured_at < ?{(' AND e.site = ?' if site else '')}
+                """,
+                [previous_from, current_from, *site_params],
+            ).fetchone()["n"]
             distribution = conn.execute(
                 f"""
                 SELECT b.class_name AS class_name, COUNT(*) AS n
@@ -442,15 +452,24 @@ class Database:
 
         detections_now = int(current["detections"] or 0)
         detections_before = int(previous["detections"] or 0)
-        if detections_before:
-            delta_pct = 100.0 * (detections_now - detections_before) / detections_before
+        distribution_now = {row["class_name"]: int(row["n"]) for row in distribution}
+
+        # The delta and trend follow aphid damage, not every box: more healthy
+        # leaves scanned is not bad news. With no damage the week before there is
+        # no percentage to give, so delta_pct is None.
+        damaged_now = distribution_now.get("aphid_damage", 0)
+        damaged_before = int(damaged_before or 0)
+        if damaged_before:
+            delta_pct = 100.0 * (damaged_now - damaged_before) / damaged_before
         else:
-            delta_pct = 100.0 if detections_now else 0.0
+            delta_pct = None if damaged_now else 0.0
 
         # A +/-10% band reads as "Stable" rather than flapping between Rising and
         # Falling on noise, which is what an agricultural officer wants from a
         # weekly trend indicator.
-        if abs(delta_pct) < 10.0:
+        if delta_pct is None:
+            trend = "rising"
+        elif abs(delta_pct) < 10.0:
             trend = "stable"
         elif delta_pct > 0:
             trend = "rising"
@@ -471,15 +490,18 @@ class Database:
             "site": site,
             "from": current_from,
             "events": int(current["events"] or 0),
+            "events_previous": int(previous["events"] or 0),
             "detections": detections_now,
             "detections_previous": detections_before,
-            "delta_pct": round(delta_pct, 1),
+            "damaged": damaged_now,
+            "damaged_previous": damaged_before,
+            "delta_pct": None if delta_pct is None else round(delta_pct, 1),
             "avg_confidence": round(current["avg_confidence"], 4) if current["avg_confidence"] else 0.0,
             "avg_damaged_area": round(current["avg_area"], 5) if current["avg_area"] else 0.0,
             "trend": trend,
             "severity": overall,
             "severity_counts": severity_counts,
-            "distribution": {row["class_name"]: int(row["n"]) for row in distribution},
+            "distribution": distribution_now,
         }
 
     def latest_telemetry(self) -> dict[str, Any] | None:

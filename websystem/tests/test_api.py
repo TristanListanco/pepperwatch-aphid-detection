@@ -235,6 +235,45 @@ def test_weekly_stats_shape_matches_the_wireframe_tiles(seeded_db, client) -> No
     assert body["site"] == "Naawan"
 
 
+def test_weekly_trend_follows_aphid_damage_not_every_box(app, cfg, client) -> None:
+    """Scanning more healthy leaves is not a rising trend, and damage with none
+    the week before has no percentage to show."""
+    from datetime import datetime, timedelta, timezone
+
+    from pepperwatch.models import Detection
+
+    database = app.config["PW_DB"]
+    last_week = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(timespec="milliseconds")
+
+    seq = iter(range(100))
+
+    def scan(healthy: int, damaged: int, captured_at: str | None = None) -> None:
+        boxes = [
+            Detection(class_id=c, class_name=n, confidence=0.8, x=0.1, y=0.1, w=0.1, h=0.1)
+            for c, n, k in ((0, "healthy", healthy), (1, "aphid_damage", damaged))
+            for _ in range(k)
+        ]
+        database.insert_event(
+            site=cfg.site.name, frame_seq=next(seq), detections=boxes, model_version="t",
+            conf_threshold=0.25, iou_threshold=0.45, severity="low", captured_at=captured_at,
+        )
+
+    scan(healthy=2, damaged=0, captured_at=last_week)
+    scan(healthy=40, damaged=0)
+    body = client.get("/api/stats/weekly").get_json()
+    assert body["trend"] == "stable" and body["delta_pct"] == 0.0
+
+    scan(healthy=0, damaged=3)
+    body = client.get("/api/stats/weekly").get_json()
+    assert body["damaged"] == 3 and body["damaged_previous"] == 0
+    assert body["delta_pct"] is None and body["trend"] == "rising"
+    assert "No aphid damage was recorded in the previous 7 days" in body["insight"]
+
+    scan(healthy=0, damaged=1, captured_at=last_week)
+    body = client.get("/api/stats/weekly").get_json()
+    assert body["delta_pct"] == 200.0 and body["trend"] == "rising"
+
+
 def test_weekly_insight_is_a_plain_sentence(seeded_db, client) -> None:
     insight = client.get("/api/stats/weekly").get_json()["insight"]
     assert "Naawan" in insight

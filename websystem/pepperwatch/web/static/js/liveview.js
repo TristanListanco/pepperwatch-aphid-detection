@@ -18,6 +18,9 @@
 import { classColour, classLabel } from './fmt.js';
 
 const POLL_MS = 1000;
+// The "in view" line is a live region; at most one change per this long, so a
+// screen reader is not read a new count for every frame.
+const SUMMARY_MS = 3000;
 
 // Display preferences for this device, set on the Settings page. Live video
 // is on by default; turning it off drops to one frame a second, which spares
@@ -52,7 +55,10 @@ export class LiveView {
     this.image = root.querySelector('[data-live-image]');
     this.canvas = root.querySelector('[data-live-canvas]');
     this.viewport = root.querySelector('[data-viewport]');
+    this.summary = root.querySelector('[data-live-summary]');
     this.ctx = this.canvas.getContext('2d');
+    this.summaryAt = 0;
+    this.summaryTimer = null;
 
     this.mode = 'idle';
     this.pollTimer = null;
@@ -126,11 +132,13 @@ export class LiveView {
   destroy() {
     this.stop();
     this.observer.disconnect();
+    clearTimeout(this.summaryTimer);
   }
 
   toggleOverlay(show) {
     this.showOverlay = show;
     this.draw();
+    this.updateSummary();
   }
 
   // Flips the picture; boxes are drawn at mirrored positions instead of being
@@ -155,6 +163,35 @@ export class LiveView {
     this.detections = payload.boxes || [];
     this.frameSeq = payload.frame_seq;
     this.draw();
+    this.updateSummary();
+  }
+
+  // What is in view, in words: the boxes alone are colour on a moving
+  // picture, which neither a screen reader nor a colour-blind eye can read.
+  summaryText() {
+    if (!this.showOverlay) return '';
+    const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
+    const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
+    const leaves = (n) => `${n} ${n === 1 ? 'leaf' : 'leaves'}`;
+    if (damaged) {
+      return `In view: ${leaves(damaged)} with aphid damage${healthy ? `, ${healthy} healthy` : ''}`;
+    }
+    return healthy ? `In view: ${leaves(healthy)}, no aphid damage` : 'No leaves in view';
+  }
+
+  updateSummary() {
+    if (!this.summary) return;
+    const text = this.summaryText();
+    if (text === this.summary.textContent) return;
+    clearTimeout(this.summaryTimer);
+    const wait = this.summaryAt + SUMMARY_MS - Date.now();
+    if (wait > 0 && text) {
+      // Trailing update: the latest count lands once the interval is up.
+      this.summaryTimer = setTimeout(() => this.updateSummary(), wait);
+      return;
+    }
+    this.summary.textContent = text;
+    this.summaryAt = Date.now();
   }
 
   clearOverlay() {
@@ -197,11 +234,11 @@ export class LiveView {
     // phone, where the same text covers a third of the frame.
     const cssWidth = this.canvas.width / ratio;
     const fontSize = Math.max(9, Math.min(11, cssWidth / 38)) * ratio;
-    // Below this width the class name is dropped: on a phone the colour
-    // already carries the class, and the confidence is the part being read.
+    // Below this width healthy boxes lose their class name to save room. The
+    // line style still tells the classes apart without colour: healthy is
+    // thin and dashed, aphid damage thick and solid and always named.
     const compact = cssWidth < 420;
 
-    this.ctx.lineWidth = lineWidth;
     this.ctx.font = `600 ${fontSize}px ui-monospace, Menlo, monospace`;
     this.ctx.textBaseline = 'top';
 
@@ -213,11 +250,16 @@ export class LiveView {
       const w = detection.w * box.width;
       const h = detection.h * box.height;
 
+      const healthy = detection.class_name === 'healthy';
       this.ctx.strokeStyle = colour;
+      this.ctx.lineWidth = healthy ? lineWidth * 0.75 : lineWidth * 1.5;
+      this.ctx.setLineDash(healthy ? [4 * ratio, 3 * ratio] : []);
       this.ctx.strokeRect(x, y, w, h);
+      this.ctx.setLineDash([]);
 
       const percent = Math.round(detection.confidence * 100);
-      const text = compact ? `${percent}%` : `${classLabel(detection.class_name)} ${percent}%`;
+      const name = compact && !healthy ? 'Aphid' : classLabel(detection.class_name);
+      const text = compact && healthy ? `${percent}%` : `${name} ${percent}%`;
       const metrics = this.ctx.measureText(text);
       const padding = 3 * ratio;
       const labelW = metrics.width + padding * 2;
