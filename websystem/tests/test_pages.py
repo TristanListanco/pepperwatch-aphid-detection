@@ -83,11 +83,8 @@ def test_dashboard_contains_the_figure_3_4_elements(client) -> None:
         "data-kpi-confidence",   # Avg. Confidence tile
         "data-kpi-trend",        # Trend tile
         "data-kpi-severity",     # Severity tile
-        "data-donut",            # Detection Distribution
     ):
         assert hook in html, f"Figure 3.4 element {hook} is missing"
-
-    assert "Detection Distribution" in html
 
 
 def test_site_name_comes_from_config(client, cfg) -> None:
@@ -95,7 +92,7 @@ def test_site_name_comes_from_config(client, cfg) -> None:
     assert cfg.site.name in client.get("/").get_data(as_text=True)
 
 
-def test_operator_and_role_render_in_the_sidebar(client, cfg) -> None:
+def test_operator_and_role_render_in_the_top_bar(client, cfg) -> None:
     html = client.get("/").get_data(as_text=True)
     assert cfg.site.operator in html
     assert cfg.site.role in html
@@ -125,18 +122,25 @@ def test_dashboard_offers_the_session_csv_files(client) -> None:
     assert "data-session-new" in html
 
 
-def test_trimmed_metrics_are_gone(client) -> None:
-    """Battery, storage, memory and the insight banner were cut from the dashboard."""
+def test_trimmed_elements_are_gone(client) -> None:
+    """Cut from the dashboard: battery, storage and memory, the insight banner,
+    the distribution donut, the transport chip, the history search box and the
+    rail avatar."""
     html = client.get("/").get_data(as_text=True)
-    for hook in ("data-health-battery", "data-health-disk", "data-health-mem", "data-insight"):
+    for hook in (
+        "data-health-battery", "data-health-disk", "data-health-mem", "data-insight",
+        "data-donut", "data-transport-chip", 'name="q"', "rail-operator",
+    ):
         assert hook not in html
 
 
-def test_settings_explains_the_threshold_departure(client) -> None:
-    """The 0.25 default contradicts Figure 3.3; the UI should say why."""
-    html = client.get("/settings").get_data(as_text=True)
-    assert "0.80" in html
-    assert "Figure 3.3" in html
+def test_threshold_departure_is_documented() -> None:
+    """The 0.25 default contradicts Figure 3.3. Settings gives one line; the
+    README's divergence table carries the reasoning."""
+    from pathlib import Path
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    assert "Figure 3.3" in readme and "0.80" in readme
 
 
 def test_security_headers_are_present(client) -> None:

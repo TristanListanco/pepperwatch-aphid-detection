@@ -1,12 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 
-{% block topbar %}
-  <span class="chip" data-transport-chip>
-    <span class="dot"></span><span data-transport-label>connecting</span>
-  </span>
-{% endblock %}
-
 {% block content %}
 <div class="dash">
 
@@ -175,21 +169,6 @@
       </div>
     </div>
   </div>
-
-  {# -- Detection distribution donut (Figure 3.4) ----------------------- #}
-  <section class="card dash-donut">
-    <div class="card-head">
-      <svg class="icon" aria-hidden="true"><use href="#i-chart-pie"/></svg>
-      <h2>Detection Distribution</h2>
-      <span class="card-sub">Last 7 days</span>
-    </div>
-    <div class="card-body">
-      <div class="donut-wrap">
-        <div data-donut></div>
-        <div class="legend" data-legend></div>
-      </div>
-    </div>
-  </section>
 
   {# -- Session: what this run is recorded on, and its CSV files -------- #}
   <section class="card dash-session" data-session>

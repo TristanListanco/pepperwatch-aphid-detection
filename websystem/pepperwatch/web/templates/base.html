@@ -32,11 +32,6 @@
           <span class="rail-label">Settings</span>
         </a>
       </div>
-
-      <div class="rail-operator" title="{{ operator }} · {{ role }}">
-        {{ operator.split(' ') | map('first') | join('') | upper | truncate(2, true, '') }}
-        <span class="sr-only">{{ operator }}, {{ role }}</span>
-      </div>
     </nav>
 
     <main class="main">
@@ -46,7 +41,6 @@
           <p class="topbar-sub">{{ operator }} · {{ role }}</p>
         </div>
         <div class="topbar-actions">
-          {% block topbar %}{% endblock %}
           <span class="chip {{ 'is-live' if worker_alive else 'is-down' }}" data-worker-chip>
             <span class="dot"></span><span data-worker-label>Detector {{ 'online' if worker_alive else 'offline' }}</span>
           </span>

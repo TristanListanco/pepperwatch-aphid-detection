@@ -314,11 +314,10 @@ from the Pi.
 - **`liveview.js`** shows the clean frame and draws the latest boxes on a
   `<canvas>` overlay, scaled to the phone's screen. Boxes are stored normalised
   (0–1), so they line up at any resolution.
-- Panels update from the same event stream: KPI tiles, distribution donut,
-  history gallery, Performance & Power, the Session card (from
-  `status/session` and the 15-second `session/summary`), and the advisory
-  panel, which picks text from `recommendations.json` by severity and language
-  (English or Cebuano).
+- Panels update from the same event stream: KPI tiles, history gallery,
+  Performance & Power, and the Session card (from `status/session` and the
+  15-second `session/summary`). The Leaf health tile's advice line comes from
+  `recommendations.json`, by severity and language (English or Cebuano).
 
 #### 8. Commands back to the worker
 
@@ -933,7 +932,7 @@ Session card shows both, and `session.json` records the model's SHA-256.
 
 | Page | Contents |
 |---|---|
-| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
+| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; detections CSV) |
 | `/settings` | **Display** for this device (live video, mirror camera; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
 There's no login: anyone on the PepperWatch Wi-Fi can use every control.

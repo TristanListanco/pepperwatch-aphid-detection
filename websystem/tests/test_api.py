@@ -220,7 +220,7 @@ def test_archive_toggles_and_reports(seeded_db, client) -> None:
 
 
 def test_weekly_stats_shape_matches_the_wireframe_tiles(seeded_db, client) -> None:
-    """Figure 3.4 draws four tiles, a donut, and a sentence. All must be served."""
+    """Figure 3.4 draws four tiles and a sentence. All must be served."""
     body = client.get("/api/stats/weekly").get_json()
     for key in (
         "events", "detections", "delta_pct", "avg_confidence",

@@ -3,7 +3,6 @@
 import { Bus, poll, fetchJson } from './bus.js';
 import { Controls, toast } from './controls.js';
 import { DeviceList } from './devices.js';
-import { renderDonut } from './donut.js';
 import { History } from './history.js';
 import { renderKpis } from './kpis.js';
 import { LiveView, displayPrefs } from './liveview.js';
@@ -112,15 +111,6 @@ function bootDashboard() {
     }
   });
 
-  bus.on('mode', (mode) => {
-    const chip = document.querySelector('[data-transport-chip]');
-    if (chip) {
-      const label = chip.querySelector('[data-transport-label]');
-      if (label) label.textContent = mode === 'sse' ? 'live' : mode;
-      chip.classList.toggle('is-warn', mode === 'polling' || mode === 'reconnecting');
-    }
-  });
-
   // A new persisted event means the gallery is stale.
   const history = document.querySelector('[data-history]')
     ? new History(document.querySelector('[data-history]'), { pageSize: 8 })
@@ -146,9 +136,6 @@ function bootDashboard() {
     const stats = await fetchJson(`/api/stats/weekly?locale=${locale()}`);
     if (!stats) return;
     renderKpis(document, stats);
-
-    const donut = document.querySelector('[data-donut]');
-    if (donut) renderDonut(donut, stats.distribution, document.querySelector('[data-legend]'));
 
     const stamp = document.querySelector('[data-updated]');
     if (stamp) stamp.textContent = `updated ${relative(new Date().toISOString())}`;

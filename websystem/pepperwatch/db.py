@@ -387,7 +387,7 @@ class Database:
         }
 
     def weekly_stats(self, *, days: int = 7, site: str | None = None) -> dict[str, Any]:
-        """Everything the four KPI tiles, the donut, and the banner need.
+        """Everything the KPI tiles need.
 
         Compares the trailing ``days`` window against the window before it so
         the tiles can show a delta and a trend, which is what Figure 3.4 draws.

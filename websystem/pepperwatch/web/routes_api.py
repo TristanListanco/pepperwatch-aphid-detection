@@ -204,7 +204,7 @@ def archive_event(event_id: int):
 
 @bp.get("/stats/weekly")
 def weekly_stats():
-    """Everything the four KPI tiles, the donut, and the banner need."""
+    """Everything the KPI tiles need."""
     try:
         days = max(1, min(int(request.args.get("days", 7)), 365))
     except ValueError:

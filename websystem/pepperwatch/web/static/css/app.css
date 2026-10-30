@@ -187,10 +187,6 @@ button {
   backdrop-filter: saturate(1.4) blur(10px);
 }
 
-.rail-operator {
-  display: none;
-}
-
 .rail-items {
   display: flex;
   gap: 6px;
@@ -285,20 +281,6 @@ button {
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
-  }
-
-  .rail-operator {
-    display: grid;
-    place-items: center;
-    margin-top: auto;
-    width: 48px;
-    height: 48px;
-    border-radius: 16px;
-    background: var(--inset);
-    color: var(--ink-2);
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
   }
 
   .main {
@@ -589,7 +571,6 @@ button {
     "tiles"
     "alerts"
     "devices"
-    "donut"
     "session"
     "history";
 }
@@ -599,7 +580,6 @@ button {
 .dash-tiles { grid-area: tiles; }
 .dash-alerts { grid-area: alerts; display: grid; gap: 12px; }
 .dash-alerts:not(:has(.banner:not([hidden]))) { display: none; }
-.dash-donut { grid-area: donut; }
 .dash-session { grid-area: session; }
 .dash-history { grid-area: history; }
 
@@ -610,7 +590,7 @@ button {
       "live live"
       "tiles tiles"
       "alerts alerts"
-      "devices donut"
+      "devices devices"
       "session session"
       "history history";
     align-items: start;
@@ -624,7 +604,7 @@ button {
       "live devices"
       "tiles devices"
       "alerts devices"
-      "session donut"
+      "session session"
       "history history";
   }
 
@@ -643,9 +623,11 @@ button {
   gap: 12px;
 }
 
-@media (min-width: 560px) and (max-width: 899px) {
+/* Full width below the sidebar breakpoint: flow into as many columns as fit
+ * rather than five long rows. */
+@media (min-width: 560px) and (max-width: 1239px) {
   .device-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   }
 }
 
@@ -1141,58 +1123,6 @@ button {
 .toggle input:focus-visible + .track {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
-}
-
-/* -- donut ----------------------------------------------------------------- */
-
-.donut-wrap {
-  display: grid;
-  gap: 16px;
-  justify-items: center;
-  padding: 6px 0 4px;
-}
-
-.donut {
-  width: 100%;
-  max-width: 220px;
-  height: auto;
-}
-
-.donut-track {
-  stroke: var(--inset-2);
-}
-
-.donut-total {
-  fill: var(--ink);
-  font-family: var(--sans);
-}
-
-.donut-label {
-  fill: var(--ink-3);
-  font-family: var(--sans);
-  letter-spacing: 0.06em;
-}
-
-.legend {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  justify-content: center;
-  font-size: 13px;
-  color: var(--ink-2);
-}
-
-.legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.legend i {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
 }
 
 /* -- session --------------------------------------------------------------- */

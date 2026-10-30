@@ -236,13 +236,14 @@ listed here so they can be defended or the manuscript amended.
 |---|---|---|
 | Figure 3.3: "Confidence Filter (80)" | Configurable, default **0.25** | 0.80 on clusters this small discards most true detections, and §4 counts False Negatives as a headline metric. Sweep the slider and report a precision/recall curve instead. |
 | §3.2: ≥17 FPS | Measured and reported, not assumed | Published INT8 YOLOv8n figures on Pi 5 CPU are 5–10 FPS at 640×640. The pipeline decouples preview from inference and reports both honestly. |
-| Figure 3.4 donut: Sick / Damaged / Healthy | **healthy / aphid_damage** | Matches Table 3.1, §4's binary confusion matrix, and the research aim's wording. Severity is derived in software instead. |
+| Figure 3.4 classes: Sick / Damaged / Healthy | **healthy / aphid_damage** | Matches Table 3.1, §4's binary confusion matrix, and the research aim's wording. Severity is derived in software instead. |
 | Severity bands | Defined in `[severity]` config | Ch. III never defines them, but Figure 3.4 draws a Severity tile. Rises on cluster count **or** affected area, whichever is worse. |
 | §3.3: boxes rendered "onto a localized physical display" | Any phone on the WAP | §3.2.2 mandates headless and §3.3.2.2 rejects native GUIs; a TFT plus a kiosk browser would burn exactly the resources those sections claim to save. |
 | Figure 3.6: MongoDB | SQLite | Every prose section says SQLite. The figure is stale. |
 | Figure 3.4: dark surface | Light surface, after Nija Design's "Smart Farm Monitoring Dashboard" | A light surface with dark ink stays readable in direct sun, where a dark one washes out; every text pairing is at least 4.5:1. Layout, panels and data are unchanged. |
 | Table 3.4: Actionable Output Panel | Removed from the dashboard | Cut on request. The advice text still exists (`config/recommendations.json`, `/api/recommendations`) and the Leaf health tile shows its headline. |
 | Figure 3.4: "Start Camera" button and Live toggle | Live by default; switches in Settings | The feed opens on page load; Live video, detection boxes and mirroring are per-device settings. |
+| Figure 3.4: Detection Distribution donut | Removed | It repeated the Leaf health share and the Damaged leaves count on the tiles above it. |
 | Figure 3.4: plain-language insight banner | Removed | It restated the four KPI tiles in a sentence. Cut when the dashboard was trimmed to the reported metrics. |
 | Figure 3.4: System Health Monitor (temperature, CPU, memory, storage, battery) | Performance & Power card | Keeps temperature and CPU load; adds inference and camera fps against the target, latency, power with its source, and session energy. Memory, storage and battery (there is none) were cut. |
 | Inference on the Pi 5 CPU | CPU, or an AI HAT+ when fitted | Detected per session; the accelerator is recorded with every result so the two are never mixed in Chapter IV. |

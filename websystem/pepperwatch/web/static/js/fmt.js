@@ -15,17 +15,10 @@ export const CLASS_LABELS = {
 
 // Matches render.py's COLOUR_* constants, so a box drawn over the live feed is
 // the same colour as one baked into an archived JPEG. Tuned to stand out on a
-// camera image; the donut uses darker ones for the light card.
+// camera image.
 export const CLASS_COLOURS = {
   healthy: '#5cbe6e',
   aphid_damage: '#eb8228',
-};
-
-export const SEVERITY_COLOURS = {
-  none: '#5cbe6e',
-  low: '#a3cc52',
-  moderate: '#f5c451',
-  high: '#e5484d',
 };
 
 export function classLabel(name) {
