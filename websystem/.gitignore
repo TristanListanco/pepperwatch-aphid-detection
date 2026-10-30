@@ -22,3 +22,6 @@ benchmarks/*.csv
 # Manuscript material: kept local, the repository is public
 *.pdf
 MANUSCRIPT-NOTES.md
+
+# Local design-checker settings
+.impeccable/
