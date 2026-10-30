@@ -88,7 +88,7 @@ if nmcli -g NAME connection show | grep -x "$UPLINK_CON" >/dev/null; then
   if [ -n "$link" ]; then
     CHANNEL="${link%% *}"
     freq="${link#*(}"
-    if [ "$freq" -lt 3000 ]; then BAND=bg; else BAND=a; fi
+    if [ "$freq" -lt 3000 ]; then BAND="bg"; else BAND="a"; fi
     if [ "$CHANNEL" -ge 52 ] && [ "$CHANNEL" -le 144 ]; then
       log "WARNING: the uplink is on 5 GHz DFS channel ${CHANNEL}; the hotspot"
       log "         cannot start there. Join a 2.4 GHz network instead."
