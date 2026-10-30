@@ -78,6 +78,7 @@ apt-get install -y --no-install-recommends \
   fake-hwclock \
   i2c-tools \
   v4l-utils \
+  qrencode \
   rsync
 
 if [ "$BOARD_IS_RPI" = "1" ]; then
@@ -192,6 +193,8 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
 # --no-deps on numpy would be fragile; instead the requirements file pins it
 # loosely so pip is content with whatever apt already provides.
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+note "pip may print 'dependency conflicts' among the OS's own Python packages, which"
+note "it sees through --system-site-packages. They do not affect Pepper Watch."
 
 # Optional: real voltage and current for Chapter IV's power analysis.
 if i2cdetect -y 1 2>/dev/null | grep -qi "4[0-5]"; then
@@ -299,14 +302,22 @@ log "Running diagnostics"
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" -m pepperwatch.doctor --camera-probe || true
 
 log "Installed"
+AP_PSK="$(cat "$CONFIG_DIR/ap.psk" 2>/dev/null || true)"
+if [ -z "$AP_NOTE" ]; then
+  AP_SUMMARY="Wi-Fi network:  PepperWatch
+    Password:       $AP_PSK
+    Join it from a phone or tablet; the dashboard should open by itself.
+    If it does not, browse to http://192.168.4.1:8000/"
+else
+  AP_SUMMARY="$AP_NOTE"
+fi
 cat <<EOF
 
     Start everything:   sudo systemctl start pepperwatch.target
     Watch the logs:     journalctl -fu pepperwatch-worker -u pepperwatch-web
     Re-check health:    sudo -u $APP_USER $APP_DIR/.venv/bin/python -m pepperwatch.doctor
 
-    Access point: ${AP_NOTE:-SSID PepperWatch, passphrase in $CONFIG_DIR/ap.psk.
-    Joining it should open the dashboard; if not, browse to http://192.168.4.1:8000/}
+    $AP_SUMMARY
     On the wired network: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8000/
 
     Session CSV files (inference, power, fps) are written to
@@ -319,6 +330,14 @@ cat <<EOF
       - an agriculturist has signed off config/recommendations.json
 
 EOF
+
+# A Wi-Fi QR code: a phone camera joins the network without typing the
+# password. Special characters are escaped as the WIFI: format requires.
+if [ -z "$AP_NOTE" ] && [ -n "$AP_PSK" ] && command -v qrencode >/dev/null; then
+  QR_PSK="$(printf '%s' "$AP_PSK" | sed 's/[\\;,:"]/\\&/g')"
+  echo "    Scan with a phone camera to join PepperWatch:"
+  qrencode -t ANSIUTF8 -m 2 "WIFI:T:WPA;S:PepperWatch;P:$QR_PSK;;"
+fi
 
 if [ "$REBOOT_NEEDED" -eq 1 ]; then
   log "Reboot required"
