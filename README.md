@@ -111,7 +111,7 @@ under one target, `pepperwatch.target`:
 
 | Process | systemd unit | What it does |
 |---|---|---|
-| **Wi-Fi access point** | `pepperwatch-ap` | NetworkManager hotspot on `wlan0` at `192.168.4.1`, with DHCP and wildcard DNS for the captive portal |
+| **Wi-Fi** | `pepperwatch-ap` | At boot, joins a saved Wi-Fi network if one is in range; otherwise a NetworkManager hotspot on `wlan0` at `192.168.4.1`, with DHCP and wildcard DNS for the captive portal |
 | **MQTT broker** | `mosquitto` | Message bus, bound to `127.0.0.1` only |
 | **Inference worker** | `pepperwatch-worker` | Owns the camera. Capture → infer → score → publish → persist |
 | **Web server** | `pepperwatch-web` | Flask under gunicorn (1 process, 16 threads). Dashboard, REST API, live streams |
@@ -462,31 +462,28 @@ Detection events are never pruned automatically; they're the research record.
 - No DHCP option 114 (RFC 8910): phones only accept it over HTTPS, and an
   offline Pi has no certificate they would trust.
 
-#### Joining another Wi-Fi network (uplink, off by default)
+#### Your Wi-Fi or the hotspot (automatic)
 
-The Pi can join an existing Wi-Fi network and keep the PepperWatch hotspot at
-the same time, so it gets internet (clock sync, `update.sh` without Ethernet):
+At every boot the Pi picks one, since it has one radio:
 
-```bash
-sudo pepperwatch-uplink enable "FarmWiFi"   # asks for the password
-sudo pepperwatch-uplink status
-sudo pepperwatch-uplink disable              # back to hotspot only
-```
+- **A saved Wi-Fi network is in range** (one you added from the desktop Wi-Fi
+  menu, with `nmcli device wifi connect`, or in Raspberry Pi Imager): it joins
+  it and the hotspot stays off. Open the dashboard at the Pi's address on that
+  network, `http://<pi-address>:8000/`, or `http://<hostname>.local:8000/`.
+- **None is in range** (in the field): it starts the PepperWatch hotspot and
+  the captive portal as usual.
 
-- Both share the Pi's one radio: `wlan0` joins the network and the hotspot
-  moves to a virtual interface, `ap0`, on the **same channel** as that network.
-  The setting survives reboots until you disable it.
-- **Experimental.** If the joined network drops or changes channel, the hotspot
-  can drop with it; `sudo systemctl restart pepperwatch-ap` re-syncs it. A
-  network on a 5 GHz DFS channel (52–144) can't host the hotspot at all, so
-  join a 2.4 GHz one. For a long field trial, use a USB Wi-Fi adapter or
-  Ethernet as the uplink instead.
-- Phones on the hotspot still get **no internet**; that is what keeps the
-  captive portal opening by itself.
-- Anyone on the joined network can open the dashboard (port 8000 or 80) and use
-  its controls; there is no login. Only join a network you trust.
-- Run it over SSH on the hotspot and your session drops for a few seconds while
-  the hotspot moves; the command finishes anyway. Reconnect and run `status`.
+The dashboard works the same either way. Notes:
+
+- The choice is made at boot. If the Pi leaves the network's range while
+  running, reboot it, or run `sudo systemctl restart pepperwatch-ap` to choose
+  again.
+- To keep a saved network from taking over (to test the hotspot at home),
+  untick "Connect automatically" for it, or run
+  `nmcli connection modify "<name>" connection.autoconnect no`.
+- On your network there is no login: anyone on it can open the dashboard and
+  use its controls. Only save networks you trust.
+- Hidden networks don't show up in the scan, so they never take over.
 - Any unknown page redirects to the dashboard; unknown `/api/` paths still
   return 404.
 
@@ -1178,6 +1175,7 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | Worker exits "no camera matching …" | It lists what it found. Check the ribbon cable or USB, `rpicam-hello --list-cameras`, `ls /dev/video*`, and `[camera] kind` / `device` |
 | Wrong camera used with two attached | `auto` prefers CSI. Set `[camera] kind = "usb"` (and `device`) in `local.toml` |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
+| No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |
 | `PepperWatch` network not visible | `systemctl status pepperwatch-ap`; check `/etc/pepperwatch/ap.psk` exists (≥ 8 chars); another saved Wi-Fi network may be holding `wlan0` |
 | Lost SSH when the system started | The AP took over `wlan0`. Use Ethernet, or join `PepperWatch` and SSH to `192.168.4.1` |

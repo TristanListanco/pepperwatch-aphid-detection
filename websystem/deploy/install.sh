@@ -79,7 +79,6 @@ apt-get install -y --no-install-recommends \
   i2c-tools \
   v4l-utils \
   qrencode \
-  iw \
   rsync
 
 if [ "$BOARD_IS_RPI" = "1" ]; then
@@ -262,9 +261,8 @@ install -m 644 "$APP_DIR/deploy/network/dnsmasq-shared.d/00-pepperwatch-captive.
 install -m 644 "$APP_DIR"/deploy/systemd/pepperwatch*.service /etc/systemd/system/
 install -m 644 "$APP_DIR"/deploy/systemd/pepperwatch*.timer /etc/systemd/system/
 install -m 644 "$APP_DIR/deploy/systemd/pepperwatch.target" /etc/systemd/system/
-# `sudo pepperwatch-uplink enable|disable|status`: join another Wi-Fi network
-# alongside the hotspot. Off unless someone turns it on.
-ln -sf "$APP_DIR/deploy/network/uplink.sh" /usr/local/bin/pepperwatch-uplink
+# Left by an earlier version's uplink command, which is gone.
+rm -f /usr/local/bin/pepperwatch-uplink
 
 # Memory limits by RAM, whatever the board. The base units cap the worker at
 # 2 GB and the dashboard at 1 GB; under 3 GB of RAM those caps sit above

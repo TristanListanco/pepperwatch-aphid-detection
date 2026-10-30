@@ -1,5 +1,5 @@
 [Unit]
-Description=Pepper Watch wireless access point
+Description=Pepper Watch Wi-Fi: a saved network in range, or the access point
 Documentation=man:nmcli(1)
 # Ordering only. A Wants= here would start NetworkManager at boot even on an
 # image that deliberately runs another network stack, and the AP is skipped
@@ -12,13 +12,16 @@ ConditionPathExists=!/etc/pepperwatch/ap.disabled
 PartOf=pepperwatch.target
 
 [Service]
-# oneshot + RemainAfterExit: bringing the AP up is a single idempotent action,
-# not a daemon. NetworkManager owns the interface once it is configured.
+# oneshot + RemainAfterExit: deciding and bringing the network up is a single
+# idempotent action, not a daemon. NetworkManager owns the interface after.
+# `systemctl restart pepperwatch-ap` re-decides (saved network or hotspot).
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/pepperwatch/deploy/network/setup-ap.sh
-ExecStop=/usr/bin/nmcli connection down pepperwatch-ap
-TimeoutStartSec=60
+# "-": on a saved network the hotspot was never up, so there is nothing to stop.
+ExecStop=-/usr/bin/nmcli connection down pepperwatch-ap
+# A scan, up to 30 s joining a saved network, then the hotspot if that failed.
+TimeoutStartSec=120
 
 [Install]
 WantedBy=pepperwatch.target
