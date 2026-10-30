@@ -32,7 +32,6 @@ function bootDashboard() {
   const prefs = displayPrefs();
   const liveMode = prefs.live ? 'mjpeg' : 'poll';
   if (live) {
-    live.toggleOverlay(prefs.boxes);
     live.setMirror(prefs.mirror);
     // Start the never-ending MJPEG response after the page has loaded, or the
     // browser shows the page as loading for as long as the stream runs.
@@ -57,6 +56,9 @@ function bootDashboard() {
   bus.on('pipeline', (payload) => {
     renderPipeline(document, payload);
     controls.setPaused(payload.paused);
+    // Paused means no new detections: hide the boxes rather than leave the
+    // last ones frozen over a moving picture.
+    if (live) live.toggleOverlay(!payload.paused);
   });
   bus.on('summary', (payload) => renderSummary(document, payload));
 
@@ -106,7 +108,11 @@ function bootDashboard() {
     : null;
   if (history) {
     history.load();
-    bus.on('persisted', () => history.load());
+    bus.on('persisted', (event) => {
+      history.load();
+      // The worker saved it: confirmation that the snapshot really happened.
+      if (event.trigger === 'manual') toast('Snapshot saved to the detection log');
+    });
   }
 
   bus.on('flag', (payload) => {
@@ -117,7 +123,7 @@ function bootDashboard() {
 
   // -- weekly stats ------------------------------------------------------
 
-  poll(async () => {
+  const refreshStats = async () => {
     const stats = await fetchJson(`/api/stats/weekly?locale=${locale()}`);
     if (!stats) return;
     renderKpis(document, stats);
@@ -127,7 +133,14 @@ function bootDashboard() {
 
     const stamp = document.querySelector('[data-updated]');
     if (stamp) stamp.textContent = `updated ${relative(new Date().toISOString())}`;
-  }, STATS_INTERVAL_MS);
+  };
+  poll(refreshStats, STATS_INTERVAL_MS);
+
+  // Data cleared from Settings, on this phone or another: drop what is shown.
+  bus.on('cleared', () => {
+    if (history) history.load();
+    refreshStats();
+  });
 
   bus.start();
   window.addEventListener('beforeunload', () => {

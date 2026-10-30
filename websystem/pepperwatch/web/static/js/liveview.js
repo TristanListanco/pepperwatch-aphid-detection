@@ -22,7 +22,7 @@ const POLL_MS = 1000;
 // Display preferences for this device, set on the Settings page. Live video
 // is on by default; turning it off drops to one frame a second, which spares
 // the access point's bandwidth when several phones are watching.
-const DISPLAY_DEFAULTS = { live: true, boxes: true, mirror: false };
+const DISPLAY_DEFAULTS = { live: true, mirror: false };
 
 export function displayPrefs() {
   const prefs = {};
@@ -69,6 +69,10 @@ export class LiveView {
 
     this.image.addEventListener('load', () => {
       this.viewport.classList.add('is-active');
+      // Take the camera's own shape, so the picture fills the frame with no
+      // bars at the sides.
+      const { naturalWidth: w, naturalHeight: h } = this.image;
+      if (w && h) this.viewport.style.setProperty('--aspect', `${w} / ${h}`);
       this.resize();
     });
     this.image.addEventListener('error', () => {

@@ -99,7 +99,7 @@ export class Bus {
 
     [
       'telemetry/system', 'telemetry/pipeline', 'detect/frame', 'detect/flag',
-      'event/persisted', 'status/worker', 'status/session', 'session/summary',
+      'event/persisted', 'status/worker', 'status/session', 'session/summary', 'data/cleared',
     ].forEach(
       (topic) => {
         source.addEventListener(topic, (event) => {
@@ -164,6 +164,9 @@ export class Bus {
         break;
       case 'session/summary':
         this.emit('summary', payload);
+        break;
+      case 'data/cleared':
+        this.emit('cleared', payload);
         break;
       default:
         break;

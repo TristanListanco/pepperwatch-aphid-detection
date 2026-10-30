@@ -20,15 +20,10 @@
 
   <div class="shell">
     <nav class="rail" aria-label="Sections">
-      <a class="rail-brand" href="{{ url_for('pages.dashboard') }}" title="Pepper Watch">
-        <svg class="icon" aria-hidden="true"><use href="#i-leaf"/></svg>
-        <span class="sr-only">Pepper Watch</span>
-      </a>
-
       <div class="rail-items">
         <a class="rail-item" href="{{ url_for('pages.dashboard') }}" title="Dashboard"
            {% if page == 'dashboard' %}aria-current="page"{% endif %}>
-          <svg class="icon" aria-hidden="true"><use href="#i-house"/></svg>
+          <svg class="icon" aria-hidden="true"><use href="#i-leaf"/></svg>
           <span class="rail-label">Dashboard</span>
         </a>
         <a class="rail-item" href="{{ url_for('pages.settings') }}" title="Settings"

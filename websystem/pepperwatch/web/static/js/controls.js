@@ -20,7 +20,7 @@ export class Controls {
           await postJson('/api/capture', { hi_res: true });
           // 202, not 200: the worker takes the still asynchronously, so the
           // gallery entry appears a moment later rather than immediately.
-          this.onToast('Snapshot requested — it will appear in the log shortly');
+          this.onToast('Taking a snapshot…');
         } catch (error) {
           this.onToast(`Snapshot failed: ${error.message}`, 'error');
         } finally {

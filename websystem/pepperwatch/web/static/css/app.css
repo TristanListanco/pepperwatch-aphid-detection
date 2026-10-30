@@ -187,7 +187,6 @@ button {
   backdrop-filter: saturate(1.4) blur(10px);
 }
 
-.rail-brand,
 .rail-operator {
   display: none;
 }
@@ -243,20 +242,6 @@ button {
     backdrop-filter: none;
   }
 
-  .rail-brand {
-    display: grid;
-    place-items: center;
-    width: 52px;
-    height: 52px;
-    border-radius: 16px;
-    background: var(--green);
-    color: #fff;
-  }
-
-  .rail-brand .icon {
-    width: 24px;
-    height: 24px;
-  }
 
   .rail-items {
     flex-direction: column;
@@ -454,6 +439,25 @@ button {
 }
 
 /* -- banners ----------------------------------------------------------------- */
+
+/* Toasts float above the page, so a confirmation is seen wherever the page is
+ * scrolled; above the tab bar on phones. */
+[data-toast] {
+  position: fixed;
+  z-index: 30;
+  left: 50%;
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 12px 30px -10px rgba(27, 29, 28, 0.45);
+}
+
+@media (min-width: 760px) {
+  [data-toast] {
+    bottom: 28px;
+  }
+}
 
 .banner {
   display: flex;
@@ -831,10 +835,13 @@ button {
 /* -- live view ------------------------------------------------------------- */
 
 .viewport {
+  --aspect: 4 / 3;
   position: relative;
-  aspect-ratio: 4 / 3;
-  max-height: 54vh;
-  width: 100%;
+  aspect-ratio: var(--aspect);
+  /* As wide as fits, but never taller than 60vh: the width follows from the
+   * camera's aspect ratio, so there are no bars to fill. */
+  width: min(100%, calc(60vh * (var(--aspect))));
+  margin-inline: auto;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--inset);

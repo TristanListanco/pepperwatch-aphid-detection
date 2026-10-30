@@ -203,12 +203,15 @@ def test_the_typeface_and_icons_ship_with_the_app(client) -> None:
 
 def test_display_switches_live_on_the_settings_page(client) -> None:
     html = client.get("/settings").get_data(as_text=True)
-    for pref in ("live", "boxes", "mirror"):
+    for pref in ("live", "mirror"):
         assert f'data-pref="{pref}"' in html
+    # Boxes follow inference (hidden while paused), so they have no switch.
+    assert 'data-pref="boxes"' not in html
+    assert "Provenance" not in html
     assert "data-clear-start" in html
 
 
-def test_clear_all_detections_needs_confirmation(client, seeded_db, cfg) -> None:
+def test_clear_all_detections_needs_confirmation(client, app, seeded_db, cfg) -> None:
     image = cfg.media_root / "2026" / "10" / "30" / "scan.jpg"
     image.parent.mkdir(parents=True, exist_ok=True)
     image.write_bytes(b"jpg")
@@ -216,7 +219,11 @@ def test_clear_all_detections_needs_confirmation(client, seeded_db, cfg) -> None
     assert client.post("/api/data/clear", json={}).status_code == 400
     assert client.get("/api/events?archived=all").get_json()["total"] > 0
 
+    published = []
+    app.config["PW_HUB"].publish = lambda event, data: published.append(event)
     body = client.post("/api/data/clear", json={"confirm": "DELETE"}).get_json()
+    # Open dashboards are told, or they keep showing the old scans.
+    assert published == ["data/cleared"]
     assert body["deleted_events"] > 0 and body["deleted_files"] == 1
     assert client.get("/api/events?archived=all").get_json()["total"] == 0
     assert not image.exists() and cfg.media_root.exists()

@@ -25,20 +25,6 @@ export async function initSettings(root) {
   const site = root.querySelector('[data-setting-site]');
   if (site) site.textContent = config.site.name;
 
-  const model = root.querySelector('[data-setting-model]');
-  if (model) {
-    model.textContent = `${config.inference.input_size}px · ${config.inference.class_names.join(', ')}`;
-  }
-
-  const advisory = root.querySelector('[data-setting-advisory]');
-  if (advisory) {
-    const meta = config.advisory || {};
-    advisory.textContent = meta.status || 'unknown';
-    advisory.className = String(meta.status || '').toLowerCase().startsWith('validated')
-      ? 'sev-none'
-      : 'sev-moderate';
-  }
-
   const pinField = root.querySelector('[data-setting-pin]');
   const pinRow = root.querySelector('[data-setting-pin-row]');
   if (pinRow) pinRow.hidden = !config.web.pin_required;

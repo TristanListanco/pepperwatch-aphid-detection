@@ -937,7 +937,7 @@ Session card shows both, and `session.json` records the model's SHA-256.
 | Page | Contents |
 |---|---|
 | `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity), detections this week, average confidence, trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
-| `/settings` | **Display** for this device (live video, detection boxes, mirror camera) · confidence/IoU sliders · language · control PIN · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
+| `/settings` | **Display** for this device (live video, mirror camera; boxes hide while inference is paused) · confidence/IoU sliders · language · control PIN · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
 If a control PIN is set, Capture, Pause/Resume, New session and Clear all
 detections ask for it. The threshold sliders don't.

@@ -63,10 +63,6 @@ export function renderTelemetry(root, telemetry) {
 export function renderPipeline(root, pipeline) {
   if (!pipeline) return;
 
-  // The chips over the live feed.
-  setText(root, 'pipeline-preview-fps', `${num(pipeline.preview_fps, 1)} fps`);
-  setText(root, 'pipeline-inference-fps', `${num(pipeline.inference_fps, 1)} fps`);
-
   setText(root, 'pipeline-inference-rate', num(pipeline.inference_fps, 1));
   setText(root, 'pipeline-preview-rate', num(pipeline.preview_fps, 1));
   setText(root, 'pipeline-latency', num(pipeline.inference_ms, 1));

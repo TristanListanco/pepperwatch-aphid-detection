@@ -493,6 +493,8 @@ def clear_detections():
                 path.rmdir()
     _db().log_system(level="warn", event="detections_cleared", source="web",
                      detail=f"{events} events, {files} files")
+    # Open dashboards would otherwise keep showing the old scans and figures.
+    _hub().publish("data/cleared", {"deleted_events": events})
     return jsonify({"deleted_events": events, "deleted_files": files})
 
 
