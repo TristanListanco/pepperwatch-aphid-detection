@@ -35,6 +35,9 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
         # while templates and scripts stay fresh during development.
         SEND_FILE_MAX_AGE_DEFAULT=0,
         JSON_SORT_KEYS=False,
+        # No request here needs more; a bigger body is refused before it can
+        # use up a small board's memory.
+        MAX_CONTENT_LENGTH=1024 * 1024,
     )
 
     database = Database(cfg)

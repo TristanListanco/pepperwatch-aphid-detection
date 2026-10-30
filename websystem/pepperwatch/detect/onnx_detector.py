@@ -27,6 +27,34 @@ from .postprocess import decode_yolov8, letterbox, to_tensor
 log = logging.getLogger(__name__)
 
 
+def model_class_names(metadata: dict[str, str]) -> list[str] | None:
+    """Class names from an Ultralytics export, mapped to this system's names.
+
+    The metadata holds ``names`` as ``"{0: 'aphid_infested', 1: 'healthy'}"``.
+    Anything healthy becomes ``healthy`` and anything aphid- or damage-related
+    ``aphid_damage``, the names severity, the advice and the charts key on.
+    """
+    import ast
+
+    try:
+        names = ast.literal_eval(metadata.get("names", ""))
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(names, dict) or not names:
+        return None
+    ordered = [str(names[index]) for index in sorted(names)]
+    return [_canonical(name) for name in ordered]
+
+
+def _canonical(name: str) -> str:
+    lowered = name.lower()
+    if "healthy" in lowered:
+        return "healthy"
+    if any(word in lowered for word in ("aphid", "damage", "infest")):
+        return "aphid_damage"
+    return name
+
+
 class OnnxDetector(Detector):
     """Runs a YOLOv8 ONNX export over BGR frames."""
 
@@ -67,6 +95,14 @@ class OnnxDetector(Detector):
         )
         self._input_name = self._session.get_inputs()[0].name
         self._output_name = self._session.get_outputs()[0].name
+
+        # Ultralytics stores the class order it was trained with. Trust that
+        # over the config: a model trained as {0: aphid_infested, 1: healthy}
+        # would otherwise have every label swapped, and severity inverted.
+        trained = model_class_names(self._session.get_modelmeta().custom_metadata_map)
+        if trained and trained != self._class_names:
+            log.info("using the model's class order %s (config says %s)", trained, self._class_names)
+            self._class_names = trained
 
         # Honour the model's own input size when it is static, rather than the
         # config's guess. A mismatch here would silently letterbox to the wrong

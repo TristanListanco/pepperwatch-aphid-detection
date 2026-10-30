@@ -566,7 +566,6 @@ button {
     "tiles"
     "alerts"
     "devices"
-    "advice"
     "donut"
     "session"
     "history";
@@ -577,7 +576,6 @@ button {
 .dash-tiles { grid-area: tiles; }
 .dash-alerts { grid-area: alerts; display: grid; gap: 12px; }
 .dash-alerts:not(:has(.banner:not([hidden]))) { display: none; }
-.dash-advice { grid-area: advice; }
 .dash-donut { grid-area: donut; }
 .dash-session { grid-area: session; }
 .dash-history { grid-area: history; }
@@ -589,7 +587,6 @@ button {
       "live live"
       "tiles tiles"
       "alerts alerts"
-      "devices advice"
       "devices donut"
       "session session"
       "history history";
@@ -604,8 +601,7 @@ button {
       "live devices"
       "tiles devices"
       "alerts devices"
-      "advice donut"
-      "session session"
+      "session donut"
       "history history";
   }
 
@@ -860,6 +856,10 @@ button {
   object-fit: contain;
 }
 
+.viewport.is-mirrored img {
+  transform: scaleX(-1);
+}
+
 /* No src until the camera is started; keep the empty image out of sight so
  * the idle state never shows a broken-image box. */
 .viewport:not(.is-active) img,
@@ -975,6 +975,32 @@ button {
   background: #000;
 }
 
+.btn.is-danger {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.btn.is-danger:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+
+.clear-confirm {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.clear-confirm p {
+  margin: 0;
+}
+
+.settings-grid .toggle + .note {
+  margin-top: 2px;
+}
+
 .btn.is-quiet {
   background: transparent;
   color: var(--ink-2);
@@ -1045,90 +1071,6 @@ button {
 .toggle input:focus-visible + .track {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
-}
-
-/* -- advice ---------------------------------------------------------------- */
-
-.advisory-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 16px;
-}
-
-.banner + .advisory-head {
-  margin-top: 18px;
-}
-
-.card-body > .advisory-head:first-child {
-  margin-top: 0;
-}
-
-.advisory-headline {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 500;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
-}
-
-.advisory-urgency {
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--inset);
-  color: var(--ink-2);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.advisory-urgency.is-monitor {
-  background: var(--green-soft);
-  color: var(--green-deep);
-}
-
-.advisory-urgency.is-act_soon {
-  background: var(--amber-soft);
-  color: var(--amber-ink);
-}
-
-.advisory-urgency.is-urgent {
-  background: var(--red-soft);
-  color: var(--red);
-}
-
-.advisory-body {
-  margin: 10px 0 0;
-  max-width: 68ch;
-  font-size: 14.5px;
-  color: var(--ink-2);
-  line-height: 1.6;
-}
-
-.advisory-actions {
-  margin: 14px 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: 8px;
-  max-width: 68ch;
-}
-
-.advisory-actions li {
-  display: flex;
-  gap: 10px;
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-.advisory-actions li::before {
-  content: "";
-  flex: 0 0 6px;
-  width: 6px;
-  height: 6px;
-  margin-top: 8px;
-  border-radius: 50%;
-  background: var(--green);
 }
 
 /* -- donut ----------------------------------------------------------------- */

@@ -1,4 +1,5 @@
-// The Settings page: detection thresholds, locale, and the control PIN.
+// The Settings page: display preferences, detection thresholds, locale, the
+// control PIN, and clearing stored detections.
 //
 // The confidence slider matters more than it looks. Figure 3.3 specifies a
 // fixed "Confidence Filter (80)", but 0.80 on small aphid clusters would
@@ -7,10 +8,14 @@
 // value be chosen from a measured precision/recall sweep instead of asserted,
 // which is a stronger result to defend.
 
-import { fetchJson, patchJson } from './bus.js';
+import { fetchJson, patchJson, postJson } from './bus.js';
 import { num } from './fmt.js';
+import { displayPrefs, setDisplayPref } from './liveview.js';
 
 export async function initSettings(root) {
+  bindDisplayPrefs(root);
+  bindClear(root);
+
   const config = await fetchJson('/api/config');
   if (!config) return;
 
@@ -58,6 +63,45 @@ export async function initSettings(root) {
       window.location.reload();
     });
   }
+}
+
+// Saved in this browser and read by the dashboard when it next opens.
+function bindDisplayPrefs(root) {
+  const prefs = displayPrefs();
+  root.querySelectorAll('[data-pref]').forEach((input) => {
+    input.checked = prefs[input.dataset.pref];
+    input.addEventListener('change', () => setDisplayPref(input.dataset.pref, input.checked));
+  });
+}
+
+// Two steps, inline: a pop-up confirm is easy to dismiss by reflex on a phone.
+function bindClear(root) {
+  const start = root.querySelector('[data-clear-start]');
+  const confirm = root.querySelector('[data-clear-confirm]');
+  const status = root.querySelector('[data-clear-status]');
+  if (!start || !confirm) return;
+
+  start.addEventListener('click', () => {
+    confirm.hidden = false;
+    start.hidden = true;
+  });
+  root.querySelector('[data-clear-no]').addEventListener('click', () => {
+    confirm.hidden = true;
+    start.hidden = false;
+  });
+  root.querySelector('[data-clear-yes]').addEventListener('click', async (event) => {
+    event.target.disabled = true;
+    try {
+      const result = await postJson('/api/data/clear', { confirm: 'DELETE' });
+      status.textContent = `Deleted ${result.deleted_events} detections and ${result.deleted_files} image files.`;
+    } catch (error) {
+      status.textContent = `Could not clear: ${error.message}`;
+    } finally {
+      event.target.disabled = false;
+      confirm.hidden = true;
+      start.hidden = false;
+    }
+  });
 }
 
 function bindSlider(root, key, initial) {

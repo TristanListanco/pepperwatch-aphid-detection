@@ -15,8 +15,10 @@ invalidating a data-collection run.
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -25,6 +27,7 @@ from functools import wraps
 from flask import Blueprint, Response, current_app, jsonify, request
 
 from ..models import Detection
+from ..session import csv_safe
 from ..mqtt_bus import Topics
 
 log = logging.getLogger(__name__)
@@ -64,6 +67,13 @@ def _locale() -> str:
     return requested if requested in _advisory().locales else "en"
 
 
+# A 6-digit PIN falls to a script in minutes without a limit: five wrong
+# guesses from one address lock it out for five minutes.
+_PIN_MAX_FAILURES = 5
+_PIN_LOCKOUT_S = 300.0
+_pin_lock = threading.Lock()
+
+
 def require_pin(view):
     """Gate a mutating endpoint behind the configured PIN, if any."""
 
@@ -73,9 +83,23 @@ def require_pin(view):
         if not expected:
             return view(*args, **kwargs)
 
-        supplied = request.headers.get("X-Pepper-Pin") or (request.json or {}).get("pin", "")
-        if str(supplied) != expected:
-            return jsonify({"error": "invalid or missing control PIN"}), 403
+        client = request.remote_addr or "unknown"
+        now = time.monotonic()
+        failures = current_app.config.setdefault("PW_PIN_FAILURES", {})
+        with _pin_lock:
+            recent = [t for t in failures.get(client, []) if now - t < _PIN_LOCKOUT_S]
+            failures[client] = recent
+            if len(recent) >= _PIN_MAX_FAILURES:
+                return jsonify({"error": "too many wrong PINs; try again in five minutes"}), 429
+
+        body = request.get_json(silent=True)
+        supplied = request.headers.get("X-Pepper-Pin") or (
+            body.get("pin", "") if isinstance(body, dict) else ""
+        )
+        if not hmac.compare_digest(str(supplied).encode(), expected.encode()):
+            with _pin_lock:
+                failures.setdefault(client, []).append(now)
+            return jsonify({"error": "wrong or missing control PIN: enter it in Settings"}), 403
         return view(*args, **kwargs)
 
     return wrapper
@@ -275,7 +299,7 @@ def export_csv():
         for row in database.iter_export_rows(since=since, until=until):
             buffer.seek(0)
             buffer.truncate(0)
-            writer.writerow([row[column] if column in row.keys() else "" for column in EXPORT_COLUMNS])
+            writer.writerow([csv_safe(row[column]) if column in row.keys() else "" for column in EXPORT_COLUMNS])
             yield buffer.getvalue()
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -441,6 +465,34 @@ def set_time():
     )
 
 
+@bp.post("/data/clear")
+@require_pin
+def clear_detections():
+    """Delete every saved detection, its boxes and its images.
+
+    Requires ``{"confirm": "DELETE"}`` so a stray request cannot wipe the
+    record. Session CSV files are left alone: they are measurements, not
+    detections.
+    """
+    payload = request.get_json(silent=True) or {}
+    if payload.get("confirm") != "DELETE":
+        return jsonify({"error": 'send {"confirm": "DELETE"} to clear all detections'}), 400
+
+    events = _db().clear_detections()
+    root = _cfg().media_root.resolve()
+    files = 0
+    if root.is_dir():
+        for path in sorted(root.rglob("*"), reverse=True):  # files before their folders
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                files += 1
+            elif path.is_dir():
+                path.rmdir()
+    _db().log_system(level="warn", event="detections_cleared", source="web",
+                     detail=f"{events} events, {files} files")
+    return jsonify({"deleted_events": events, "deleted_files": files})
+
+
 # -- ingest ----------------------------------------------------------------
 
 
@@ -477,6 +529,10 @@ def ingest_detections():
         except (KeyError, TypeError, ValueError) as exc:
             return jsonify({"error": f"boxes[{index}] is invalid: {exc}"}), 400
 
+        # Class names reach the dashboard's charts; accept only the known ones.
+        if detection.class_name not in _cfg().inference.class_names:
+            return jsonify({"error": f"boxes[{index}].class_name must be one of "
+                                     f"{list(_cfg().inference.class_names)}"}), 400
         if not 0.0 <= detection.confidence <= 1.0:
             return jsonify({"error": f"boxes[{index}].confidence must be within 0..1"}), 400
         if detection.w <= 0 or detection.h <= 0:

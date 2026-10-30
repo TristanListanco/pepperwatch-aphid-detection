@@ -533,6 +533,19 @@ class Database:
 
     # -- maintenance -------------------------------------------------------
 
+    def clear_detections(self) -> int:
+        """Delete every detection event and its boxes. Returns the events removed.
+
+        Only on an operator's explicit request (Settings > Clear all
+        detections). Telemetry in system_log is kept: it is diagnostics, not
+        detections.
+        """
+        with self.write() as conn:
+            conn.execute("DELETE FROM bounding_box")
+            removed = conn.execute("DELETE FROM detection_event").rowcount
+        log.warning("cleared %d detection events on request", removed)
+        return removed
+
     def prune(self, *, retention_days: int) -> int:
         """Delete telemetry older than the retention window.
 

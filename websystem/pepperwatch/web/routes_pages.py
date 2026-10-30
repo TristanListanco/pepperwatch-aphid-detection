@@ -29,11 +29,6 @@ def dashboard():
     return render_template("dashboard.html", page="dashboard", **_context())
 
 
-@bp.get("/archived")
-def archived():
-    return render_template("archived.html", page="archived", **_context())
-
-
 @bp.get("/settings")
 def settings():
     return render_template("settings.html", page="settings", **_context())
@@ -48,7 +43,6 @@ def media(relative: str):
     route that maps user input onto the filesystem.
     """
     root: Path = current_app.config["PW_CONFIG"].media_root
-    candidate = (root / relative).resolve()
-    if not str(candidate).startswith(str(root.resolve())):
+    if not (root / relative).resolve().is_relative_to(root.resolve()):
         abort(404)
     return send_from_directory(root, relative, max_age=3600)

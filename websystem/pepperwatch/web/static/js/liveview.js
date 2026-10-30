@@ -19,6 +19,33 @@ import { classColour, classLabel } from './fmt.js';
 
 const POLL_MS = 1000;
 
+// Display preferences for this device, set on the Settings page. Live video
+// is on by default; turning it off drops to one frame a second, which spares
+// the access point's bandwidth when several phones are watching.
+const DISPLAY_DEFAULTS = { live: true, boxes: true, mirror: false };
+
+export function displayPrefs() {
+  const prefs = {};
+  for (const [key, fallback] of Object.entries(DISPLAY_DEFAULTS)) {
+    let stored = null;
+    try {
+      stored = localStorage.getItem(`pw-${key}`);
+    } catch (error) {
+      // Private mode or blocked storage: fall back to the defaults.
+    }
+    prefs[key] = stored === null ? fallback : stored === '1';
+  }
+  return prefs;
+}
+
+export function setDisplayPref(key, on) {
+  try {
+    localStorage.setItem(`pw-${key}`, on ? '1' : '0');
+  } catch (error) {
+    // Not persisted; applies until the page reloads.
+  }
+}
+
 export class LiveView {
   constructor(root) {
     this.root = root;
@@ -32,6 +59,7 @@ export class LiveView {
     this.detections = [];
     this.frameSeq = null;
     this.showOverlay = true;
+    this.mirror = false;
 
     // Redraw on resize: the canvas backing store is sized in device pixels, so
     // a rotated phone or a resized window needs new dimensions or the overlay
@@ -101,6 +129,14 @@ export class LiveView {
     this.draw();
   }
 
+  // Flips the picture; boxes are drawn at mirrored positions instead of being
+  // flipped with it, so their labels stay readable.
+  setMirror(on) {
+    this.mirror = on;
+    this.viewport.classList.toggle('is-mirrored', on);
+    this.draw();
+  }
+
   // -- drawing -----------------------------------------------------------
 
   resize() {
@@ -167,7 +203,8 @@ export class LiveView {
 
     this.detections.forEach((detection) => {
       const colour = classColour(detection.class_name);
-      const x = box.x + detection.x * box.width;
+      const left = this.mirror ? 1 - detection.x - detection.w : detection.x;
+      const x = box.x + left * box.width;
       const y = box.y + detection.y * box.height;
       const w = detection.w * box.width;
       const h = detection.h * box.height;

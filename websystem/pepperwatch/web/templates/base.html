@@ -31,11 +31,6 @@
           <svg class="icon" aria-hidden="true"><use href="#i-house"/></svg>
           <span class="rail-label">Dashboard</span>
         </a>
-        <a class="rail-item" href="{{ url_for('pages.archived') }}" title="Archived scans"
-           {% if page == 'archived' %}aria-current="page"{% endif %}>
-          <svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg>
-          <span class="rail-label">Archived</span>
-        </a>
         <a class="rail-item" href="{{ url_for('pages.settings') }}" title="Settings"
            {% if page == 'settings' %}aria-current="page"{% endif %}>
           <svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg>

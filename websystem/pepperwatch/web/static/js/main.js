@@ -6,8 +6,7 @@ import { DeviceList } from './devices.js';
 import { renderDonut } from './donut.js';
 import { History } from './history.js';
 import { renderKpis } from './kpis.js';
-import { LiveView } from './liveview.js';
-import { renderAdvisory } from './advisory.js';
+import { LiveView, displayPrefs } from './liveview.js';
 import { renderPipeline, renderSummary, renderTelemetry } from './performance.js';
 import { SessionPanel } from './session.js';
 import { initSettings } from './settings.js';
@@ -30,36 +29,20 @@ function bootDashboard() {
 
   // -- live feed ---------------------------------------------------------
 
+  const prefs = displayPrefs();
+  const liveMode = prefs.live ? 'mjpeg' : 'poll';
   if (live) {
-    const startBtn = document.querySelector('[data-action-start-camera]');
-    const liveToggle = document.querySelector('[data-toggle-live]');
-    const overlayToggle = document.querySelector('[data-toggle-overlay]');
-
-    if (startBtn) {
-      startBtn.addEventListener('click', () => {
-        live.setMode(live.mode === 'idle' ? 'poll' : 'idle');
-        startBtn.textContent = live.mode === 'idle' ? 'Start Camera' : 'Stop Camera';
-        if (liveToggle && live.mode === 'idle') liveToggle.checked = false;
-      });
-    }
-
-    if (liveToggle) {
-      liveToggle.addEventListener('change', () => {
-        // Going live costs roughly 6-7 Mbit/s of the Pi's single radio, which
-        // is why it is opt-in rather than the default.
-        live.setMode(liveToggle.checked ? 'mjpeg' : 'poll');
-        if (startBtn) startBtn.textContent = 'Stop Camera';
-      });
-    }
-
-    if (overlayToggle) {
-      overlayToggle.addEventListener('change', () => live.toggleOverlay(overlayToggle.checked));
-    }
-
-    bus.on('detections', (payload) => {
-      live.update(payload);
-      if (payload.advice) renderAdvisory(document, payload.advice);
+    live.toggleOverlay(prefs.boxes);
+    live.setMirror(prefs.mirror);
+    // Start the never-ending MJPEG response after the page has loaded, or the
+    // browser shows the page as loading for as long as the stream runs.
+    window.addEventListener('load', () => live.setMode(liveMode), { once: true });
+    // A background tab would otherwise hold one of the few MJPEG slots, and
+    // the radio's bandwidth, for nobody.
+    document.addEventListener('visibilitychange', () => {
+      live.setMode(document.hidden ? 'idle' : liveMode);
     });
+    bus.on('detections', (payload) => live.update(payload));
   }
 
   // -- performance, power and the session --------------------------------
@@ -101,6 +84,11 @@ function bootDashboard() {
   bus.on('worker', (state) => {
     if (devices) devices.setWorker(state);
     showWorker(state);
+    // MJPEG falls back to polling while the worker is down; go live again
+    // once it is back.
+    if (live && state.alive && liveMode === 'mjpeg' && live.mode === 'poll' && !document.hidden) {
+      live.setMode('mjpeg');
+    }
   });
 
   bus.on('mode', (mode) => {
@@ -137,10 +125,6 @@ function bootDashboard() {
     const donut = document.querySelector('[data-donut]');
     if (donut) renderDonut(donut, stats.distribution, document.querySelector('[data-legend]'));
 
-    // Only fall back to the weekly advice when no live detection has arrived,
-    // so a live reading is never overwritten by a seven-day average.
-    if (!window.__pw.sseMessages && stats.advice) renderAdvisory(document, stats.advice);
-
     const stamp = document.querySelector('[data-updated]');
     if (stamp) stamp.textContent = `updated ${relative(new Date().toISOString())}`;
   }, STATS_INTERVAL_MS);
@@ -175,12 +159,6 @@ function checkWorker() {
     .catch(() => {});
 }
 
-function bootArchived() {
-  checkWorker();
-  const root = document.querySelector('[data-history]');
-  if (root) new History(root, { pageSize: 16 }).load();
-}
-
 function bootSettings() {
   checkWorker();
   initSettings(document).catch((error) => console.error('[pw] settings failed', error));
@@ -188,5 +166,4 @@ function bootSettings() {
 
 const page = document.body.dataset.page;
 if (page === 'dashboard') bootDashboard();
-else if (page === 'archived') bootArchived();
 else if (page === 'settings') bootSettings();

@@ -120,14 +120,14 @@ def test_ingest_accepts_a_clean_scan(client) -> None:
         ({"frame_seq": 1, "boxes": [{"class_id": 1}]}, "invalid"),
         (
             {"frame_seq": 1, "boxes": [
-                {"class_id": 1, "class_name": "a", "confidence": 1.7,
+                {"class_id": 1, "class_name": "aphid_damage", "confidence": 1.7,
                  "x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}
             ]},
             "confidence",
         ),
         (
             {"frame_seq": 1, "boxes": [
-                {"class_id": 1, "class_name": "a", "confidence": 0.5,
+                {"class_id": 1, "class_name": "aphid_damage", "confidence": 0.5,
                  "x": 0.1, "y": 0.1, "w": 0.0, "h": 0.1}
             ]},
             "positive width",
@@ -403,3 +403,55 @@ def test_time_sync_records_a_large_forward_jump(client, app) -> None:
 def test_time_sync_rejects_garbage(client) -> None:
     assert client.post("/api/time", json={"iso": "not a date"}).status_code == 400
     assert client.post("/api/time", json={}).status_code == 400
+
+
+# -- security ------------------------------------------------------------------
+
+
+def _set_pin(app, pin: str) -> None:
+    app.config["PW_CONFIG"].web._data["control_pin"] = pin  # noqa: SLF001
+
+
+def test_wrong_pins_lock_the_client_out(app, client) -> None:
+    """Five wrong guesses, then even the right PIN waits: no brute-forcing 6 digits."""
+    _set_pin(app, "482913")
+    for _ in range(5):
+        assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "000000"}).status_code == 403
+    locked = client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"})
+    assert locked.status_code == 429
+
+
+def test_the_right_pin_passes_and_a_non_json_body_does_not_crash(app, client) -> None:
+    _set_pin(app, "482913")
+    # No worker in tests, so an accepted command reports 503, not 403.
+    assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"}).status_code == 503
+    assert client.post("/api/inference/pause", data="pin=1", content_type="text/plain").status_code == 403
+
+
+def test_oversized_requests_are_refused(client) -> None:
+    assert client.post("/api/detections", data="x" * (2 * 1024 * 1024),
+                       content_type="application/json").status_code == 413
+
+
+def test_ingest_rejects_unknown_class_names(client) -> None:
+    """Class names are drawn into the charts; arbitrary ones would be stored XSS."""
+    box = {"class_id": 1, "class_name": "<img src=x onerror=alert(1)>", "confidence": 0.5,
+           "x": 0.1, "y": 0.1, "w": 0.1, "h": 0.1}
+    assert client.post("/api/detections", json={"frame_seq": 1, "boxes": [box]}).status_code == 400
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("=HYPERLINK(\"x\")", "'=HYPERLINK(\"x\")"), ("+1", "'+1"), ("-cmd", "'-cmd"),
+    ("@SUM(A1)", "'@SUM(A1)"), ("row 3", "row 3"), (-1.5, -1.5), (None, None),
+])
+def test_csv_cells_cannot_become_formulas(value, expected) -> None:
+    from pepperwatch.session import csv_safe
+
+    assert csv_safe(value) == expected
+
+
+def test_media_route_rejects_a_sibling_directory(client, cfg) -> None:
+    sibling = cfg.media_root.parent / (cfg.media_root.name + "-old")
+    sibling.mkdir(parents=True, exist_ok=True)
+    (sibling / "secret.jpg").write_bytes(b"x")
+    assert client.get(f"/media/../{sibling.name}/secret.jpg").status_code == 404

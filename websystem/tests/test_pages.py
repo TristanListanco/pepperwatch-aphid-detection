@@ -14,7 +14,7 @@ import re
 
 import pytest
 
-PAGES = ["/", "/archived", "/settings"]
+PAGES = ["/", "/settings"]
 
 # Any absolute URL to somewhere that is not this device.
 EXTERNAL_URL = re.compile(r"""(?:src|href)\s*=\s*["'](?!/|data:|\#)([a-zA-Z]+:)?//""")
@@ -49,7 +49,6 @@ def test_dashboard_contains_every_table_3_4_component(client) -> None:
 
     required = {
         "Live Inference View": "data-live",
-        "Actionable Output Panel": "data-advice-headline",
         "Historical Detection Log": "data-gallery",
         "System Health Monitor": "data-health-temp",
         "Capture & Export Controls": "data-action-snapshot",
@@ -71,11 +70,9 @@ def test_dashboard_contains_the_figure_3_4_elements(client) -> None:
         "data-kpi-trend",        # Trend tile
         "data-kpi-severity",     # Severity tile
         "data-donut",            # Detection Distribution
-        "data-toggle-live",      # the Live toggle
     ):
         assert hook in html, f"Figure 3.4 element {hook} is missing"
 
-    assert "Start Camera" in html
     assert "Detection Distribution" in html
 
 
@@ -119,15 +116,6 @@ def test_trimmed_metrics_are_gone(client) -> None:
     html = client.get("/").get_data(as_text=True)
     for hook in ("data-health-battery", "data-health-disk", "data-health-mem", "data-insight"):
         assert hook not in html
-
-
-def test_unvalidated_advice_shows_a_draft_banner(client) -> None:
-    """Unreviewed pesticide guidance must never present as settled advice."""
-    html = client.get("/").get_data(as_text=True)
-    assert "Draft guidance" in html
-    assert "agriculturist" in html
-    # The banner is only hidden once the content file says it was validated.
-    assert 'data-advice-draft hidden' not in html
 
 
 def test_settings_explains_the_threshold_departure(client) -> None:
@@ -211,3 +199,24 @@ def test_the_typeface_and_icons_ship_with_the_app(client) -> None:
     html = client.get("/").get_data(as_text=True)
     assert 'id="i-leaf"' in html and 'href="#i-leaf"' in html
     assert client.get("/static/LICENSES.md").status_code == 200
+
+
+def test_display_switches_live_on_the_settings_page(client) -> None:
+    html = client.get("/settings").get_data(as_text=True)
+    for pref in ("live", "boxes", "mirror"):
+        assert f'data-pref="{pref}"' in html
+    assert "data-clear-start" in html
+
+
+def test_clear_all_detections_needs_confirmation(client, seeded_db, cfg) -> None:
+    image = cfg.media_root / "2026" / "10" / "30" / "scan.jpg"
+    image.parent.mkdir(parents=True, exist_ok=True)
+    image.write_bytes(b"jpg")
+
+    assert client.post("/api/data/clear", json={}).status_code == 400
+    assert client.get("/api/events?archived=all").get_json()["total"] > 0
+
+    body = client.post("/api/data/clear", json={"confirm": "DELETE"}).get_json()
+    assert body["deleted_events"] > 0 and body["deleted_files"] == 1
+    assert client.get("/api/events?archived=all").get_json()["total"] == 0
+    assert not image.exists() and cfg.media_root.exists()

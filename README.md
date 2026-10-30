@@ -44,6 +44,7 @@ Python 3.11+, since it needs no hardware.
 - [Adding the trained model](#adding-the-trained-model)
 - [Using the dashboard](#using-the-dashboard)
 - [REST API](#rest-api)
+- [Security](#security)
 - [Operations](#operations)
 - [Testing and benchmarking](#testing-and-benchmarking)
 - [CI/CD: test before deploy](#cicd-test-before-deploy)
@@ -290,11 +291,13 @@ would mean two hubs, and each phone would see only half the traffic.
 
 The live picture is served separately, straight from shared memory:
 
-- `/frame.jpg` returns the latest frame. **This is the default:** the page polls
-  it about once a second, roughly 0.4 Mbit/s per phone.
-- `/stream.mjpg` is a continuous MJPEG stream, opened only when the user taps
-  *Start Camera*. It's throttled to `stream_fps = 10` and limited to 4 viewers,
-  because the Pi's radio in AP mode can only carry a few such streams.
+- `/stream.mjpg` is a continuous MJPEG stream. **This is the default:** the
+  dashboard opens it once the page has loaded, and closes it while the tab is
+  in the background. It's throttled to `stream_fps = 10` and limited to 4
+  viewers, because the Pi's radio in AP mode can only carry a few such streams.
+- `/frame.jpg` returns the latest frame. With *Live video* turned off in
+  Settings (per device), or when the stream is refused, the page polls it
+  about once a second instead, roughly 0.4 Mbit/s per phone.
 
 Shared memory uses two slots behind a seqlock: the writer fills the idle slot
 and then flips the header, and readers retry if it changed while they copied. No
@@ -854,9 +857,13 @@ has reviewed it; the draft banner then goes away.
 
 ## Adding the trained model
 
-Both files are trained once, as YOLOv8n with two classes in this order:
-`0 = healthy`, `1 = aphid_damage`. If the order differs, change
-`inference.class_names` to match.
+Both files are trained once, as YOLOv8 with two classes: healthy leaves and
+aphid damage. The class order doesn't matter for an ONNX export: the worker
+reads the names stored in the file (e.g. `{0: 'aphid_infested', 1: 'healthy'}`)
+and maps them, so labels can't come out swapped. A HEF stores no names, so it
+must use the order in `inference.class_names`. YOLOv8**n** is what the frame-rate
+targets assume; a larger model (a 52 MB `.pt` is YOLOv8m) runs several times
+slower on the CPU.
 
 **For the CPU: an ONNX export.**
 
@@ -907,6 +914,19 @@ the checkout into `/opt/pepperwatch`, so the next install would delete them.
 `*.onnx` and `*.hef` are gitignored, so models won't end up in the repository by
 accident.
 
+**Copying a model from your computer to the Pi** (models aren't in git):
+
+```bash
+scp best.onnx <user>@<pi-address>:~/pepperwatch-aphid-detection/websystem/models/pepperwatch.onnx
+# then, on the Pi
+cd ~/pepperwatch-aphid-detection/websystem && sudo ./deploy/install.sh
+sudo -u pepperwatch /opt/pepperwatch/.venv/bin/python -m pepperwatch.doctor
+```
+
+`doctor` loads the model, runs one test inference, and reports the file,
+classes, input size and time per frame. Until a model is in place the Session
+card shows *heuristic stub, not a trained model*.
+
 On start, the worker logs which model and accelerator it chose; the dashboard's
 Session card shows both, and `session.json` records the model's SHA-256.
 
@@ -916,12 +936,11 @@ Session card shows both, and `session.json` records the model's SHA-256.
 
 | Page | Contents |
 |---|---|
-| `/` Dashboard | **Live camera** (frame + box overlay, Start Camera for MJPEG, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity), detections this week, average confidence, trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **What to do** (advice in English/Cebuano) · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
-| `/archived` | Scans hidden from the main gallery |
-| `/settings` | Confidence/IoU sliders, language, control PIN |
+| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity), detections this week, average confidence, trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Detection Distribution** donut · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (searchable gallery, detections CSV) |
+| `/settings` | **Display** for this device (live video, detection boxes, mirror camera) · confidence/IoU sliders · language · control PIN · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
-If a control PIN is set, the Capture, Pause/Resume, Archive and Settings
-changes ask for it.
+If a control PIN is set, Capture, Pause/Resume, the threshold sliders and
+Clear all detections ask for it.
 
 ---
 
@@ -943,6 +962,7 @@ All responses are JSON unless noted. 🔒 = needs the control PIN (header
 | GET | `/api/recommendations[/<severity>]` | Advisory text (`?locale=en\|ceb`) |
 | GET | `/api/export.csv` | One row per box, with provenance columns. Query: `from`, `to` |
 | POST 🔒 | `/api/capture` | Request a high-res snapshot → `202` |
+| POST 🔒 | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST 🔒 | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
 | GET / PATCH 🔒 | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99) |
 | POST 🔒 | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
@@ -964,6 +984,34 @@ curl -X POST -H 'X-Pepper-Pin: 4821' http://192.168.4.1:8000/api/capture
 curl -o scans.csv 'http://192.168.4.1:8000/api/export.csv'
 curl -o sessions.csv 'http://192.168.4.1:8000/api/sessions.csv'
 ```
+
+---
+
+## Security
+
+What protects the device, and what to be aware of. Threat model: a field unit
+reachable by anyone within Wi-Fi range or on the same wired network.
+
+| Layer | Protection |
+|---|---|
+| Wi-Fi | WPA2 with a random 12-character password, generated at install |
+| Controls | Snapshot, pause, thresholds, new sessions, data clearing and REST ingest need the **control PIN**, generated at install and printed at the end. Five wrong guesses lock that address out for five minutes; the comparison is constant-time |
+| Requests | Bodies over 1 MB are refused; ingested class names must be the known ones (they are drawn into the charts); file downloads are confined to their folders by path, not string prefix |
+| Data exports | CSV cells that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) are written as plain text |
+| Broker | Mosquitto listens on `127.0.0.1` only; nothing on the network can publish commands |
+| Services | Run as the unprivileged `pepperwatch` user, with systemd sandboxing (read-only system, private `/tmp`, no new privileges) and memory caps |
+| Browser | Strict Content-Security-Policy: no external scripts, styles or frames |
+| Updates | The Pi only installs commits that passed CI (`stable`), over HTTPS |
+
+**Know these limits:**
+- The dashboard is **plain HTTP on port 8000, on every interface.** Over the
+  access point WPA2 encrypts it; on a wired network the PIN and data travel in
+  the clear, and anyone on that network can *view* the dashboard. Use the wired
+  connection only on a network you trust.
+- **Viewing needs no login.** Anyone on the Wi-Fi can see the live camera and
+  saved scans; the PIN guards only changes.
+- **Secure the OS itself:** change the default user's password, prefer SSH
+  keys, and turn SSH off for field deployment if you don't need it.
 
 ---
 

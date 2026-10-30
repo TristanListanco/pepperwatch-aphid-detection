@@ -2,6 +2,39 @@
 {% block title %}Settings{% endblock %}
 
 {% block content %}
+<section class="card" id="display">
+  <div class="card-head">
+    <h2>Display</h2>
+    <span class="card-sub">This device only</span>
+  </div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div>
+        <label class="toggle">
+          <input type="checkbox" data-pref="live">
+          <span class="track"></span> Live video
+        </label>
+        <p class="note">Continuous video. Off shows one frame a second, which saves the
+          access point's bandwidth when several phones are watching.</p>
+      </div>
+      <div>
+        <label class="toggle">
+          <input type="checkbox" data-pref="boxes">
+          <span class="track"></span> Detection boxes
+        </label>
+        <p class="note">Draw the detected leaves and aphid clusters over the video.</p>
+      </div>
+      <div>
+        <label class="toggle">
+          <input type="checkbox" data-pref="mirror">
+          <span class="track"></span> Mirror camera
+        </label>
+        <p class="note">Flip the live view left to right. Saved scans are not mirrored.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <section class="card">
   <div class="card-head">
     <h2>Detection Thresholds</h2>
@@ -88,6 +121,27 @@
           Treatment guidance needs review by an agriculturist before it reaches
           farmers. Until then the dashboard marks it as a draft.
         </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Data</h2></div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div data-clear>
+        <button class="btn is-danger" type="button" data-clear-start>Clear all detections</button>
+        <p class="note">Deletes every saved scan, its boxes and its images. Session CSV files
+          (frame rates and power) are kept.</p>
+        <div class="clear-confirm" data-clear-confirm hidden>
+          <p><strong>This cannot be undone.</strong> Delete all detections?</p>
+          <div class="live-controls">
+            <button class="btn is-danger" type="button" data-clear-yes>Delete everything</button>
+            <button class="btn is-quiet" type="button" data-clear-no>Cancel</button>
+          </div>
+        </div>
+        <p class="note" data-clear-status role="status" aria-live="polite"></p>
       </div>
     </div>
   </div>

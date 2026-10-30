@@ -205,3 +205,20 @@ def test_a_hailo_choice_that_cannot_start_falls_back_to_the_cpu(
         assert "pepperwatch_hailo8l.hef" in final.reason
     finally:
         det.close()
+
+
+@pytest.mark.parametrize(
+    "names,expected",
+    [
+        ("{0: 'aphid_infested', 1: 'healthy'}", ["aphid_damage", "healthy"]),
+        ("{0: 'healthy', 1: 'aphid_damage'}", ["healthy", "aphid_damage"]),
+        ("{0: 'Healthy Leaf', 1: 'Aphid Damage'}", ["healthy", "aphid_damage"]),
+        ("not a dict", None),
+        ("", None),
+    ],
+)
+def test_class_order_comes_from_the_model(names, expected) -> None:
+    """A model trained with the classes the other way round must not swap labels."""
+    from pepperwatch.detect.onnx_detector import model_class_names
+
+    assert model_class_names({"names": names}) == expected

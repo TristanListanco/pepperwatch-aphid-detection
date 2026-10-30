@@ -4,7 +4,7 @@
 // is self-contained -- it does not need the live overlay stream to make sense,
 // which matters because these are the evidence record.
 
-import { fetchJson, postJson } from './bus.js';
+import { fetchJson } from './bus.js';
 import { dateTime, num, pct, relative, severityLabel } from './fmt.js';
 
 export class History {
@@ -17,7 +17,6 @@ export class History {
     this.offset = 0;
     this.total = 0;
     this.filters = {};
-    this.archivedView = root.dataset.archived === 'true';
 
     this.bindFilters();
     this.bindDialog();
@@ -68,7 +67,8 @@ export class History {
     const params = new URLSearchParams({
       limit: String(this.pageSize),
       offset: String(this.offset),
-      archived: this.archivedView ? 'true' : 'false',
+      // There is no archive view any more, so scans archived earlier show too.
+      archived: 'all',
       ...this.filters,
     });
     return `/api/events?${params.toString()}`;
@@ -88,9 +88,7 @@ export class History {
 
   render(items) {
     if (!items.length) {
-      this.gallery.innerHTML = `<p class="empty">${
-        this.archivedView ? 'Nothing archived yet.' : 'No scans match these filters.'
-      }</p>`;
+      this.gallery.innerHTML = '<p class="empty">No scans match these filters.</p>';
       return;
     }
 
@@ -207,16 +205,6 @@ export class History {
           )} · ${event.inference_ms ? `${num(event.inference_ms, 0)} ms` : '—'}</div>
           ${event.synthetic ? '<div class="sev-moderate">Synthetic — not a field measurement</div>' : ''}
           ${event.advice ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
-      }
-
-      const archive = this.dialog.querySelector('[data-dialog-archive]');
-      if (archive) {
-        archive.textContent = event.archived ? 'Restore' : 'Archive';
-        archive.onclick = async () => {
-          await postJson(`/api/events/${eventId}/archive`, { archived: !event.archived });
-          this.dialog.close();
-          this.load();
-        };
       }
 
       this.dialog.showModal();

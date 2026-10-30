@@ -516,6 +516,17 @@ def _r(value: float | None, digits: int = 3) -> float | None:
     return round(value, digits) if value is not None else None
 
 
+def csv_safe(value: Any) -> Any:
+    """Neutralise text a spreadsheet would run as a formula (=, +, -, @).
+
+    Labels and model names are free text; opened in Excel, a cell starting
+    with "=" is executed. A leading apostrophe makes it plain text.
+    """
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def _format(row: dict[str, Any]) -> dict[str, Any]:
     """CSV-friendly: floats rounded, None as an empty cell, bools as 0/1.
 
@@ -532,7 +543,7 @@ def _format(row: dict[str, Any]) -> dict[str, Any]:
             digits = 6 if key.endswith("_wh") else 4
             out[key] = round(value, digits) if math.isfinite(value) else ""
         else:
-            out[key] = value
+            out[key] = csv_safe(value)
     return out
 
 

@@ -178,7 +178,10 @@ install -d -m 700 "$CONFIG_DIR"
 log "Installing to $APP_DIR"
 install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
 # Preserve runtime state across upgrades.
+# Models are not in git, so --delete would remove one copied straight into
+# $APP_DIR/models; P(rotect) keeps it while still copying the checkout's.
 rsync -a --delete \
+  --filter 'P models/*.onnx' --filter 'P models/*.hef' \
   --exclude '.venv' --exclude 'var' --exclude '.git' \
   --exclude '__pycache__' --exclude '*.pyc' \
   --exclude 'config/local.toml' \
@@ -206,6 +209,8 @@ fi
 # -- configuration ---------------------------------------------------------
 
 log "Configuration"
+new_pin() { printf '%06d' "$(( $(od -An -N4 -tu4 /dev/urandom) % 1000000 ))"; }
+
 if [ ! -f "$APP_DIR/config/local.toml" ]; then
   cat > "$APP_DIR/config/local.toml" <<TOML
 # Local overrides. Not in version control.
@@ -221,18 +226,25 @@ path = "$DATA_DIR/db/pepperwatch.db"
 root = "$DATA_DIR/media"
 
 [web]
-# Gates snapshot, pause and threshold changes. Reading never needs it.
-# Leave empty to disable, but note that anyone within Wi-Fi range can then
-# pause a running field trial.
-control_pin = ""
+# Gates snapshot, pause, thresholds, new sessions and clearing data. Reading
+# never needs it. Emptying it lets anyone on the Wi-Fi or wired network do
+# all of those.
+control_pin = "$(new_pin)"
 secret_key = "$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
 TOML
   chown "$APP_USER:$APP_USER" "$APP_DIR/config/local.toml"
   chmod 640 "$APP_DIR/config/local.toml"
-  note "wrote config/local.toml with a generated secret key"
+  note "wrote config/local.toml with a generated secret key and control PIN"
 else
   note "config/local.toml exists; left untouched"
 fi
+# Earlier installs shipped without a PIN, which left every control open to
+# anyone on the network.
+if grep -q '^control_pin = ""' "$APP_DIR/config/local.toml"; then
+  sed -i "s/^control_pin = \"\"$/control_pin = \"$(new_pin)\"/" "$APP_DIR/config/local.toml"
+  note "set a control PIN (there was none)"
+fi
+CONTROL_PIN="$(sed -n 's/^control_pin = "\(.*\)"$/\1/p' "$APP_DIR/config/local.toml")"
 
 if [ ! -f "$CONFIG_DIR/ap.psk" ]; then
   head -c 12 /dev/urandom | base64 | tr -d '/+=' | head -c 12 > "$CONFIG_DIR/ap.psk"
@@ -314,11 +326,19 @@ fi
 cat <<EOF
 
     Start everything:   sudo systemctl start pepperwatch.target
+    Stop everything:    sudo systemctl stop pepperwatch.target
+    Restart after an update (keeps the Wi-Fi up):
+                        sudo systemctl restart pepperwatch-worker pepperwatch-web
+    Status:             systemctl status pepperwatch-worker pepperwatch-web --no-pager
     Watch the logs:     journalctl -fu pepperwatch-worker -u pepperwatch-web
     Re-check health:    sudo -u $APP_USER $APP_DIR/.venv/bin/python -m pepperwatch.doctor
 
     $AP_SUMMARY
     On the wired network: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8000/
+
+    Control PIN:    ${CONTROL_PIN:-none}
+    Enter it once in Settings on each phone; snapshot, pause, new sessions,
+    thresholds and clearing data need it.
 
     Session CSV files (inference, power, fps) are written to
     $DATA_DIR/sessions and can be downloaded from the dashboard.

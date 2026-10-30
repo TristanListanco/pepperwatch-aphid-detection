@@ -445,17 +445,53 @@ def check_database() -> Check:
 
 
 def check_model() -> Check:
-    from .config import load
+    """Load the model this board would use, and run it once on a blank frame."""
+    import numpy as np
 
-    cfg = load()
-    if cfg.model_path.exists():
-        size_mb = cfg.model_path.stat().st_size / 1e6
-        return Check("model", OK, f"{cfg.model_path.name}, {size_mb:.1f} MB")
-    return Check(
-        "model", WARN, f"no model at {cfg.model_path}",
-        "the heuristic stub will run instead. Its output is NOT model output "
-        "and every event it writes is flagged synthetic — do not report it.",
-    )
+    from .accel import choose_accelerator
+    from .config import load
+    from .detect import get_detector
+
+    base = load()
+    choice = choose_accelerator(base)
+    cfg = base.with_profile(choice.profile)
+    try:
+        detector, final = get_detector(cfg, choice)
+    except Exception as exc:  # noqa: BLE001
+        return Check("model", FAIL, f"would not load: {type(exc).__name__}: {exc}",
+                     "re-export it; see README: Adding the trained model")
+
+    frame = np.zeros((cfg.camera.preview_height, cfg.camera.preview_width, 3), np.uint8)
+    try:
+        detector.detect(frame)  # warm-up: the first call allocates
+        began = time.perf_counter()
+        detector.detect(frame)
+        ms = (time.perf_counter() - began) * 1000
+        info = detector.info
+    except Exception as exc:  # noqa: BLE001 — e.g. a head with the wrong class count
+        return Check("model", FAIL, f"loaded but inference failed: {exc}",
+                     f"check the model was trained for {list(cfg.inference.class_names)}")
+    finally:
+        detector.close()
+
+    name = Path(info.detail.get("hef_path") or info.detail.get("model_path") or "").name
+    detail = (f"{name or info.model_version} on {final.name}, {info.input_size} px, "
+              f"classes {', '.join(info.class_names)}, {ms:.0f} ms per frame")
+    if info.synthetic:
+        return Check(
+            "model", WARN, f"no model file; {detail}",
+            "the heuristic stub runs instead. Its output is NOT model output "
+            "and every event it writes is flagged synthetic — do not report it.",
+        )
+    if final.kind != choice.kind:
+        return Check("model", WARN, f"{detail} (the AI HAT+ failed: {final.reason})",
+                     "if the worker is running it holds the HAT: "
+                     "sudo systemctl stop pepperwatch-worker, then re-run doctor")
+    if info.input_size != cfg.inference.input_size:
+        return Check("model", WARN, detail,
+                     f"this board's tier expects {cfg.inference.input_size} px; export "
+                     f"models/pepperwatch_{cfg.inference.input_size}.onnx for full speed")
+    return Check("model", OK, detail)
 
 
 def check_storage() -> Check:
