@@ -317,8 +317,6 @@ def test_config_exposes_only_the_tunables(client) -> None:
     assert set(body) == {"site", "inference", "severity", "web", "locales", "advisory"}
     # Secrets must never appear.
     assert "secret_key" not in body["web"]
-    assert "control_pin" not in body["web"]
-    assert body["web"]["pin_required"] is False
 
 
 def test_config_default_threshold_is_not_figure_3_3s_value(client) -> None:
@@ -340,32 +338,6 @@ def test_patch_config_rejects_out_of_range_thresholds(client, value) -> None:
 
 def test_patch_config_rejects_an_empty_body(client) -> None:
     assert client.patch("/api/config", json={}).status_code == 400
-
-
-# -- the PIN gate ----------------------------------------------------------
-
-
-def test_mutating_endpoints_require_the_pin_when_one_is_set(cfg) -> None:
-    """Without this, anyone in Wi-Fi range can pause a running field trial."""
-    from pepperwatch.web import create_app
-
-    cfg.web._data["control_pin"] = "4242"  # noqa: SLF001
-    app = create_app(cfg, start_hub=False)
-    app.config.update(TESTING=True)
-    client = app.test_client()
-
-    assert client.post("/api/inference/pause").status_code == 403
-    assert client.post("/api/detections", json={"frame_seq": 1, "boxes": []}).status_code == 403
-    # Thresholds are a tuning knob, deliberately free to change.
-    assert client.patch("/api/config", json={"conf_threshold": 0.3}).status_code == 200
-
-    # Reads stay open: a farmer should not need a PIN to look at their crop.
-    assert client.get("/api/events").status_code == 200
-    assert client.get("/api/stats/weekly").status_code == 200
-
-    assert client.post("/api/detections", json={"frame_seq": 1, "boxes": []},
-                       headers={"X-Pepper-Pin": "4242"}).status_code == 201
-    assert client.get("/api/config").get_json()["web"]["pin_required"] is True
 
 
 # -- clock -----------------------------------------------------------------
@@ -406,34 +378,6 @@ def test_time_sync_rejects_garbage(client) -> None:
 
 
 # -- security ------------------------------------------------------------------
-
-
-def _set_pin(app, pin: str) -> None:
-    app.config["PW_CONFIG"].web._data["control_pin"] = pin  # noqa: SLF001
-
-
-def test_wrong_pins_lock_the_client_out(app, client) -> None:
-    """Five wrong guesses, then even the right PIN waits: no brute-forcing 6 digits."""
-    _set_pin(app, "482913")
-    for _ in range(5):
-        assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "000000"}).status_code == 403
-    locked = client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"})
-    assert locked.status_code == 429
-
-
-def test_a_missing_pin_never_locks_the_owner_out(app, client) -> None:
-    """Pressing buttons before typing the PIN is a mistake, not a guess."""
-    _set_pin(app, "482913")
-    for _ in range(10):
-        assert client.post("/api/inference/pause").status_code == 403
-    assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"}).status_code == 503
-
-
-def test_the_right_pin_passes_and_a_non_json_body_does_not_crash(app, client) -> None:
-    _set_pin(app, "482913")
-    # No worker in tests, so an accepted command reports 503, not 403.
-    assert client.post("/api/inference/pause", headers={"X-Pepper-Pin": "482913"}).status_code == 503
-    assert client.post("/api/inference/pause", data="pin=1", content_type="text/plain").status_code == 403
 
 
 def test_oversized_requests_are_refused(client) -> None:

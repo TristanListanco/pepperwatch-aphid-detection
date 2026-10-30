@@ -4,25 +4,18 @@ Manuscript §3.3.2.1 assigns HTTP REST the "larger, high-density payloads" —
 images and historical data — while MQTT carries telemetry. This blueprint is
 that half, plus the control endpoints the dashboard's buttons call.
 
-Mutating endpoints are gated behind a shared PIN when one is configured. The
-manuscript does not mention authentication, and on an open field access point
-that is a real gap: anyone within Wi-Fi range could otherwise pause the detector
-or rewrite thresholds mid-trial. The PIN is deliberately minimal — it is not
-meant to resist an attacker, only to stop a curious passer-by from silently
-invalidating a data-collection run.
+There is no authentication: anyone who can reach the dashboard can use every
+control. The Wi-Fi password is the only gate.
 """
 
 from __future__ import annotations
 
 import csv
-import hmac
 import io
 import logging
-import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from functools import wraps
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -65,48 +58,6 @@ def _locale() -> str:
     """Requested locale, restricted to what the content file actually has."""
     requested = request.args.get("locale", "en")
     return requested if requested in _advisory().locales else "en"
-
-
-# A 6-digit PIN falls to a script in minutes without a limit: five wrong
-# guesses from one address lock it out for five minutes.
-_PIN_MAX_FAILURES = 5
-_PIN_LOCKOUT_S = 300.0
-_pin_lock = threading.Lock()
-
-
-def require_pin(view):
-    """Gate a mutating endpoint behind the configured PIN, if any."""
-
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        expected = str(_cfg().web.control_pin or "")
-        if not expected:
-            return view(*args, **kwargs)
-
-        client = request.remote_addr or "unknown"
-        now = time.monotonic()
-        failures = current_app.config.setdefault("PW_PIN_FAILURES", {})
-        with _pin_lock:
-            recent = [t for t in failures.get(client, []) if now - t < _PIN_LOCKOUT_S]
-            failures[client] = recent
-            if len(recent) >= _PIN_MAX_FAILURES:
-                return jsonify({"error": "too many wrong PINs; try again in five minutes"}), 429
-
-        body = request.get_json(silent=True)
-        supplied = request.headers.get("X-Pepper-Pin") or (
-            body.get("pin", "") if isinstance(body, dict) else ""
-        )
-        if not supplied:
-            # Not a guess: a phone that has no PIN yet. Not counted, so it
-            # cannot lock its owner out before they have typed one.
-            return jsonify({"error": "this needs the control PIN: enter it in Settings"}), 403
-        if not hmac.compare_digest(str(supplied).encode(), expected.encode()):
-            with _pin_lock:
-                failures.setdefault(client, []).append(now)
-            return jsonify({"error": "wrong control PIN: check it in Settings"}), 403
-        return view(*args, **kwargs)
-
-    return wrapper
 
 
 def _publish_command(topic: str, payload: dict) -> bool:
@@ -243,7 +194,6 @@ def get_event(event_id: int):
 
 
 @bp.post("/events/<int:event_id>/archive")
-@require_pin
 def archive_event(event_id: int):
     payload = request.get_json(silent=True) or {}
     archived = bool(payload.get("archived", True))
@@ -318,7 +268,6 @@ def export_csv():
 
 
 @bp.post("/capture")
-@require_pin
 def capture():
     """Ask the worker for a high-resolution snapshot."""
     payload = request.get_json(silent=True) or {}
@@ -336,7 +285,6 @@ def capture():
 
 
 @bp.post("/inference/<action>")
-@require_pin
 def inference_control(action: str):
     """Pause or resume inference, per Table 3.4's Capture & Export Controls."""
     if action not in ("pause", "resume"):
@@ -365,7 +313,6 @@ def get_config():
                 "stream_fps": cfg.web.stream_fps,
                 "stream_width": cfg.web.stream_width,
                 "max_stream_clients": cfg.web.max_stream_clients,
-                "pin_required": bool(cfg.web.control_pin),
             },
             "locales": _advisory().locales,
             "advisory": _advisory().meta,
@@ -407,7 +354,6 @@ def patch_config():
 
 
 @bp.post("/time")
-@require_pin
 def set_time():
     """Accept a clock reading from a connecting client.
 
@@ -469,7 +415,6 @@ def set_time():
 
 
 @bp.post("/data/clear")
-@require_pin
 def clear_detections():
     """Delete every saved detection, its boxes and its images.
 
@@ -502,7 +447,6 @@ def clear_detections():
 
 
 @bp.post("/detections")
-@require_pin
 def ingest_detections():
     """Accept a detection payload over HTTP and persist it.
 

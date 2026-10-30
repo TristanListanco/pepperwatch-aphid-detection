@@ -1,5 +1,5 @@
-// The Settings page: display preferences, detection thresholds, locale, the
-// control PIN, and clearing stored detections.
+// The Settings page: display preferences, detection thresholds, locale, and
+// clearing stored detections.
 //
 // The confidence slider matters more than it looks. Figure 3.3 specifies a
 // fixed "Confidence Filter (80)", but 0.80 on small aphid clusters would
@@ -24,19 +24,6 @@ export async function initSettings(root) {
 
   const site = root.querySelector('[data-setting-site]');
   if (site) site.textContent = config.site.name;
-
-  const pinField = root.querySelector('[data-setting-pin]');
-  const pinRow = root.querySelector('[data-setting-pin-row]');
-  if (pinRow) pinRow.hidden = !config.web.pin_required;
-  if (pinField) {
-    pinField.value = sessionStorage.getItem('pw-pin') || '';
-    // sessionStorage, not localStorage: the PIN should not outlive the tab on a
-    // phone that gets handed around a farm.
-    pinField.addEventListener('change', () => {
-      if (pinField.value) sessionStorage.setItem('pw-pin', pinField.value);
-      else sessionStorage.removeItem('pw-pin');
-    });
-  }
 
   const localeSelect = root.querySelector('[data-setting-locale]');
   if (localeSelect) {

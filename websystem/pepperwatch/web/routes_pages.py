@@ -20,7 +20,6 @@ def _context() -> dict:
         "advisory_validated": advisory.validated,
         "class_names": list(cfg.inference.class_names),
         "stream_fps": cfg.web.stream_fps,
-        "pin_required": bool(cfg.web.control_pin),
     }
 
 

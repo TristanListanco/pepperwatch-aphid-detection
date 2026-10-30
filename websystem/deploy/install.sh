@@ -209,8 +209,6 @@ fi
 # -- configuration ---------------------------------------------------------
 
 log "Configuration"
-new_pin() { printf '%06d' "$(( $(od -An -N4 -tu4 /dev/urandom) % 1000000 ))"; }
-
 if [ ! -f "$APP_DIR/config/local.toml" ]; then
   cat > "$APP_DIR/config/local.toml" <<TOML
 # Local overrides. Not in version control.
@@ -226,25 +224,14 @@ path = "$DATA_DIR/db/pepperwatch.db"
 root = "$DATA_DIR/media"
 
 [web]
-# Gates snapshot, pause, thresholds, new sessions and clearing data. Reading
-# never needs it. Emptying it lets anyone on the Wi-Fi or wired network do
-# all of those.
-control_pin = "$(new_pin)"
 secret_key = "$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
 TOML
   chown "$APP_USER:$APP_USER" "$APP_DIR/config/local.toml"
   chmod 640 "$APP_DIR/config/local.toml"
-  note "wrote config/local.toml with a generated secret key and control PIN"
+  note "wrote config/local.toml with a generated secret key"
 else
   note "config/local.toml exists; left untouched"
 fi
-# Earlier installs shipped without a PIN, which left every control open to
-# anyone on the network.
-if grep -q '^control_pin = ""' "$APP_DIR/config/local.toml"; then
-  sed -i "s/^control_pin = \"\"$/control_pin = \"$(new_pin)\"/" "$APP_DIR/config/local.toml"
-  note "set a control PIN (there was none)"
-fi
-CONTROL_PIN="$(sed -n 's/^control_pin = "\(.*\)"$/\1/p' "$APP_DIR/config/local.toml")"
 
 if [ ! -f "$CONFIG_DIR/ap.psk" ]; then
   head -c 12 /dev/urandom | base64 | tr -d '/+=' | head -c 12 > "$CONFIG_DIR/ap.psk"
@@ -335,10 +322,6 @@ cat <<EOF
 
     $AP_SUMMARY
     On the wired network: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8000/
-
-    Control PIN:    ${CONTROL_PIN:-none}
-    Enter it once in Settings on each phone; snapshot, pause, new sessions
-    and clearing data need it. Thresholds can be changed without it.
 
     Session CSV files (inference, power, fps) are written to
     $DATA_DIR/sessions and can be downloaded from the dashboard.

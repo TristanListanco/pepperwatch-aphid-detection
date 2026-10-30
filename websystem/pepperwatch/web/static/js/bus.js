@@ -267,9 +267,7 @@ export async function fetchJson(url, options = {}) {
 }
 
 export async function postJson(url, body = {}) {
-  const pin = sessionStorage.getItem('pw-pin');
   const headers = { 'Content-Type': 'application/json' };
-  if (pin) headers['X-Pepper-Pin'] = pin;
 
   const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));
@@ -278,9 +276,7 @@ export async function postJson(url, body = {}) {
 }
 
 export async function patchJson(url, body = {}) {
-  const pin = sessionStorage.getItem('pw-pin');
   const headers = { 'Content-Type': 'application/json' };
-  if (pin) headers['X-Pepper-Pin'] = pin;
 
   const response = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));

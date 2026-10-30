@@ -247,7 +247,7 @@ listed here so they can be defended or the manuscript amended.
 | Figure 3.4: System Health Monitor (temperature, CPU, memory, storage, battery) | Performance & Power card | Keeps temperature and CPU load; adds inference and camera fps against the target, latency, power with its source, and session energy. Memory, storage and battery (there is none) were cut. |
 | Inference on the Pi 5 CPU | CPU, or an AI HAT+ when fitted | Detected per session; the accelerator is recorded with every result so the two are never mixed in Chapter IV. |
 | Figure 3.3: "Web Camera" | Both supported | Table 3.2 says MIPI CSI. `[camera].kind` selects either. |
-| Nothing stated | Persist policy, PIN gate, RTC handling | 17 fps × 8 h is ~490k frames/day; an unauthenticated AP lets anyone pause a trial; no NTP means no valid clock. All three needed solving. |
+| Nothing stated | Persist policy, RTC handling | 17 fps × 8 h is ~490k frames/day; no NTP means no valid clock. Both needed solving. Controls have no login: the WPA2 Wi-Fi password is the only gate. |
 
 The full list, including items that need fixing in the manuscript itself rather
 than in code, is kept in `MANUSCRIPT-NOTES.md` alongside the manuscript (not in

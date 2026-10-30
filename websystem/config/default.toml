@@ -5,7 +5,7 @@
 #   [camera].preview_fps   ->  PW_CAMERA_PREVIEW_FPS
 #   [site].name            ->  PW_SITE_NAME
 # A local config/local.toml, if present, is merged on top of this file and
-# beneath the environment. Keep secrets (the AP passphrase, the control PIN)
+# beneath the environment. Keep secrets (the AP passphrase, the secret key)
 # in local.toml, which is gitignored.
 
 [site]
@@ -124,7 +124,6 @@ max_stream_clients = 4
 max_sse_clients = 12
 sse_queue_size = 10
 sse_keepalive_s = 15
-control_pin = ""          # set in local.toml to gate the mutating endpoints
 secret_key = "dev-only-change-me"
 
 [portal]

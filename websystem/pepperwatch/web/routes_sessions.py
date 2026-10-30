@@ -16,7 +16,7 @@ from flask import Blueprint, Response, abort, current_app, jsonify, request, sen
 
 from ..mqtt_bus import Topics
 from ..session import SUMMARY_COLUMNS, _format, list_sessions
-from .routes_api import _publish_command, require_pin
+from .routes_api import _publish_command
 
 bp = Blueprint("sessions", __name__, url_prefix="/api")
 
@@ -45,7 +45,6 @@ def current_session():
 
 
 @bp.post("/session/new")
-@require_pin
 def new_session():
     """End this session and start another, re-detecting camera and AI HAT+."""
     payload = request.get_json(silent=True) or {}
