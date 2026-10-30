@@ -73,6 +73,14 @@
 
   color-scheme: light;
 
+  /* Type roles. One family; size, weight and ink tell the roles apart. */
+  --type-label: 12px;    /* chips, badges, field labels, table headers */
+  --type-note: 13px;     /* helper text, tile notes, metadata */
+  --type-control: 14px;  /* buttons, toggles, table cells, banners */
+  --type-body: 15px;     /* body, and item titles at weight 500 */
+  --type-field: 16px;    /* inputs: below 16px iOS zooms the page on focus */
+  --type-title: 20px;    /* card and section headings */
+
   --sans: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -121,6 +129,11 @@
   color-scheme: dark;
 }
 
+/* Light text on dark reads thinner: the light-weight units go up one step. */
+:root[data-theme="dark"] .tile-value small {
+  font-weight: 400;
+}
+
 *,
 *::before,
 *::after {
@@ -143,11 +156,21 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 15px;
+  font-size: var(--type-body);
   line-height: 1.5;
   caret-color: var(--green);
   -webkit-text-size-adjust: 100%;
   -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 ::selection {
@@ -210,7 +233,7 @@ button {
 }
 
 .note {
-  font-size: 13px;
+  font-size: var(--type-note);
   color: var(--ink-3);
   line-height: 1.55;
   margin: 0;
@@ -255,7 +278,7 @@ button {
   border-radius: var(--radius-sm);
   color: var(--ink-2);
   text-decoration: none;
-  font-size: 11.5px;
+  font-size: var(--type-label);
   font-weight: 500;
   transition: background 0.18s ease, color 0.18s ease;
 }
@@ -360,7 +383,7 @@ button {
 
 .topbar-sub {
   margin: 6px 0 0;
-  font-size: 13.5px;
+  font-size: var(--type-control);
   color: var(--ink-3);
 }
 
@@ -399,7 +422,7 @@ button {
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: var(--type-label);
   font-weight: 500;
   white-space: nowrap;
   box-shadow: var(--shadow);
@@ -440,7 +463,7 @@ button {
   border-radius: 999px;
   background: #fff;
   color: #116632;        /* on the hero tile, which is the same in both themes */
-  font-size: 12.5px;
+  font-size: var(--type-label);
   font-weight: 600;
 }
 
@@ -451,7 +474,7 @@ button {
   margin-top: 10px;
   padding: 7px 11px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: var(--type-label);
   line-height: 1.4;
 }
 
@@ -500,7 +523,7 @@ button {
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--ink-2);
-  font-size: 13.5px;
+  font-size: var(--type-control);
   line-height: 1.5;
   box-shadow: var(--shadow);
 }
@@ -580,13 +603,13 @@ button {
 
 .card-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--type-title);
   font-weight: 500;
   letter-spacing: -0.01em;
 }
 
 .card-sub {
-  font-size: 12.5px;
+  font-size: var(--type-label);
   color: var(--ink-3);
 }
 
@@ -606,7 +629,7 @@ button {
 .section-title {
   margin: 0 0 12px;
   padding: 0 4px;
-  font-size: 17px;
+  font-size: var(--type-title);
   font-weight: 500;
   color: var(--ink);
 }
@@ -697,7 +720,7 @@ button {
 }
 
 .device-name {
-  font-size: 16px;
+  font-size: var(--type-body);
   font-weight: 500;
   letter-spacing: -0.01em;
   line-height: 1.3;
@@ -705,7 +728,7 @@ button {
 
 .device-meta {
   margin-top: 3px;
-  font-size: 13px;
+  font-size: var(--type-note);
   color: var(--ink-3);
 }
 
@@ -752,7 +775,7 @@ button {
 .tile-head h3 {
   flex: 1 1 0;
   margin: 0;
-  font-size: 15px;
+  font-size: var(--type-body);
   font-weight: 500;
   line-height: 1.25;
 }
@@ -760,7 +783,7 @@ button {
 .tile-corner {
   margin-left: auto;
   padding: 3px 9px;
-  font-size: 11.5px;
+  font-size: var(--type-label);
   box-shadow: none;
   background: var(--inset);
 }
@@ -798,7 +821,7 @@ button {
 
 .tile-note {
   margin: 6px 0 0;
-  font-size: 13px;
+  font-size: var(--type-note);
   line-height: 1.4;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
@@ -977,11 +1000,11 @@ button {
 
 .viewport-idle p {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--type-body);
 }
 
 .viewport-idle .muted {
-  font-size: 13px;
+  font-size: var(--type-note);
 }
 
 .viewport.is-active .viewport-idle {
@@ -1000,7 +1023,7 @@ button {
 .viewport-meta .chip {
   background: var(--glass);
   box-shadow: none;
-  font-size: 12px;
+  font-size: var(--type-label);
   padding: 4px 10px;
 }
 
@@ -1013,7 +1036,7 @@ button {
 .live-summary {
   min-height: 1.4em;
   margin: 12px 0 0;
-  font-size: 14px;
+  font-size: var(--type-control);
   line-height: 1.4;
   color: var(--ink-2);
   font-variant-numeric: tabular-nums;
@@ -1040,7 +1063,7 @@ button {
   border: none;
   background: var(--inset);
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--type-control);
   font-weight: 500;
   text-decoration: none;
   cursor: pointer;
@@ -1128,7 +1151,7 @@ button {
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  font-size: 13px;
+  font-size: var(--type-control);
   color: var(--ink-2);
   cursor: pointer;
   user-select: none;
@@ -1187,13 +1210,13 @@ button {
 }
 
 .facts dt {
-  font-size: 12.5px;
+  font-size: var(--type-label);
   color: var(--ink-3);
 }
 
 .facts dd {
   margin: 2px 0 0;
-  font-size: 15px;
+  font-size: var(--type-body);
   overflow-wrap: anywhere;
 }
 
@@ -1228,7 +1251,7 @@ button {
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13.5px;
+  font-size: var(--type-control);
   white-space: nowrap;
 }
 
@@ -1240,7 +1263,7 @@ button {
 }
 
 .table th {
-  font-size: 12px;
+  font-size: var(--type-label);
   font-weight: 500;
   color: var(--ink-3);
 }
@@ -1287,7 +1310,7 @@ button {
 }
 
 .field label {
-  font-size: 12.5px;
+  font-size: var(--type-label);
   color: var(--ink-3);
 }
 
@@ -1300,7 +1323,7 @@ button {
   border-radius: var(--radius-sm);
   background: var(--inset);
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--type-field);
   font-family: inherit;
 }
 
@@ -1324,7 +1347,7 @@ button {
 }
 
 .settings-grid .metric-value {
-  font-size: 18px;
+  font-size: var(--type-title);
   font-weight: 500;
 }
 
@@ -1336,7 +1359,7 @@ button {
 .slider-row .slider-head {
   display: flex;
   justify-content: space-between;
-  font-size: 14px;
+  font-size: var(--type-control);
 }
 
 .slider-row input[type="range"] {
@@ -1388,7 +1411,7 @@ button {
 }
 
 .scan-time {
-  font-size: 13px;
+  font-size: var(--type-note);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1396,7 +1419,7 @@ button {
   display: flex;
   gap: 7px;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--type-label);
   color: var(--ink-3);
 }
 
@@ -1406,7 +1429,7 @@ button {
   align-items: center;
   justify-content: center;
   margin-top: 16px;
-  font-size: 13px;
+  font-size: var(--type-note);
   color: var(--ink-2);
 }
 
@@ -1414,7 +1437,7 @@ button {
   padding: 34px 18px;
   text-align: center;
   color: var(--ink-3);
-  font-size: 14px;
+  font-size: var(--type-control);
 }
 
 .gallery > .empty {
@@ -1450,7 +1473,7 @@ dialog img {
   display: grid;
   gap: 5px;
   padding: 14px 18px;
-  font-size: 14px;
+  font-size: var(--type-control);
 }
 
 /* -- severity and change colours ------------------------------------------------ */
