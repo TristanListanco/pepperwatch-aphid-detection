@@ -461,6 +461,32 @@ Detection events are never pruned automatically; they're the research record.
   dashboard.
 - No DHCP option 114 (RFC 8910): phones only accept it over HTTPS, and an
   offline Pi has no certificate they would trust.
+
+#### Joining another Wi-Fi network (uplink, off by default)
+
+The Pi can join an existing Wi-Fi network and keep the PepperWatch hotspot at
+the same time, so it gets internet (clock sync, `update.sh` without Ethernet):
+
+```bash
+sudo pepperwatch-uplink enable "FarmWiFi"   # asks for the password
+sudo pepperwatch-uplink status
+sudo pepperwatch-uplink disable              # back to hotspot only
+```
+
+- Both share the Pi's one radio: `wlan0` joins the network and the hotspot
+  moves to a virtual interface, `ap0`, on the **same channel** as that network.
+  The setting survives reboots until you disable it.
+- **Experimental.** If the joined network drops or changes channel, the hotspot
+  can drop with it; `sudo systemctl restart pepperwatch-ap` re-syncs it. A
+  network on a 5 GHz DFS channel (52–144) can't host the hotspot at all, so
+  join a 2.4 GHz one. For a long field trial, use a USB Wi-Fi adapter or
+  Ethernet as the uplink instead.
+- Phones on the hotspot still get **no internet**; that is what keeps the
+  captive portal opening by itself.
+- Anyone on the joined network can open the dashboard (port 8000 or 80) and use
+  its controls; there is no login. Only join a network you trust.
+- Run it over SSH on the hotspot and your session drops for a few seconds while
+  the hotspot moves; the command finishes anyway. Reconnect and run `status`.
 - Any unknown page redirects to the dashboard; unknown `/api/` paths still
   return 404.
 

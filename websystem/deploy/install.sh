@@ -79,6 +79,7 @@ apt-get install -y --no-install-recommends \
   i2c-tools \
   v4l-utils \
   qrencode \
+  iw \
   rsync
 
 if [ "$BOARD_IS_RPI" = "1" ]; then
@@ -200,7 +201,7 @@ note "pip may print 'dependency conflicts' among the OS's own Python packages, w
 note "it sees through --system-site-packages. They do not affect Pepper Watch."
 
 # Optional: real voltage and current for Chapter IV's power analysis.
-if i2cdetect -y 1 2>/dev/null | grep -qi "4[0-5]"; then
+if i2cdetect -y 1 2>/dev/null | grep -i "4[0-5]" >/dev/null; then
   note "I2C device detected; installing the INA219 driver"
   sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --quiet \
     adafruit-circuitpython-ina219 || note "INA219 driver install failed (non-fatal)"
@@ -261,6 +262,9 @@ install -m 644 "$APP_DIR/deploy/network/dnsmasq-shared.d/00-pepperwatch-captive.
 install -m 644 "$APP_DIR"/deploy/systemd/pepperwatch*.service /etc/systemd/system/
 install -m 644 "$APP_DIR"/deploy/systemd/pepperwatch*.timer /etc/systemd/system/
 install -m 644 "$APP_DIR/deploy/systemd/pepperwatch.target" /etc/systemd/system/
+# `sudo pepperwatch-uplink enable|disable|status`: join another Wi-Fi network
+# alongside the hotspot. Off unless someone turns it on.
+ln -sf "$APP_DIR/deploy/network/uplink.sh" /usr/local/bin/pepperwatch-uplink
 
 # Memory limits by RAM, whatever the board. The base units cap the worker at
 # 2 GB and the dashboard at 1 GB; under 3 GB of RAM those caps sit above
@@ -291,7 +295,7 @@ AP_FLAG="$CONFIG_DIR/ap.disabled"
 if ! systemctl is-active --quiet NetworkManager; then
   : > "$AP_FLAG"
   AP_NOTE="NetworkManager is not running, so the PepperWatch access point is off."
-elif ! nmcli -t -f TYPE device 2>/dev/null | grep -qx wifi; then
+elif ! nmcli -t -f TYPE device 2>/dev/null | grep -x wifi >/dev/null; then
   : > "$AP_FLAG"
   AP_NOTE="No Wi-Fi radio found, so the PepperWatch access point is off."
 else

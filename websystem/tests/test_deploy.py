@@ -179,6 +179,102 @@ def test_ap_refuses_to_start_without_a_passphrase() -> None:
     assert "exit 1" in body
 
 
+# -- uplink: join another network beside the hotspot -----------------------
+
+FAKE_NMCLI = r"""#!/usr/bin/env bash
+echo "nmcli $*" >> "$FAKE_LOG"
+case "$*" in
+  "device status") printf 'wlan0 wifi connected\nap0 wifi disconnected\n' ;;
+  "-t -f DEVICE,TYPE device") printf 'wlan0:wifi\n' ;;
+  "-g NAME connection show") printf 'pepperwatch-ap\n'; [ -n "$FAKE_UPLINK" ] && echo pepperwatch-uplink ;;
+  "-g connection.interface-name connection show pepperwatch-uplink") echo wlan0 ;;
+  "-g GENERAL.STATE connection show pepperwatch-uplink") echo activated ;;
+  "-g IP4.ADDRESS device show wlan0") echo 10.0.0.5/24 ;;
+esac
+exit 0
+"""
+
+FAKE_IW = r"""#!/usr/bin/env bash
+echo "iw $*" >> "$FAKE_LOG"
+case "$*" in
+  "dev ap0 info") exit 0 ;;
+  "dev wlan0 info") printf '\tchannel 36 (5180 MHz), width: 80 MHz, center1: 5210 MHz\n' ;;
+esac
+exit 0
+"""
+
+
+def run_setup_ap(tmp_path: Path, uplink: bool) -> str:
+    """Run setup-ap.sh against fake nmcli and iw; return what they were asked."""
+    import os
+    import subprocess
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in (("nmcli", FAKE_NMCLI), ("iw", FAKE_IW)):
+        (bin_dir / name).write_text(body)
+        (bin_dir / name).chmod(0o755)
+    log = tmp_path / "calls.log"
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "FAKE_LOG": str(log),
+        "FAKE_UPLINK": "1" if uplink else "",
+        "PW_AP_PSK": "a-test-passphrase",
+    }
+    subprocess.run(
+        ["bash", str(DEPLOY / "network" / "setup-ap.sh")],
+        env=env, check=True, capture_output=True, text=True,
+    )
+    return log.read_text()
+
+
+def test_uplink_mode_moves_the_hotspot_onto_the_uplink_channel(tmp_path) -> None:
+    """One radio, one channel: the hotspot runs on ap0 at the joined network's."""
+    calls = run_setup_ap(tmp_path, uplink=True)
+    modify = next(line for line in calls.splitlines() if "connection modify" in line)
+    assert "connection.interface-name ap0" in modify
+    assert "wifi.channel 36" in modify and "wifi.band a" in modify
+
+
+def test_without_an_uplink_the_hotspot_returns_to_the_radio(tmp_path) -> None:
+    """The default: ap0 left over from uplink mode is removed, wlan0 hosts."""
+    calls = run_setup_ap(tmp_path, uplink=False)
+    assert "iw dev ap0 del" in calls
+    modify = next(line for line in calls.splitlines() if "connection modify" in line)
+    assert "connection.interface-name wlan0" in modify
+    assert "wifi.channel 6" in modify and "wifi.band bg" in modify
+
+
+def test_uplink_command_is_off_by_default_and_safe_over_ssh() -> None:
+    script = DEPLOY / "network" / "uplink.sh"
+    assert script.stat().st_mode & 0o111, "uplink.sh is not executable"
+    body = script.read_text()
+    assert "trap '' HUP" in body          # finishes even if the hotspot SSH drops
+    assert "read -rsp" in body            # the password is never echoed
+    for command in ("enable)", "disable)", "status)"):
+        assert command in body
+
+    install = (DEPLOY / "install.sh").read_text()
+    assert "/usr/local/bin/pepperwatch-uplink" in install
+    code = [line for line in install.splitlines() if not line.lstrip().startswith("#")]
+    assert not [line for line in code if "uplink.sh enable" in line or "uplink enable" in line]
+
+
+def test_deploy_scripts_never_pipe_into_an_early_exit_reader() -> None:
+    """Under pipefail, `nmcli ... | grep -q` reads false whenever nmcli is still
+    writing when grep quits, so setup-ap.sh would re-create a connection that
+    exists. Readers here must consume all their input."""
+    network = list((DEPLOY / "network").glob("*.sh"))
+    for path in (DEPLOY / "install.sh", DEPLOY / "update.sh", *network):
+        # The network scripts read nmcli and iw, so no early-quitting reader at
+        # all; elsewhere only grep -q, which is what reads a real match as none.
+        pattern = r"\|\s*(grep -q|head\b)|exit\}'" if path in network else r"\|\s*grep -q"
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if not line.lstrip().startswith("#"):
+                assert not re.search(pattern, line), f"{path.name}:{number}: {line.strip()}"
+
+
 def test_captive_dns_resolves_everything_to_the_device() -> None:
     conf = (DEPLOY / "network" / "dnsmasq-shared.d" / "00-pepperwatch-captive.conf").read_text()
     assert "address=/#/192.168.4.1" in conf
