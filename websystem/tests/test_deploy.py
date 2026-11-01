@@ -185,9 +185,12 @@ FAKE_NMCLI = r"""#!/usr/bin/env bash
 echo "nmcli $*" >> "$FAKE_LOG"
 case "$*" in
   "device status") printf 'wlan0 wifi disconnected\n' ;;
-  "-t -f NAME,TYPE connection show")
-    printf 'pepperwatch-ap:802-11-wireless\nWired connection 1:802-3-ethernet\n'
-    [ -n "$FAKE_SAVED" ] && printf '%s:802-11-wireless\n' "$FAKE_SAVED" ;;
+  "-t --escape no -f TYPE,NAME connection show")
+    printf '802-11-wireless:pepperwatch-ap\n802-3-ethernet:Wired connection 1\n'
+    [ -n "$FAKE_SAVED" ] && printf '802-11-wireless:%s\n' "$FAKE_SAVED" ;;
+  "-g GENERAL.STATE device show wlan0") echo "${FAKE_STATE:-30 (disconnected)}" ;;
+  "-g GENERAL.CONNECTION device show wlan0") echo "$FAKE_CURRENT" ;;
+  "--wait 30 connection up $FAKE_SAVED ifname wlan0") [ -n "$FAKE_UP_FAILS" ] && exit 4 ;;
   "-g 802-11-wireless.mode connection show pepperwatch-ap") echo ap ;;
   "-g 802-11-wireless.mode connection show $FAKE_SAVED") echo infrastructure ;;
   "-g connection.autoconnect connection show $FAKE_SAVED") echo yes ;;
@@ -200,7 +203,7 @@ exit 0
 """
 
 
-def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "") -> str:
+def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "", **fake: str) -> str:
     """Run setup-ap.sh against a fake nmcli; return what it was asked."""
     import os
     import subprocess
@@ -217,6 +220,7 @@ def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "") -> str:
         "FAKE_SAVED": saved,
         "FAKE_VISIBLE": visible,
         "PW_AP_PSK": "a-test-passphrase",
+        **{f"FAKE_{key.upper()}": value for key, value in fake.items()},
     }
     subprocess.run(
         ["bash", str(DEPLOY / "network" / "setup-ap.sh")],
@@ -242,6 +246,34 @@ def test_a_saved_network_out_of_range_falls_back_to_the_hotspot(tmp_path) -> Non
     calls = run_setup_ap(tmp_path, saved="FarmWiFi", visible="Neighbour")
     assert "connection up FarmWiFi" not in calls
     assert "nmcli connection up pepperwatch-ap" in calls
+
+
+def test_already_connected_keeps_the_network_and_turns_hotspot_autoconnect_off(tmp_path) -> None:
+    """Older installs saved the hotspot with autoconnect on. A Pi that always
+    finds its home network must still have it turned off, or a blip in that
+    network hands the radio to the hotspot."""
+    calls = run_setup_ap(
+        tmp_path, saved="FarmWiFi", current="FarmWiFi", state="100 (connected)",
+    )
+    assert "connection modify pepperwatch-ap connection.autoconnect no" in calls
+    assert "device wifi list" not in calls  # no needless rescan
+    assert "connection up pepperwatch-ap" not in calls
+
+
+def test_a_join_still_in_progress_that_fails_starts_the_hotspot(tmp_path) -> None:
+    """NetworkManager names the network while still joining it; a wrong
+    password then fails the join, and the Pi must not end up with nothing."""
+    calls = run_setup_ap(
+        tmp_path, saved="FarmWiFi", visible="FarmWiFi", current="FarmWiFi",
+        state="70 (connecting (getting IP configuration))", up_fails="1",
+    )
+    assert "nmcli connection up pepperwatch-ap" in calls
+
+
+def test_a_network_with_a_colon_in_its_name_is_joined(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path, saved="Cafe:5G", visible="Cafe:5G")
+    assert "connection up Cafe:5G ifname wlan0" in calls
+    assert "connection up pepperwatch-ap" not in calls
 
 
 def test_deploy_scripts_never_pipe_into_an_early_exit_reader() -> None:

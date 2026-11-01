@@ -55,17 +55,28 @@ fi
 # is why its connection never autoconnects by itself. A network set to not
 # connect automatically is skipped.
 nmcli connection down "$CON_NAME" >/dev/null 2>&1 || true  # frees the radio to scan
+# Older versions saved the hotspot with autoconnect on. Turn it off every run:
+# a Pi that always finds its home network never reaches the hotspot path
+# below, and would otherwise jump to the hotspot whenever that network blips.
+nmcli connection modify "$CON_NAME" connection.autoconnect no >/dev/null 2>&1 || true
 
 saved=()
-while IFS=: read -r name kind; do
+while IFS=: read -r kind name; do
   if [ "$kind" != "802-11-wireless" ] || [ "$name" = "$CON_NAME" ]; then continue; fi
   if [ "$(nmcli -g 802-11-wireless.mode connection show "$name")" = "ap" ]; then continue; fi
   if [ "$(nmcli -g connection.autoconnect connection show "$name")" = "no" ]; then continue; fi
   saved+=("$name")
-done < <(nmcli -t -f NAME,TYPE connection show)
+done < <(nmcli -t --escape no -f TYPE,NAME connection show)
 
 joined=""
-current="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" 2>/dev/null || true)"
+# Only a finished connection counts. GENERAL.CONNECTION names one as soon as
+# NetworkManager starts joining it at boot, and that join can still fail (a
+# changed router password); then the scan below decides instead.
+state="$(nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null || true)"
+current=""
+if [ "${state%% *}" = "100" ]; then
+  current="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" 2>/dev/null || true)"
+fi
 if [ "${#saved[@]}" -gt 0 ]; then
   for name in "${saved[@]}"; do
     if [ "$name" = "$current" ]; then joined="$name"; fi
