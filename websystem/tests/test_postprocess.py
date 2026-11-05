@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 
 from pepperwatch.detect.postprocess import (
-    Letterbox,
     decode_yolov8,
     derive_severity,
+    drop_non_plant,
     iou,
     letterbox,
     non_max_suppression,
@@ -162,6 +162,34 @@ def test_decode_maps_centre_form_to_frame_coordinates() -> None:
     assert det.confidence == pytest.approx(0.88, abs=1e-6)
     assert det.x + det.w / 2 == pytest.approx(0.5, abs=0.01)
     assert det.y + det.h / 2 == pytest.approx(0.5, abs=0.01)
+
+
+def test_decode_keeps_each_box_its_own_score() -> None:
+    """Regression: scores were read by position among the survivors, not by
+    anchor, so every box got anchor 0's near-zero score and NMS kept the
+    wrong one of two overlapping boxes."""
+    head = _head([
+        (100, 100, 10, 10, 0.01, 0.02),     # anchor 0: below threshold
+        (320, 320, 100, 100, 0.01, 0.40),   # weaker of two overlapping boxes
+        (322, 322, 100, 100, 0.01, 0.90),   # the one NMS must keep
+    ])
+    _, transform = letterbox(np.zeros((640, 640, 3), np.uint8), 640)
+    dets = decode_yolov8(head, transform, CLASSES, conf_threshold=0.25, iou_threshold=0.45)
+    assert [round(d.confidence, 2) for d in dets] == [0.90]
+
+
+def test_non_plant_boxes_are_dropped_and_dusty_leaves_kept() -> None:
+    image = np.zeros((100, 300, 3), np.uint8)
+    image[:, :100] = (40, 160, 60)      # leaf green (BGR)
+    image[:, 100:200] = (95, 120, 105)  # grey-green, a dusty damaged leaf
+    image[:, 200:] = (20, 20, 20)       # black plastic pot
+    boxes = [
+        Detection(1, "aphid_damage", 0.8, x=left / 300, y=0.0, w=1 / 3, h=1.0)
+        for left in (0, 100, 200)
+    ]
+    kept = drop_non_plant(image, boxes, 0.10)
+    assert [round(d.x, 2) for d in kept] == [0.0, 0.33]
+    assert drop_non_plant(image, boxes, 0.0) == boxes  # 0 turns it off
 
 
 def test_decode_accepts_transposed_head() -> None:

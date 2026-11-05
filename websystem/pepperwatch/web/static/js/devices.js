@@ -91,15 +91,21 @@ export class DeviceList {
       });
     }
 
-    // Every camera found; the one in use is green.
+    // Every camera found; those in use are green, numbered as on the live
+    // card when there are several.
     const found = camera.found && camera.found.length ? camera.found : [camera];
+    const inUse = meta.cameras && meta.cameras.length ? meta.cameras : [camera];
     found.forEach((candidate) => {
-      const active = candidate.kind === camera.kind && String(candidate.device) === String(camera.device);
+      const position = inUse.findIndex(
+        (used) => used.kind === candidate.kind && String(used.device) === String(candidate.device),
+      );
       const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : candidate.device;
+      let role = 'standby';
+      if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
       out.push({
-        status: active ? 'ok' : 'idle',
+        status: position >= 0 ? 'ok' : 'idle',
         name: candidate.model || 'Camera',
-        meta: [where, active ? 'in use' : 'standby'].filter(Boolean).join(' · '),
+        meta: [where, role].filter(Boolean).join(' · '),
       });
     });
 

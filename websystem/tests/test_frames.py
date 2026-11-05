@@ -271,3 +271,29 @@ def test_reader_follows_a_segment_the_worker_recreated() -> None:
             second.close()
     finally:
         reader.close()
+
+
+@pytest.mark.parametrize("transport", ["shm", "tmpfs"])
+def test_each_camera_has_its_own_frames(transport: str, tmp_path: Path) -> None:
+    """Camera 1's frames must never show up in camera 0's view, or the reverse."""
+    cfg = load(
+        {
+            "frames": {
+                "transport": transport,
+                "shm_name": f"pw_test_cams_{transport}_{int(time.time() * 1000) % 100000}",
+                "slot_bytes": SLOT_BYTES,
+                "tmpfs_dir": str(tmp_path / "frames"),
+            }
+        },
+        use_env=False,
+    )
+    first, second = make_writer(cfg, 0), make_writer(cfg, 1)
+    readers = [make_reader(cfg, 0), make_reader(cfg, 1)]
+    try:
+        second.publish(b"\xff\xd8two\xff\xd9", seq=7, preview_fps=25.0, inference_fps=9.0)
+        assert readers[0].read() is None
+        first.publish(b"\xff\xd8one\xff\xd9", seq=3, preview_fps=25.0, inference_fps=9.0)
+        assert [r.read().seq for r in readers] == [3, 7]
+    finally:
+        for closable in (*readers, first, second):
+            closable.close()

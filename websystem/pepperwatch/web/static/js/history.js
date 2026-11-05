@@ -97,6 +97,8 @@ export class History {
     // rebuild that forgot to detach handlers is the exact leak §3.5.1 asks the
     // Selenium suite to watch for.
     this.gallery.innerHTML = '';
+    // Name the camera only when this page has scans from more than one.
+    this.multiCamera = new Set(items.map((item) => item.camera || 0)).size > 1;
     items.forEach((item) => this.gallery.appendChild(this.tile(item)));
   }
 
@@ -136,6 +138,7 @@ export class History {
         `${item.detection_count} box${item.detection_count === 1 ? '' : 'es'}`,
       ),
     );
+    if (this.multiCamera) detail.appendChild(document.createTextNode(`Cam ${(item.camera || 0) + 1}`));
     if (item.synthetic) {
       const flag = document.createElement('span');
       flag.className = 'sev-moderate';
@@ -193,7 +196,9 @@ export class History {
       if (meta) {
         meta.innerHTML = `
           <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
-            <span class="muted">${escapeHtml(relative(event.captured_at))}</span></div>
+            <span class="muted">${escapeHtml(relative(event.captured_at))}${
+              this.multiCamera ? ` · Camera ${(event.camera || 0) + 1}` : ''
+            }</span></div>
           <div class="sev-${escapeHtml(event.severity)}">Severity: ${escapeHtml(
             severityLabel(event.severity),
           )}</div>

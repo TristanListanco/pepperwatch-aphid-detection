@@ -50,9 +50,10 @@ from .accel import AcceleratorChoice, choose_accelerator
 from .config import Config, detect_board_info, load, total_memory_mb
 from .db import Database, utcnow
 from .detect import Detector, get_detector, severity_from_config
+from .detect.postprocess import drop_non_plant
 from .frames import make_writer
-from .hal import CameraSource, Frame, get_telemetry, open_camera
-from .models import Detection, severity_rank
+from .hal import CameraSource, Frame, get_telemetry, open_cameras
+from .models import Detection
 from .mqtt_bus import STATUS_OFFLINE, STATUS_ONLINE, MqttBus, Topics, make_bus
 from .render import draw_detections, encode_jpeg, make_thumbnail
 from .session import SessionRecorder, request_next_label
@@ -241,28 +242,37 @@ class Worker:
         self.site = cfg.site.name
 
         try:
-            self.camera: CameraSource
-            self.camera, self.cameras_found = open_camera(cfg)
+            self.cameras: list[CameraSource]
+            self.cameras, self.cameras_found = open_cameras(cfg)
         except Exception:
             self.detector.close()
             raise
+        # The primary camera: warm-up, logs, and the single-camera fields of the
+        # session record. Everything per camera below is indexed like cameras.
+        self.camera = self.cameras[0]
+        count = len(self.cameras)
         self.telemetry = get_telemetry(cfg)
         self.db = Database(cfg)
-        self.frames = make_writer(cfg)
+        self.frames = [make_writer(cfg, index) for index in range(count)]
         self.bus: MqttBus = make_bus(cfg, "worker", with_will=True)
 
         self.governor = ThermalGovernor()
-        self.latest = LatestFrame()
-        self.preview_fps = FpsMeter()
+        self.latest = [LatestFrame() for _ in range(count)]
+        self.preview_fps = [FpsMeter() for _ in range(count)]
         self.inference_fps = FpsMeter()
 
-        self.policy = PersistPolicy(
-            heartbeat_detected_s=cfg.persist.heartbeat_detected_s,
-            heartbeat_clean_s=cfg.persist.heartbeat_clean_s,
-            on_state_change=cfg.persist.on_state_change,
-            state_change_debounce_s=cfg.persist.state_change_debounce_s,
-            min_write_interval_s=cfg.persist.min_write_interval_s,
-        )
+        # Per camera, so one camera's state changes and heartbeats do not reset
+        # the other's.
+        self.policy = [
+            PersistPolicy(
+                heartbeat_detected_s=cfg.persist.heartbeat_detected_s,
+                heartbeat_clean_s=cfg.persist.heartbeat_clean_s,
+                on_state_change=cfg.persist.on_state_change,
+                state_change_debounce_s=cfg.persist.state_change_debounce_s,
+                min_write_interval_s=cfg.persist.min_write_interval_s,
+            )
+            for _ in range(count)
+        ]
 
         self._stopping = threading.Event()
         self._paused = threading.Event()
@@ -271,7 +281,7 @@ class Worker:
 
         self._last_telemetry: dict[str, Any] = {}
         self._last_thermal_level = 0
-        self._last_severity = "none"
+        self._last_severity = ["none"] * count
         self._inference_ms = 0.0
         self._events_written = 0
         self._frames_captured = 0
@@ -287,9 +297,9 @@ class Worker:
         """Start everything and block until stopped. Returns an exit code."""
         info = self.detector.info
         log.info(
-            "worker starting: site=%s accelerator=%s detector=%s (%s) camera=%s",
+            "worker starting: site=%s accelerator=%s detector=%s (%s) cameras=%s",
             self.site, self.accelerator.name, info.kind, info.model_version,
-            self.camera.info.description,
+            "; ".join(c.info.description for c in self.cameras),
         )
         if info.synthetic:
             log.warning(
@@ -323,7 +333,7 @@ class Worker:
             source="worker",
             detail=(
                 f"detector={info.kind}:{info.model_version} accelerator={self.accelerator.name} "
-                f"camera={self.camera.info.description}"
+                f"cameras={'; '.join(c.info.description for c in self.cameras)}"
             ),
         )
 
@@ -352,9 +362,10 @@ class Worker:
         )
 
         threads = [
-            threading.Thread(target=self._capture_loop, name="capture", daemon=True),
-            threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True),
+            threading.Thread(target=self._capture_loop, args=(index,), name=f"capture-{index}", daemon=True)
+            for index in range(len(self.cameras))
         ]
+        threads.append(threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True))
         for thread in threads:
             thread.start()
 
@@ -394,20 +405,23 @@ class Worker:
         # A clean disconnect suppresses the Last Will, so publish the offline
         # status deliberately — an intentional stop should not look like a crash.
         self.bus.stop(final_status=(Topics.STATUS_WORKER, STATUS_OFFLINE))
-        self.camera.stop()
+        for camera in self.cameras:
+            camera.stop()
         self.telemetry.close()
         self.detector.close()
-        self.frames.close()
+        for writer in self.frames:
+            writer.close()
         self.db.close()
 
     # -- threads -----------------------------------------------------------
 
-    def _capture_loop(self) -> None:
-        """Run the camera flat out, publishing the clean preview as we go."""
+    def _capture_loop(self, index: int) -> None:
+        """Run one camera flat out, publishing its clean preview as we go."""
         quality = self.cfg.camera.jpeg_quality
+        camera, meter, writer = self.cameras[index], self.preview_fps[index], self.frames[index]
         while not self._stopping.is_set():
             try:
-                frame = self.camera.read()
+                frame = camera.read()
             except Exception:  # noqa: BLE001
                 log.exception("camera read failed")
                 self.db.log_system(level="error", event="camera_error", source="worker")
@@ -418,23 +432,23 @@ class Worker:
                 time.sleep(0.002)
                 continue
 
-            self.preview_fps.mark()
+            meter.mark()
             self._frames_captured += 1
 
             # Published CLEAN. The browser draws boxes on a canvas over this,
             # which keeps encode cost off the inference budget and lets the
             # overlay be toggled and scaled per device.
             try:
-                self.frames.publish(
+                writer.publish(
                     encode_jpeg(frame.bgr, quality),
                     seq=frame.seq,
-                    preview_fps=self.preview_fps.fps,
+                    preview_fps=meter.fps,
                     inference_fps=self.inference_fps.fps,
                 )
             except Exception:  # noqa: BLE001
                 log.exception("frame publish failed")
 
-            self.latest.put(frame)
+            self.latest[index].put(frame)
 
     def _telemetry_loop(self) -> None:
         """Sample sensors, drive the thermal governor, and log on an interval."""
@@ -466,10 +480,11 @@ class Worker:
             self.bus.publish(
                 Topics.TELEMETRY_PIPELINE,
                 {
-                    "preview_fps": round(self.preview_fps.fps, 2),
+                    "preview_fps": round(self.preview_fps[0].fps, 2),
+                    "camera_fps": [round(meter.fps, 2) for meter in self.preview_fps],
                     "inference_fps": round(self.inference_fps.fps, 2),
                     "inference_ms": round(self._inference_ms, 2),
-                    "dropped": self.latest.dropped,
+                    "dropped": self._dropped(),
                     "target_fps": self.cfg.inference.target_fps,
                     "paused": self._paused.is_set(),
                     "thermal_level": state.level,
@@ -521,19 +536,22 @@ class Worker:
                 "input_voltage_v": sample.input_voltage_v,
                 "power_w": sample.best_power_w,
                 "power_source": sample.power_source,
-                "preview_fps": round(self.preview_fps.fps, 2),
+                "preview_fps": round(self.preview_fps[0].fps, 2),
                 "inference_fps": round(self.inference_fps.fps, 2),
                 "inference_ms": round(self._inference_ms, 2),
-                "dropped_frames": self.latest.dropped,
+                "dropped_frames": self._dropped(),
                 "thermal_level": thermal_level,
                 "paused": self._paused.is_set(),
             }
         )
 
+    def _dropped(self) -> int:
+        return sum(slot.dropped for slot in self.latest)
+
     def _counters(self) -> dict[str, int]:
         return {
             "frames_captured": self._frames_captured,
-            "dropped_frames": self.latest.dropped,
+            "dropped_frames": self._dropped(),
             "events_persisted": self._events_written,
         }
 
@@ -544,6 +562,8 @@ class Worker:
 
         info = self.detector.info
         base_interval = 1.0 / max(self.cfg.inference.target_fps, 1)
+        count = len(self.cameras)
+        turn = 0
 
         while not self._stopping.is_set():
             self._drain_snapshots()
@@ -552,13 +572,17 @@ class Worker:
                 self._stopping.wait(timeout=0.2)
                 continue
 
-            frame = self.latest.take(timeout=0.5)
+            # One detector, several cameras: take their newest frames in turn,
+            # so each gets an equal share of the inference rate.
+            index = turn % count
+            turn += 1
+            frame = self.latest[index].take(timeout=0.5 / count)
             if frame is None:
                 continue
 
             began = time.perf_counter()
             try:
-                detections = self.detector.detect(frame.bgr)
+                detections, non_plant = self._detect(frame.bgr)
             except Exception:  # noqa: BLE001
                 log.exception("inference failed")
                 self.db.log_system(level="error", event="inference_error", source="worker")
@@ -567,9 +591,9 @@ class Worker:
             self.inference_fps.mark()
 
             severity, damaged_area = severity_from_config(detections, self.cfg)
-            self._record_inference(frame, detections, severity, damaged_area)
-            self._publish_detections(frame, detections, severity, damaged_area)
-            self._maybe_persist(frame, detections, severity, info)
+            self._record_inference(index, frame, detections, severity, damaged_area, non_plant)
+            self._publish_detections(index, frame, detections, severity, damaged_area)
+            self._maybe_persist(index, frame, detections, severity, info)
 
             # The governor stretches this interval when hot. It does not touch
             # the capture loop, so the preview stays smooth while backing off.
@@ -577,10 +601,25 @@ class Worker:
             if state.multiplier > 1.0:
                 self._stopping.wait(timeout=base_interval * (state.multiplier - 1.0))
 
+    def _detect(self, bgr: np.ndarray) -> tuple[list[Detection], int]:
+        """Detect, then drop boxes with almost no plant colour. Returns the
+        boxes kept and how many were dropped, for the session record."""
+        found = self.detector.detect(bgr)
+        if self.detector.info.synthetic:  # the stub's boxes are not on plants anyway
+            return found, 0
+        kept = drop_non_plant(bgr, found, float(self.cfg.inference.min_plant_fraction))
+        return kept, len(found) - len(kept)
+
     # -- publishing and persistence ---------------------------------------
 
     def _record_inference(
-        self, frame: Frame, detections: list[Detection], severity: str, damaged_area: float
+        self,
+        index: int,
+        frame: Frame,
+        detections: list[Detection],
+        severity: str,
+        damaged_area: float,
+        non_plant: int,
     ) -> None:
         if self.recorder is None:
             return
@@ -588,6 +627,7 @@ class Worker:
         damaged = [d for d in detections if d.class_name != "healthy"]
         self.recorder.record_inference(
             {
+                "camera": index,
                 "frame_seq": frame.seq,
                 "preprocess_ms": timings.preprocess_ms,
                 "infer_ms": timings.infer_ms,
@@ -597,9 +637,10 @@ class Worker:
                 # whole detect call. What an observer of the live view waits.
                 "end_to_end_ms": (time.time() - frame.ts) * 1000.0,
                 "inference_fps": self.inference_fps.fps,
-                "preview_fps": self.preview_fps.fps,
-                "dropped_frames": self.latest.dropped,
+                "preview_fps": self.preview_fps[index].fps,
+                "dropped_frames": self._dropped(),
                 "detections": len(detections),
+                "non_plant_dropped": non_plant,
                 "damage_boxes": len(damaged),
                 "max_confidence": max((d.confidence for d in damaged), default=None),
                 "damaged_area": damaged_area,
@@ -626,6 +667,19 @@ class Worker:
                 "fps": camera.fps,
                 "found": [c.as_dict() for c in self.cameras_found],
             },
+            # Every camera in use, in dashboard order; "camera" above is the first.
+            "cameras": [
+                {
+                    "index": index,
+                    "kind": c.info.kind,
+                    "model": c.info.detail.get("model"),
+                    "device": c.info.detail.get("device"),
+                    "description": c.info.description,
+                    "width": c.info.width,
+                    "height": c.info.height,
+                }
+                for index, c in enumerate(self.cameras)
+            ],
             "detector": {
                 "kind": info.kind,
                 "description": info.description,
@@ -641,6 +695,7 @@ class Worker:
                 "preview_fps": self.cfg.camera.preview_fps,
                 "conf_threshold": self.cfg.inference.conf_threshold,
                 "iou_threshold": self.cfg.inference.iou_threshold,
+                "min_plant_fraction": self.cfg.inference.min_plant_fraction,
                 "intra_op_threads": self.cfg.inference.intra_op_threads if info.kind == "onnx" else None,
                 "target_fps": self.cfg.inference.target_fps,
             },
@@ -660,11 +715,12 @@ class Worker:
         }
 
     def _publish_detections(
-        self, frame: Frame, detections: list[Detection], severity: str, damaged_area: float
+        self, index: int, frame: Frame, detections: list[Detection], severity: str, damaged_area: float
     ) -> None:
         self.bus.publish(
             Topics.DETECT_FRAME,
             {
+                "camera": index,
                 "frame_seq": frame.seq,
                 "ts": frame.ts,
                 "severity": severity,
@@ -677,13 +733,14 @@ class Worker:
 
         # Only on change, at QoS 1: this is the signal an alert would key off,
         # so it must arrive, and it must not arrive ten times a second.
-        if severity != self._last_severity:
+        if severity != self._last_severity[index]:
             damaged = [d for d in detections if d.class_name != "healthy"]
             self.bus.publish(
                 Topics.DETECT_FLAG,
                 {
+                    "camera": index,
                     "severity": severity,
-                    "previous": self._last_severity,
+                    "previous": self._last_severity[index],
                     "count": len(damaged),
                     "max_confidence": round(max((d.confidence for d in damaged), default=0.0), 4),
                     "damaged_area": round(damaged_area, 5),
@@ -691,18 +748,21 @@ class Worker:
                 },
                 qos=1,
             )
-            self._last_severity = severity
+            self._last_severity[index] = severity
 
     def _maybe_persist(
-        self, frame: Frame, detections: list[Detection], severity: str, info
+        self, index: int, frame: Frame, detections: list[Detection], severity: str, info
     ) -> None:
-        decision = self.policy.decide(severity)
+        decision = self.policy[index].decide(severity)
         if not decision.write:
             return
-        self._write_event(frame, detections, severity, info, trigger=decision.trigger, note=decision.reason)
+        self._write_event(
+            index, frame, detections, severity, info, trigger=decision.trigger, note=decision.reason
+        )
 
     def _write_event(
         self,
+        index: int,
         frame: Frame,
         detections: list[Detection],
         severity: str,
@@ -720,7 +780,7 @@ class Worker:
         captured_at = datetime.now(timezone.utc)
         relative_dir = Path(captured_at.strftime("%Y/%m/%d"))
         (self.media_root / relative_dir).mkdir(parents=True, exist_ok=True)
-        stem = f"{captured_at.strftime('%H%M%S%f')[:-3]}_{frame.seq}"
+        stem = f"{captured_at.strftime('%H%M%S%f')[:-3]}_c{index}_{frame.seq}"
 
         image_rel = relative_dir / f"{stem}.jpg"
         thumb_rel = relative_dir / f"{stem}_thumb.jpg"
@@ -737,6 +797,7 @@ class Worker:
 
         event_id = self.db.insert_event(
             site=self.site,
+            camera=index,
             frame_seq=frame.seq,
             detections=detections,
             model_version=info.model_version,
@@ -748,7 +809,7 @@ class Worker:
             image_path=str(image_rel) if image_rel else None,
             thumb_path=str(thumb_rel) if thumb_rel else None,
             inference_ms=round(self._inference_ms, 2),
-            preview_fps=round(self.preview_fps.fps, 2),
+            preview_fps=round(self.preview_fps[index].fps, 2),
             inference_fps=round(self.inference_fps.fps, 2),
             synthetic=info.synthetic,
             note=note,
@@ -759,6 +820,7 @@ class Worker:
             Topics.EVENT_PERSISTED,
             {
                 "event_id": event_id,
+                "camera": index,
                 "captured_at": captured_at.isoformat(timespec="milliseconds"),
                 "severity": severity,
                 "detection_count": len(detections),
@@ -835,20 +897,26 @@ class Worker:
                 log.exception("snapshot failed")
 
     def _take_snapshot(self, request: dict[str, Any]) -> None:
-        """Capture a high-resolution still and persist it as a manual event."""
+        """Capture a high-resolution still from every camera; one manual event each."""
         hi_res = bool(request.get("hi_res", True))
-        still = self.camera.capture_still() if hi_res else None
-        frame = self.latest.take(timeout=1.0)
-        if frame is None:
-            frame = self._await_first_frame(timeout=2.0)
-        if frame is None:
-            log.warning("snapshot requested but no frame available")
-            return
+        for index, camera in enumerate(self.cameras):
+            still = camera.capture_still() if hi_res else None
+            frame = self.latest[index].take(timeout=1.0)
+            if frame is None and index == 0:
+                frame = self._await_first_frame(timeout=2.0)
+            if frame is None:
+                log.warning("snapshot requested but camera %d has no frame", index)
+                continue
+            self._snapshot_one(index, frame, still, request)
 
+    def _snapshot_one(
+        self, index: int, frame: Frame, still: np.ndarray | None, request: dict[str, Any]
+    ) -> None:
         subject = still if still is not None else frame.bgr
-        detections = self.detector.detect(subject)
+        detections, _ = self._detect(subject)
         severity, _ = severity_from_config(detections, self.cfg)
         event_id = self._write_event(
+            index,
             frame,
             detections,
             severity,

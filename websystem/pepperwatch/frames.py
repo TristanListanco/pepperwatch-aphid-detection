@@ -377,13 +377,18 @@ class TmpfsFrameReader(FrameReader):
 # -- factory ---------------------------------------------------------------
 
 
-def make_writer(cfg) -> FrameWriter:
-    if cfg.frames.transport == "tmpfs":
-        return TmpfsFrameWriter(Path(cfg.frames.tmpfs_dir))
-    return ShmFrameWriter(cfg.frames.shm_name, cfg.frames.slot_bytes)
+# One segment (or directory) per camera; camera 0 keeps the configured name.
+def _suffix(camera: int) -> str:
+    return f"_{camera}" if camera else ""
 
 
-def make_reader(cfg) -> FrameReader:
+def make_writer(cfg, camera: int = 0) -> FrameWriter:
     if cfg.frames.transport == "tmpfs":
-        return TmpfsFrameReader(Path(cfg.frames.tmpfs_dir))
-    return ShmFrameReader(cfg.frames.shm_name)
+        return TmpfsFrameWriter(Path(f"{cfg.frames.tmpfs_dir}{_suffix(camera)}"))
+    return ShmFrameWriter(f"{cfg.frames.shm_name}{_suffix(camera)}", cfg.frames.slot_bytes)
+
+
+def make_reader(cfg, camera: int = 0) -> FrameReader:
+    if cfg.frames.transport == "tmpfs":
+        return TmpfsFrameReader(Path(f"{cfg.frames.tmpfs_dir}{_suffix(camera)}"))
+    return ShmFrameReader(f"{cfg.frames.shm_name}{_suffix(camera)}")

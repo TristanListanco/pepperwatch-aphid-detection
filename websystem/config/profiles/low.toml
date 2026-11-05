@@ -21,6 +21,8 @@
 # the Pi 5's.
 
 [camera]
+# One camera: a second would halve an already slow inference rate.
+max_cameras = 1
 # The CPU cannot feed 25 fps of JPEG encoding and keep up with inference.
 # 15 is comfortably above what the dashboard's 1 fps polling default consumes.
 preview_fps = 15

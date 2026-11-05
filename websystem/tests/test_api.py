@@ -445,3 +445,39 @@ def test_media_route_rejects_a_sibling_directory(client, cfg) -> None:
     sibling.mkdir(parents=True, exist_ok=True)
     (sibling / "secret.jpg").write_bytes(b"x")
     assert client.get(f"/media/../{sibling.name}/secret.jpg").status_code == 404
+
+
+def test_a_database_from_before_cameras_gains_the_camera_column(cfg) -> None:
+    """The Pi's existing database has no camera column; startup adds it, old
+    events read as camera 0, and new ones keep the camera they came from."""
+    import sqlite3
+
+    from pepperwatch.db import SCHEMA_PATH, Database
+    from pepperwatch.models import Detection
+
+    # Today's schema without the camera column is what an older install has.
+    cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
+    old = sqlite3.connect(cfg.db_path)
+    old.executescript(SCHEMA_PATH.read_text())
+    old.execute("ALTER TABLE detection_event DROP COLUMN camera")
+    old.execute(
+        "INSERT INTO detection_event (captured_at, site, frame_seq, model_version,"
+        " conf_threshold, iou_threshold) VALUES (?, 'Naawan', 1, 't', 0.25, 0.45)",
+        ("2026-01-01T00:00:00+00:00",),
+    )
+    old.commit()
+    old.close()
+
+    database = Database(cfg)
+    database.initialise()
+    database.initialise()  # a second process starting finds it already there
+    with database.read() as conn:
+        assert conn.execute("SELECT camera FROM detection_event").fetchone()[0] == 0
+
+    box = Detection(1, "aphid_damage", 0.8, x=0.1, y=0.1, w=0.2, h=0.2)
+    event_id = database.insert_event(
+        site="Naawan", camera=1, frame_seq=2, detections=[box], model_version="t",
+        conf_threshold=0.25, iou_threshold=0.45, severity="low",
+    )
+    assert database.get_event(event_id)["camera"] == 1
+

@@ -218,7 +218,7 @@ def decode_yolov8(
          float(cx[i] + bw[i] / 2), float(cy[i] + bh[i] / 2))
         for i in range(above.size)
     ]
-    scores = [float(best_score[i]) for i in range(above.size)]
+    scores = [float(best_score[above[i]]) for i in range(above.size)]
     ids = [int(best_class[above[i]]) for i in range(above.size)]
 
     keep = non_max_suppression(
@@ -241,6 +241,37 @@ def decode_yolov8(
             ).clipped()
         )
     return detections
+
+
+def plant_fraction(bgr: np.ndarray, detection: Detection) -> float:
+    """Share of a box's pixels in plant colour: green to yellow hue.
+
+    The saturation floor is low on purpose. Aphid damage often comes with grey
+    honeydew mould or dust, and those leaves are still faintly green; a strict
+    "vivid green" test would throw away exactly the damage being looked for.
+    """
+    height, width = bgr.shape[:2]
+    x1, y1, x2, y2 = detection.to_pixels(width, height)
+    crop = bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return 0.0
+    h, s, v = cv2.split(cv2.cvtColor(crop, cv2.COLOR_BGR2HSV))
+    return float(((h >= 22) & (h <= 95) & (s >= 18) & (v >= 35)).mean())
+
+
+def drop_non_plant(
+    bgr: np.ndarray, detections: list[Detection], min_fraction: float
+) -> list[Detection]:
+    """Drop boxes with almost no plant colour in them.
+
+    The model has two classes and no "background", so whatever it boxes gets
+    called a leaf: a black plastic pot, a shoe, soil. On 115 field photos the
+    boxes under 10% plant colour were exactly those; the dustiest real leaves
+    scored 14% and up. ``min_fraction`` 0 turns this off.
+    """
+    if min_fraction <= 0:
+        return detections
+    return [d for d in detections if plant_fraction(bgr, d) >= min_fraction]
 
 
 def decode_hailo_nms(

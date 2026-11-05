@@ -6,6 +6,7 @@
 # Merged over default.toml; local.toml and PW_* variables still override it.
 
 [camera]
+max_cameras = 1
 preview_fps = 10
 still_width = 1024
 still_height = 768

@@ -237,3 +237,16 @@ def test_worker_state_treats_silence_as_offline(app) -> None:
     hub._worker_seen_at -= hub.worker_state()["stale_after_s"] + 1
     assert hub.worker_state()["alive"] is False
     assert hub.worker_state()["announced"] == "online"
+
+
+def test_frame_jpeg_serves_the_camera_asked_for(app, cfg, client, published_frame) -> None:
+    second = make_writer(cfg, 1)
+    jpeg = encode_jpeg(np.full((480, 640, 3), 30, np.uint8), 75)
+    second.publish(jpeg, seq=5, preview_fps=25.0, inference_fps=8.5)
+    try:
+        assert client.get("/frame.jpg?camera=1").get_data() == jpeg
+        assert client.get("/frame.jpg?camera=0").get_data() == published_frame
+        assert client.get("/frame.jpg?camera=7").status_code == 404
+        assert client.get("/stream.mjpg?camera=7").status_code == 404
+    finally:
+        second.close()

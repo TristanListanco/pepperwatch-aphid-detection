@@ -44,10 +44,10 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 INFERENCE_COLUMNS = (
-    "timestamp", "elapsed_s", "frame_seq",
+    "timestamp", "elapsed_s", "camera", "frame_seq",
     "preprocess_ms", "infer_ms", "postprocess_ms", "total_ms", "end_to_end_ms",
     "inference_fps", "preview_fps", "dropped_frames",
-    "detections", "damage_boxes", "max_confidence", "damaged_area", "severity",
+    "detections", "non_plant_dropped", "damage_boxes", "max_confidence", "damaged_area", "severity",
     "thermal_level",
 )
 

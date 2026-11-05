@@ -12,6 +12,11 @@
       <a class="btn is-quiet card-head-actions" href="{{ url_for('pages.settings') }}#display">Display settings</a>
     </div>
     <div class="card-body">
+      {# One figure per camera: this first one is cloned for each further
+         camera the session runs (main.js). #}
+      <div class="viewports" data-viewports>
+      <figure class="camera-view" data-camera-view>
+      <figcaption class="camera-label" data-camera-label hidden></figcaption>
       <div class="viewport" data-viewport>
         <img data-live-image alt="Live camera feed of the bell pepper canopy">
         <canvas data-live-canvas aria-hidden="true"></canvas>
@@ -31,6 +36,8 @@
       </div>
 
       <p class="live-summary" data-live-summary aria-live="polite"></p>
+      </figure>
+      </div>
 
       <div class="live-controls">
         <button class="btn" type="button" data-action-snapshot>Snapshot</button>

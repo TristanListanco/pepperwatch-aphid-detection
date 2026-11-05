@@ -88,3 +88,46 @@ def test_an_explicit_kind_and_device_are_honoured() -> None:
 
 def test_nothing_attached_means_no_choice() -> None:
     assert choose_camera([], kind="auto") is None
+
+
+def _fake_cameras(monkeypatch, *, broken: set[str] = frozenset()):
+    """Three USB cameras through pepperwatch.hal.pi, with no real hardware."""
+    from pepperwatch.hal import pi
+    from pepperwatch.hal.base import CameraError
+
+    class FakeCamera:
+        def __init__(self, cfg, candidate):
+            self.candidate = candidate
+            self.stopped = False
+
+        def start(self):
+            if self.candidate.device in broken:
+                raise CameraError("no frames")
+
+        def stop(self):
+            self.stopped = True
+
+    found = [CameraCandidate("usb", f"/dev/video{i}", f"cam{i}") for i in (0, 2, 4)]
+    monkeypatch.setattr(pi, "discover_cameras", lambda: found)
+    monkeypatch.setattr(pi, "UsbCamera", FakeCamera)
+    return pi
+
+
+def test_up_to_max_cameras_start_and_a_broken_one_is_skipped(monkeypatch) -> None:
+    from pepperwatch.config import load
+
+    pi = _fake_cameras(monkeypatch, broken={"/dev/video0"})
+    cfg = load({"camera": {"max_cameras": 2}}, use_env=False)
+    started, found = pi.open_cameras(cfg)
+    assert [c.candidate.device for c in started] == ["/dev/video2", "/dev/video4"]
+    assert len(found) == 3
+
+
+def test_a_configured_device_means_that_camera_alone(monkeypatch) -> None:
+    from pepperwatch.config import load
+
+    pi = _fake_cameras(monkeypatch)
+    cfg = load({"camera": {"max_cameras": 2, "device": "/dev/video2"}}, use_env=False)
+    started, _ = pi.open_cameras(cfg)
+    assert [c.candidate.device for c in started] == ["/dev/video2"]
+    assert pi.open_camera(load({}, use_env=False))[0].candidate.device == "/dev/video0"

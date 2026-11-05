@@ -1033,6 +1033,31 @@ button {
   filter: grayscale(0.7) brightness(0.8);
 }
 
+/* Several cameras sit side by side where there is room, stacked on a phone. */
+.viewports {
+  display: grid;
+  gap: 16px;
+}
+
+@media (min-width: 900px) {
+  .viewports.is-multi {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+.camera-view {
+  margin: 0;
+  min-width: 0;
+}
+
+.camera-label {
+  margin: 0 0 8px;
+  font-size: var(--type-label);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
 .live-summary {
   min-height: 1.4em;
   margin: 12px 0 0;

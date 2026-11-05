@@ -15,7 +15,7 @@ import io
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
@@ -35,6 +35,8 @@ EXPORT_COLUMNS = (
     "x", "y", "w", "h", "model_version", "conf_threshold", "iou_threshold",
     "inference_ms", "preview_fps", "inference_fps", "trigger", "synthetic",
     "image_path",
+    # Added later: new columns go last, so existing columns keep their places.
+    "camera",
 )
 
 

@@ -64,7 +64,11 @@ export function renderPipeline(root, pipeline) {
   if (!pipeline) return;
 
   setText(root, 'pipeline-inference-rate', num(pipeline.inference_fps, 1));
-  setText(root, 'pipeline-preview-rate', num(pipeline.preview_fps, 1));
+  // One rate per camera when there are several: "30.2 · 29.8".
+  const rates = pipeline.camera_fps && pipeline.camera_fps.length > 1
+    ? pipeline.camera_fps.map((fps) => num(fps, 1)).join(' · ')
+    : num(pipeline.preview_fps, 1);
+  setText(root, 'pipeline-preview-rate', rates);
   setText(root, 'pipeline-latency', num(pipeline.inference_ms, 1));
   setText(root, 'pipeline-dropped', String(pipeline.dropped ?? 0));
 
@@ -84,8 +88,9 @@ export function renderPipeline(root, pipeline) {
     note.textContent = fps >= target ? `meets the ${target} fps target` : `below the ${target} fps target`;
   }
 
-  const paused = root.querySelector('[data-pipeline-paused]');
-  if (paused) paused.hidden = pipeline.paused !== true;
+  root.querySelectorAll('[data-pipeline-paused]').forEach((chip) => {
+    chip.hidden = pipeline.paused !== true;
+  });
 }
 
 export function renderSummary(root, summary) {

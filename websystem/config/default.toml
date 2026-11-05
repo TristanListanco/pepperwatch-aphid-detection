@@ -22,6 +22,9 @@ kind = "auto"         # auto | csi | usb
 # Which one, when several are attached: a CSI camera number ("0", "1") or a USB
 # device path ("/dev/video0"). Empty takes the first found.
 device = ""
+# With no device set, run up to this many of the cameras found, side by side on
+# the dashboard. They share one detector, which takes their frames in turn.
+max_cameras = 2
 preview_width = 640
 preview_height = 480
 preview_fps = 25      # capture target; the session profile below may raise it
@@ -39,6 +42,9 @@ max_detections = 100
 target_fps = 17         # the §3.2 requirement, reported against, not assumed
 intra_op_threads = 3    # leave one of the Pi 5's four cores for Flask + OS
 class_names = ["healthy", "aphid_damage"]
+# Drop boxes with less than this share of plant-coloured pixels: the model has
+# no "background" class, so it can call a pot or a shoe a leaf. 0 turns it off.
+min_plant_fraction = 0.10
 
 [accelerator]
 # "auto" uses a Raspberry Pi AI HAT+ (Hailo-8L, Hailo-8 or Hailo-10H) when one

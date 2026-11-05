@@ -262,11 +262,20 @@ class UsbCamera(CameraSource):
 
 
 def open_camera(cfg: Config) -> tuple[CameraSource, list[CameraCandidate]]:
-    """Find the attached cameras and start the preferred one.
+    """The preferred camera alone, for tools that check or benchmark one."""
+    cameras, found = open_cameras(cfg, limit=1)
+    return cameras[0], found
 
-    Returns the started camera and everything that was found, for the session
-    record. If the preferred camera will not start, the next one is tried, so a
-    CSI module with a loose ribbon does not stop a session that has a webcam.
+
+def open_cameras(
+    cfg: Config, *, limit: int | None = None
+) -> tuple[list[CameraSource], list[CameraCandidate]]:
+    """Find the attached cameras and start up to ``[camera].max_cameras``.
+
+    Returns the started cameras, preferred first, and everything that was
+    found, for the session record. A camera that will not start is skipped, so
+    a CSI module with a loose ribbon does not stop a session that has a webcam.
+    A configured ``device`` means exactly that one camera.
     """
     candidates = discover_cameras()
     for found in candidates:
@@ -287,17 +296,24 @@ def open_camera(cfg: Config) -> tuple[CameraSource, list[CameraCandidate]]:
         c for c in candidates
         if c is not preferred and (kind == "auto" or c.kind == kind) and not device
     ]
+    if limit is None:
+        limit = 1 if device else max(1, int(cfg.camera.max_cameras))
+    started: list[CameraSource] = []
     errors = []
     for candidate in ordered:
+        if len(started) == limit:
+            break
         camera: CameraSource = CsiCamera(cfg, candidate) if candidate.kind == "csi" else UsbCamera(cfg, candidate)
         try:
             camera.start()
-            return camera, candidates
+            started.append(camera)
         except CameraError as exc:
             log.error("%s would not start: %s", candidate.describe(), exc)
             errors.append(f"{candidate.describe()}: {exc}")
             camera.stop()
-    raise CameraError("no camera would start — " + "; ".join(errors))
+    if not started:
+        raise CameraError("no camera would start — " + "; ".join(errors))
+    return started, candidates
 
 
 def _to_bgr(array: np.ndarray, rotate: int) -> np.ndarray:

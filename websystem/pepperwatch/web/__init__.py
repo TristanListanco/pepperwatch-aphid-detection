@@ -45,7 +45,9 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     # §3.5.1's tests and for the alternative the manuscript describes in §3.4.3.
     database.initialise(writer="worker")
     app.config["PW_DB"] = database
-    app.config["PW_FRAMES"] = make_reader(cfg)
+    # One reader per camera the worker may run; a camera that is not running
+    # just has no frames yet.
+    app.config["PW_FRAMES"] = [make_reader(cfg, i) for i in range(max(1, int(cfg.camera.max_cameras)))]
     app.config["PW_ADVISORY"] = load_advisory(cfg)
 
     hub = EventHub(cfg)

@@ -50,13 +50,19 @@ export function setDisplayPref(key, on) {
 }
 
 export class LiveView {
-  constructor(root) {
+  // root is one camera's figure; camera is its index in the session.
+  constructor(root, camera = 0) {
     this.root = root;
+    this.camera = camera;
     this.image = root.querySelector('[data-live-image]');
     this.canvas = root.querySelector('[data-live-canvas]');
     this.viewport = root.querySelector('[data-viewport]');
     this.summary = root.querySelector('[data-live-summary]');
     this.ctx = this.canvas.getContext('2d');
+    // A cloned figure carries the original's live src and state; start clean.
+    this.image.removeAttribute('src');
+    this.viewport.classList.remove('is-active');
+    if (this.summary) this.summary.textContent = '';
     this.summaryAt = 0;
     this.summaryTimer = null;
 
@@ -97,7 +103,7 @@ export class LiveView {
       this.startPolling();
     } else if (mode === 'mjpeg') {
       // Cache-bust so a reconnect is not served the previous stream.
-      this.image.src = `/stream.mjpg?t=${Date.now()}`;
+      this.image.src = `/stream.mjpg?camera=${this.camera}&t=${Date.now()}`;
     } else {
       this.image.removeAttribute('src');
       this.viewport.classList.remove('is-active');
@@ -111,7 +117,7 @@ export class LiveView {
     const tick = () => {
       // The URL has to change or the browser serves its cache; the server also
       // answers 304 on an unchanged frame, so this stays cheap either way.
-      this.image.src = `/frame.jpg?t=${Date.now()}`;
+      this.image.src = `/frame.jpg?camera=${this.camera}&t=${Date.now()}`;
     };
     tick();
     this.pollTimer = setInterval(tick, POLL_MS);

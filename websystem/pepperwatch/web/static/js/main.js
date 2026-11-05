@@ -22,8 +22,6 @@ function locale() {
 
 function bootDashboard() {
   const bus = new Bus();
-  const liveRoot = document.querySelector('[data-live]');
-  const live = liveRoot ? new LiveView(liveRoot) : null;
   const controls = new Controls(document, { onToast: toast });
 
   // Boxes show only while the detector is running and not paused; anything
@@ -32,31 +30,74 @@ function bootDashboard() {
   let paused = false;
   let lastReadingAt = null;
   let lastFrameAt = null;
-  const showOverlay = () => {
-    if (live) live.toggleOverlay(workerAlive && !paused);
-  };
-  showOverlay();
-  controls.setAvailable(workerAlive);
 
-  // -- live feed ---------------------------------------------------------
+  // -- live feed: one view per camera ------------------------------------
 
   const prefs = displayPrefs();
   const liveMode = prefs.live ? 'mjpeg' : 'poll';
-  if (live) {
-    live.setMirror(prefs.mirror);
-    // Start the never-ending MJPEG response after the page has loaded, or the
-    // browser shows the page as loading for as long as the stream runs.
-    window.addEventListener('load', () => live.setMode(liveMode), { once: true });
-    // A background tab would otherwise hold one of the few MJPEG slots, and
-    // the radio's bandwidth, for nobody.
-    document.addEventListener('visibilitychange', () => {
-      live.setMode(document.hidden ? 'idle' : liveMode);
+  const viewsRoot = document.querySelector('[data-viewports]');
+  const views = [];
+  let pageLoaded = false;
+
+  const showOverlay = () => views.forEach((view) => view.toggleOverlay(workerAlive && !paused));
+
+  const addView = (index, element) => {
+    const view = new LiveView(element, index);
+    view.setMirror(prefs.mirror);
+    view.toggleOverlay(workerAlive && !paused);
+    if (pageLoaded && !document.hidden) view.setMode(liveMode);
+    views[index] = view;
+  };
+  if (viewsRoot) addView(0, viewsRoot.querySelector('[data-camera-view]'));
+
+  // The session says how many cameras run; the first figure is in the page,
+  // the rest are clones of it. Labels only appear when there is a choice.
+  const showCameras = (cameras) => {
+    if (!viewsRoot) return;
+    const list = cameras && cameras.length ? cameras : [{}];
+    while (views.length > list.length) {
+      const view = views.pop();
+      view.destroy();
+      view.root.remove();
+    }
+    const template = viewsRoot.querySelector('[data-camera-view]');
+    for (let index = views.length; index < list.length; index += 1) {
+      const element = template.cloneNode(true);
+      viewsRoot.appendChild(element);
+      addView(index, element);
+    }
+    viewsRoot.classList.toggle('is-multi', list.length > 1);
+    list.forEach((camera, index) => {
+      const name = `Camera ${index + 1}`;
+      const label = views[index].root.querySelector('[data-camera-label]');
+      if (label) {
+        label.hidden = list.length < 2;
+        label.textContent = camera.model ? `${name} · ${camera.model}` : name;
+      }
+      views[index].image.alt = list.length < 2
+        ? 'Live camera feed of the bell pepper canopy'
+        : `${name} live feed of the bell pepper canopy`;
     });
-    bus.on('detections', (payload) => {
-      if (payload.ts) lastFrameAt = payload.ts * 1000;
-      live.update(payload);
-    });
-  }
+  };
+
+  // Start the never-ending MJPEG response after the page has loaded, or the
+  // browser shows the page as loading for as long as the stream runs.
+  window.addEventListener('load', () => {
+    pageLoaded = true;
+    views.forEach((view) => view.setMode(liveMode));
+  }, { once: true });
+  // A background tab would otherwise hold MJPEG slots, and the radio's
+  // bandwidth, for nobody.
+  document.addEventListener('visibilitychange', () => {
+    views.forEach((view) => view.setMode(document.hidden ? 'idle' : liveMode));
+  });
+  bus.on('detections', (payload) => {
+    if (payload.ts) lastFrameAt = payload.ts * 1000;
+    const view = views[payload.camera || 0];
+    if (view) view.update(payload);
+  });
+  bus.on('session', (meta) => showCameras(meta.cameras));
+  controls.setAvailable(workerAlive);
 
   // -- performance, power and the session --------------------------------
 
@@ -89,6 +130,7 @@ function bootDashboard() {
     // too, so the card fills even before the stream connects.
     fetchJson('/api/session').then((data) => {
       if (data && data.session) {
+        showCameras(data.session.cameras);
         session.render(data.session);
         if (devices) devices.setSession(data.session);
       }
@@ -106,8 +148,10 @@ function bootDashboard() {
     showStale(workerAlive, lastReadingAt, lastFrameAt);
     // MJPEG falls back to polling while the worker is down; go live again
     // once it is back.
-    if (live && state.alive && liveMode === 'mjpeg' && live.mode === 'poll' && !document.hidden) {
-      live.setMode('mjpeg');
+    if (state.alive && liveMode === 'mjpeg' && !document.hidden) {
+      views.forEach((view) => {
+        if (view.mode === 'poll') view.setMode('mjpeg');
+      });
     }
   });
 
@@ -126,7 +170,8 @@ function bootDashboard() {
 
   bus.on('flag', (payload) => {
     if (payload.severity && payload.severity !== 'none') {
-      toast(`Severity is now ${payload.severity} (${payload.count} clusters)`);
+      const where = views.length > 1 ? `Camera ${(payload.camera || 0) + 1}: s` : 'S';
+      toast(`${where}everity is now ${payload.severity} (${payload.count} clusters)`);
     }
   });
 
@@ -151,7 +196,7 @@ function bootDashboard() {
   bus.start();
   window.addEventListener('beforeunload', () => {
     bus.stop();
-    if (live) live.destroy();
+    views.forEach((view) => view.destroy());
   });
 }
 
@@ -183,15 +228,15 @@ function showStale(alive, readingAt, frameAt) {
     }
   });
 
-  const viewport = document.querySelector('[data-viewport]');
-  if (viewport) viewport.classList.toggle('is-stale', !alive);
-  const chip = document.querySelector('[data-viewport-stale]');
-  if (chip) {
+  document.querySelectorAll('[data-viewport]').forEach((viewport) => {
+    viewport.classList.toggle('is-stale', !alive);
+  });
+  const frame = at(frameAt);
+  document.querySelectorAll('[data-viewport-stale]').forEach((chip) => {
     chip.hidden = alive;
-    const frame = at(frameAt);
     const label = chip.querySelector('[data-viewport-stale-label]');
     if (label) label.textContent = frame ? `Detector offline · frame from ${frame}` : 'Detector offline';
-  }
+  });
 }
 
 // Pages without the live bus still ask once, so their chip tells the truth.

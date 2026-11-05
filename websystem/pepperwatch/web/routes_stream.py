@@ -41,7 +41,14 @@ def _cfg():
 
 
 def _reader():
-    return current_app.config["PW_FRAMES"]
+    """The frame reader for ``?camera=N`` (default 0), or None if out of range."""
+    readers = current_app.config["PW_FRAMES"]
+    index = request.args.get("camera", default=0, type=int)
+    return readers[index] if index is not None and 0 <= index < len(readers) else None
+
+
+def _cameras_running() -> int:
+    return len(current_app.config["PW_HUB"].session.get("cameras") or []) or 1
 
 
 @bp.get("/frame.jpg")
@@ -52,7 +59,10 @@ def frame_jpeg():
     faster than the camera produces gets a cheap 304 instead of the same bytes
     again — which matters when several phones poll at once over one radio.
     """
-    packet = _reader().read()
+    reader = _reader()
+    if reader is None:
+        return jsonify({"error": "no such camera"}), 404
+    packet = reader.read()
     if packet is None:
         return jsonify({"error": "no frame available — is the worker running?"}), 503
 
@@ -80,6 +90,9 @@ def stream_mjpeg():
     global _viewers
     cfg = _cfg()
     limit = int(cfg.web.max_stream_clients)
+    reader = _reader()
+    if reader is None:
+        return jsonify({"error": "no such camera"}), 404
 
     with _viewers_lock:
         if _viewers >= limit:
@@ -97,9 +110,10 @@ def stream_mjpeg():
             )
         _viewers += 1
 
-    target_fps = max(1.0, float(cfg.web.stream_fps))
+    # Each camera gets its share of the stream rate, so a phone watching two
+    # costs the radio no more than one did.
+    target_fps = max(1.0, float(cfg.web.stream_fps) / _cameras_running())
     interval = 1.0 / target_fps
-    reader = _reader()
 
     def generate():
         global _viewers

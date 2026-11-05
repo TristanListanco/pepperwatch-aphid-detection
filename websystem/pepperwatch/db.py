@@ -163,6 +163,7 @@ class Database:
                 return
             conn = self.connection()
             conn.executescript(SCHEMA_PATH.read_text())
+            _add_missing_columns(conn)
             now = utcnow()
             conn.executemany(
                 "INSERT INTO schema_meta (key, value, updated_at) VALUES (?, ?, ?) "
@@ -199,6 +200,7 @@ class Database:
         inference_fps: float | None = None,
         synthetic: bool = False,
         note: str | None = None,
+        camera: int = 0,
     ) -> int:
         """Write one detection event and its boxes in a single transaction.
 
@@ -206,8 +208,8 @@ class Database:
         ``damaged_area`` are computed here rather than by callers, so they can
         never drift from the rows they summarise.
 
-        Idempotent on ``(site, frame_seq, captured_at)``: a retried publish
-        returns the existing id instead of duplicating the event.
+        Idempotent on ``(site, camera, frame_seq, captured_at)``: a retried
+        publish returns the existing id instead of duplicating the event.
         """
         captured_at = captured_at or utcnow()
         damaged = [d for d in detections if d.class_name != "healthy"]
@@ -215,8 +217,9 @@ class Database:
 
         with self.write() as conn:
             existing = conn.execute(
-                "SELECT id FROM detection_event WHERE site = ? AND frame_seq = ? AND captured_at = ?",
-                (site, frame_seq, captured_at),
+                "SELECT id FROM detection_event "
+                "WHERE site = ? AND camera = ? AND frame_seq = ? AND captured_at = ?",
+                (site, camera, frame_seq, captured_at),
             ).fetchone()
             if existing:
                 return int(existing["id"])
@@ -224,15 +227,15 @@ class Database:
             cursor = conn.execute(
                 """
                 INSERT INTO detection_event (
-                    captured_at, site, image_path, thumb_path, frame_seq,
+                    captured_at, site, camera, image_path, thumb_path, frame_seq,
                     model_version, conf_threshold, iou_threshold,
                     inference_ms, preview_fps, inference_fps,
                     detection_count, max_confidence, damaged_area,
                     severity, trigger, synthetic, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    captured_at, site, image_path, thumb_path, frame_seq,
+                    captured_at, site, camera, image_path, thumb_path, frame_seq,
                     model_version, conf_threshold, iou_threshold,
                     inference_ms, preview_fps, inference_fps,
                     len(detections), max_conf, union_area(damaged),
@@ -534,7 +537,7 @@ class Database:
         with self.read() as conn:
             cursor = conn.execute(
                 f"""
-                SELECT e.id AS event_id, e.captured_at, e.site, e.severity,
+                SELECT e.id AS event_id, e.captured_at, e.site, e.camera, e.severity,
                        e.detection_count, e.max_confidence, e.damaged_area,
                        e.model_version, e.conf_threshold, e.iou_threshold,
                        e.inference_ms, e.preview_fps, e.inference_fps,
@@ -619,3 +622,21 @@ class Database:
             "wal_mb": round(wal.stat().st_size / 1e6, 3) if wal.exists() else 0.0,
             "counts": counts,
         }
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    """Bring a database created by an older version up to the current schema.
+
+    ``CREATE TABLE IF NOT EXISTS`` leaves an existing table as it was, so a
+    column added later has to be added here too. The web and the worker both
+    initialise, possibly at once: the loser of that race sees "duplicate
+    column", which means the column is there, which is all that matters.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(detection_event)")}
+    if "camera" in columns:
+        return
+    try:
+        conn.execute("ALTER TABLE detection_event ADD COLUMN camera INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column" not in str(exc):
+            raise

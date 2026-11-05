@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS detection_event (
     -- format, so the DESC index below is a plain b-tree scan.
     captured_at     TEXT    NOT NULL,
     site            TEXT    NOT NULL,
+    -- Which camera, as numbered on the dashboard from 0. Databases from before
+    -- multi-camera support gain it at startup (Database.initialise).
+    camera          INTEGER NOT NULL DEFAULT 0,
 
     -- Relative to config [media].root, never absolute: the database is copied off
     -- the device for analysis and absolute Pi paths would not resolve.
