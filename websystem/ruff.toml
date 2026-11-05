@@ -1,0 +1,7 @@
+# Python lint for CI: `ruff check`. Pyflakes (unused imports, undefined names,
+# unused variables) and pycodestyle's error checks, listed explicitly so a
+# newer ruff with wider defaults does not change what fails.
+target-version = "py310"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

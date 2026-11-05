@@ -67,7 +67,7 @@ pepperwatch/
   web/           Flask app, ES6 modules, Jinja templates
 deploy/          install.sh, update.sh, systemd units, mosquitto conf, NetworkManager AP
 scripts/         bench_fps.py (--accelerator cpu|hailo), check_js.sh
-tests/           344 hardware-free unit and API tests
+tests/           422 hardware-free unit and API tests, plus a worker integration test
 ```
 
 ## Configuration
@@ -88,8 +88,12 @@ The suite needs no camera, HAT or Pi, so it runs on any machine with Python
 3.11+, and CI runs it on x64 and arm64 for every push:
 
 ```bash
-.venv/bin/python -m pytest              # 344 tests, ~1 min
+.venv/bin/python -m pytest              # 422 tests, ~1 min
 ./scripts/check_js.sh                   # ES module syntax (there is no build step)
+npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
+.venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
+# With a broker running (mosquitto -d -p 18830), the worker end to end:
+PW_TEST_MQTT_PORT=18830 .venv/bin/python -m pytest tests/test_worker_integration.py
 ```
 
 Tests that map directly onto §3.5.1's stated requirements:

@@ -84,7 +84,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  344 hardware-free unit and API tests
+    └── tests/                  422 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -174,9 +174,14 @@ dashboard), it checks the hardware before any frame is taken:
 2. **Profile.** The matching `[profiles.hailo]` or `[profiles.cpu]` table is
    applied: the HAT profile captures at up to 60 fps because inference keeps
    up; the CPU profile captures at 25 fps and gives ONNX Runtime 3 threads.
-3. **Camera.** CSI cameras are listed through libcamera and USB webcams through
-   sysfs (`uvcvideo` driver). The CSI camera is used if present, otherwise the
-   webcam; if the preferred one won't start, the next is tried.
+3. **Cameras.** CSI cameras are listed through libcamera and USB webcams
+   through sysfs (`uvcvideo` driver). Up to `[camera] max_cameras` (default 2)
+   are started, CSI first; one that won't start is skipped. With two, the
+   dashboard shows them side by side (stacked on a phone), each with its own
+   boxes, and the one detector takes their frames in turn, so each gets half
+   the inference rate. Saved scans, the detections CSV and `inference.csv`
+   record which camera (`camera`, numbered from 0). The `low` and `tiny`
+   board profiles run one camera.
 4. **Recording.** A session folder is created and every inference and a
    once-a-second system sample are written to CSV (see
    [Measurements](#measurements-session-csv-files)).
@@ -737,6 +742,7 @@ the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
 | Column | Meaning |
 |---|---|
 | `timestamp`, `elapsed_s` | UTC time, seconds since the session started |
+| `camera` | Which camera the frame came from, numbered from 0 |
 | `frame_seq` | Camera frame number |
 | `preprocess_ms` | Letterbox and colour conversion (and tensor building on the CPU) |
 | `infer_ms` | The model call alone, on the CPU or the HAT |
@@ -746,6 +752,7 @@ the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
 | `inference_fps`, `preview_fps` | Rolling 3-second rates at that moment |
 | `dropped_frames` | Running count of camera frames the detector never saw |
 | `detections`, `damage_boxes`, `max_confidence`, `damaged_area`, `severity` | What the frame contained |
+| `non_plant_dropped` | Boxes removed by the plant-colour check (`inference.min_plant_fraction`) |
 | `thermal_level` | Thermal governor back-off level (0 = none) |
 
 **`system.csv`**
@@ -835,7 +842,8 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 |---|---|---|
 | `site.name` | `Naawan` | Saved with every event |
 | `camera.kind` | `auto` | `auto` (CSI if attached, else USB), `csi` (Picamera2) or `usb` (OpenCV V4L2) |
-| `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`) |
+| `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`). Set, it means that camera alone |
+| `camera.max_cameras` | 2 | How many cameras to run side by side (1 on the `low` and `tiny` profiles) |
 | `camera.preview_width/height` | 640×480 | Live preview and inference input |
 | `camera.preview_fps` | 25 | Overridden per session by `[profiles.*]` |
 | `camera.still_width/height` | 2304×1296 | Manual snapshot resolution |
@@ -846,6 +854,7 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 | `inference.iou_threshold` | 0.45 | NMS overlap; also live-adjustable |
 | `inference.intra_op_threads` | 3 | ONNX threads on the CPU; leave one core free |
 | `inference.class_names` | `["healthy", "aphid_damage"]` | Must match the model's class order |
+| `inference.min_plant_fraction` | 0.10 | Drop boxes with less than this share of plant-coloured (green-to-yellow) pixels: the model has no "background" class, so it can call a pot or a shoe a leaf. 0 turns it off |
 | `accelerator.mode` | `auto` | `auto` (AI HAT+ when usable), `hailo` (falls back to CPU with a reason), `cpu` |
 | `accelerator.hef_path` | `models/pepperwatch.hef` | Base name; `pepperwatch_<chip>.hef` beside it is tried first |
 | `profiles.cpu.*`, `profiles.hailo.*` | see `default.toml` | Applied at session start for the accelerator found: capture rate, ONNX threads |
@@ -990,8 +999,8 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99) |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
-| GET | `/frame.jpg` | Latest frame (clean) |
-| GET | `/stream.mjpg` | MJPEG live stream |
+| GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
+| GET | `/stream.mjpg` | MJPEG live stream. `?camera=1` for the second camera; with two, each streams at half `stream_fps` |
 | GET | `/stream/events` | Server-Sent Events (MQTT bridge) |
 | GET | `/stream/status` | Viewer counts and limits |
 | GET | `/media/<path>` | Saved annotated images and thumbnails |
@@ -1097,8 +1106,14 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 344 tests (~1 min)
+.venv/bin/python -m pytest               # 422 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
+npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
+.venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
+
+# The worker end to end with two cameras needs an MQTT broker:
+mosquitto -d -p 18830
+PW_TEST_MQTT_PORT=18830 .venv/bin/python -m pytest tests/test_worker_integration.py
 ```
 
 The tests cover letterbox round-trips, YOLOv8 and Hailo NMS decoding, severity,
@@ -1134,18 +1149,20 @@ moves forward **only after every job has passed** on that exact commit.
 
 ```mermaid
 flowchart LR
-    PUSH[push / pull request] --> T[Tests<br/>Py 3.11 + 3.13<br/>x64 + arm64]
-    PUSH --> L[Lint<br/>JS modules, shellcheck]
-    T & L -->|all green, on main| P[Promote:<br/>fast-forward stable]
+    PUSH[push / pull request] --> T[Tests<br/>Py 3.10 + 3.11 + 3.13<br/>x64 + arm64]
+    PUSH --> I[Integration<br/>worker, two cameras,<br/>MQTT, arm64]
+    PUSH --> L[Lint<br/>ESLint, ruff,<br/>JS modules, shellcheck]
+    T & I & L -->|all green, on main| P[Promote:<br/>fast-forward stable]
     P --> S[(stable branch)]
     S -->|sudo ./deploy/update.sh| PI[Raspberry Pi]
 ```
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 344 tests on Python 3.11 (Raspberry Pi OS Bookworm) and 3.13 (Trixie), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
-| **Lint** | Every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
-| **Promote** | Runs only for pushes to `main` once both jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
+| **Tests** | The 422 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
+| **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
+| **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
 
 CI checks out only `websystem/` (a sparse, blob-less checkout), so the 4 GB
 dataset is never downloaded.
@@ -1173,7 +1190,7 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | Session runs on **CPU** with an AI HAT+ fitted | The Session card says why. See [AI HAT+ acceleration](#ai-hat-acceleration) |
 | Session card shows *heuristic stub* | No model for this accelerator: no `pepperwatch.onnx` (CPU) or HEF (HAT). Results are synthetic, not data |
 | Worker exits "no camera matching …" | It lists what it found. Check the ribbon cable or USB, `rpicam-hello --list-cameras`, `ls /dev/video*`, and `[camera] kind` / `device` |
-| Wrong camera used with two attached | `auto` prefers CSI. Set `[camera] kind = "usb"` (and `device`) in `local.toml` |
+| Wrong camera used with two attached | `auto` prefers CSI and runs up to two. To run one, set `[camera] device` (or `max_cameras = 1`) in `local.toml` |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
 | No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |

@@ -109,7 +109,6 @@ def seeded_db(app, cfg):
     Covers every severity band, an archived event, and telemetry, so the history
     filters and the KPI tiles have something meaningful to return.
     """
-    from pepperwatch.db import Database
 
     database = app.config["PW_DB"]
     bands = ["none", "low", "low", "moderate", "moderate", "high", "high", "high"]

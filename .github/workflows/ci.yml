@@ -63,8 +63,41 @@ jobs:
       - name: Unit and API tests
         run: python -m pytest -q -rs
 
+  integration:
+    # The worker end to end with two cameras: a real broker, database, frame
+    # segments and session CSVs, only the cameras faked. The unit job skips
+    # this test; it needs the mosquitto started here. arm64 with Python 3.11
+    # is the Pi 5 on Raspberry Pi OS Bookworm.
+    name: Integration (worker, two cameras, MQTT)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: websystem
+          filter: blob:none
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: websystem/requirements*.txt
+
+      - name: Install dependencies and the broker
+        run: |
+          python -m pip install -r requirements-dev.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mosquitto
+
+      - name: Worker with two cameras
+        env:
+          PW_TEST_MQTT_PORT: "18830"
+        run: |
+          mosquitto -d -p "$PW_TEST_MQTT_PORT"
+          python -m pytest -q -rs tests/test_worker_integration.py
+
   lint:
-    name: Lint (JavaScript, shell)
+    name: Lint (JavaScript, Python, shell)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -77,8 +110,22 @@ jobs:
         with:
           node-version: 22
 
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
       - name: Dashboard modules parse as ES modules
         run: bash scripts/check_js.sh
+
+      - name: Dashboard code (ESLint, eslint.config.mjs)
+        # Catches what a syntax check cannot: a name used but never defined,
+        # which otherwise fails only in a browser.
+        run: npx --yes eslint@10.14.0 pepperwatch/web/static/js
+
+      - name: Python (ruff, ruff.toml)
+        run: |
+          python -m pip install "$(grep -E '^ruff==' requirements-dev.txt | cut -d' ' -f1)"
+          ruff check pepperwatch tests scripts
 
       - name: Shell scripts
         run: |
@@ -87,7 +134,7 @@ jobs:
 
   promote:
     name: Promote to stable
-    needs: [test, lint]
+    needs: [test, integration, lint]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -3,6 +3,7 @@
 pytest>=8.4,<9
 pytest-timeout>=2.3,<3     # SSE and MJPEG tests must never hang the suite
 requests>=2.32,<3           # test client for the streaming endpoints
+ruff==0.17.3               # `ruff check`, also run by CI's lint job
 
 # Generates the synthetic YOLOv8-shaped ONNX fixture that exercises the real
 # inference path before a trained model exists. Also required by

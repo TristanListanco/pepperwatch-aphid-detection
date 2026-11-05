@@ -34,14 +34,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import logging
 import platform
 import statistics
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
