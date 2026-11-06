@@ -1,6 +1,6 @@
 // Page bootstrap. Wires the transport to whichever panels this page contains.
 
-import { Bus, poll, fetchJson } from './bus.js';
+import { Bus, poll, fetchJson, postJson } from './bus.js';
 import { Controls, toast } from './controls.js';
 import { DeviceList } from './devices.js';
 import { History } from './history.js';
@@ -66,30 +66,69 @@ function bootDashboard() {
       viewsRoot.appendChild(element);
       addView(index, element);
     }
-    viewsRoot.classList.toggle('is-multi', list.length > 1);
     list.forEach((camera, index) => {
       const name = `Camera ${index + 1}`;
       const label = views[index].root.querySelector('[data-camera-label]');
       if (label) {
         label.hidden = list.length < 2;
-        label.textContent = camera.model ? `${name} · ${camera.model}` : name;
+        label.querySelector('[data-camera-name]').textContent = camera.model ? `${name} · ${camera.model}` : name;
       }
       views[index].image.alt = list.length < 2
         ? 'Live camera feed of the bell pepper canopy'
         : `${name} live feed of the bell pepper canopy`;
     });
+    showCamerasOn();
   };
+
+  // Which cameras are on, from the worker's pipeline telemetry. An off camera
+  // keeps its label and a Turn on button, and fetches no frames.
+  let camerasOn = [];
+  function showCamerasOn() {
+    if (!viewsRoot) return;
+    const onCount = views.filter((view, index) => camerasOn[index] !== false).length;
+    viewsRoot.classList.toggle('is-multi', onCount > 1);
+    views.forEach((view, index) => {
+      view.off = camerasOn[index] === false;
+      view.root.classList.toggle('is-off', view.off);
+      const button = view.root.querySelector('[data-camera-switch]');
+      if (button) {
+        const action = view.off ? 'Turn on' : 'Turn off';
+        button.textContent = action;
+        button.setAttribute('aria-label', `${action} camera ${index + 1}`);
+        button.disabled = !view.off && onCount < 2; // the last camera on stays on
+      }
+      if (view.off) view.setMode('idle');
+      else if (view.mode === 'idle' && pageLoaded && !document.hidden) view.setMode(liveMode);
+    });
+  }
+
+  if (viewsRoot) {
+    viewsRoot.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-camera-switch]');
+      if (!button) return;
+      const index = views.findIndex((view) => view.root.contains(button));
+      const enabled = camerasOn[index] === false;
+      button.disabled = true; // until the worker's next report shows the switch
+      try {
+        await postJson(`/api/camera/${index}`, { enabled });
+        toast(`Camera ${index + 1} ${enabled ? 'on' : 'off'}`);
+      } catch (error) {
+        toast(`Could not switch camera ${index + 1}: ${error.message}`, 'error');
+        button.disabled = false;
+      }
+    });
+  }
 
   // Start the never-ending MJPEG response after the page has loaded, or the
   // browser shows the page as loading for as long as the stream runs.
   window.addEventListener('load', () => {
     pageLoaded = true;
-    views.forEach((view) => view.setMode(liveMode));
+    views.forEach((view) => view.setMode(view.off ? 'idle' : liveMode));
   }, { once: true });
   // A background tab would otherwise hold MJPEG slots, and the radio's
   // bandwidth, for nobody.
   document.addEventListener('visibilitychange', () => {
-    views.forEach((view) => view.setMode(document.hidden ? 'idle' : liveMode));
+    views.forEach((view) => view.setMode(document.hidden || view.off ? 'idle' : liveMode));
   });
   bus.on('detections', (payload) => {
     if (payload.ts) lastFrameAt = payload.ts * 1000;
@@ -114,6 +153,9 @@ function bootDashboard() {
     controls.setPaused(payload.paused);
     paused = Boolean(payload.paused);
     showOverlay();
+    camerasOn = payload.camera_on || [];
+    showCamerasOn();
+    if (devices) devices.setCamerasOn(payload.camera_on);
   });
   bus.on('summary', (payload) => renderSummary(document, payload));
 
@@ -129,6 +171,7 @@ function bootDashboard() {
     // The retained MQTT message arrives with the SSE hello, but ask directly
     // too, so the card fills even before the stream connects.
     fetchJson('/api/session').then((data) => {
+      if (data && data.camera_on) camerasOn = data.camera_on;
       if (data && data.session) {
         showCameras(data.session.cameras);
         session.render(data.session);

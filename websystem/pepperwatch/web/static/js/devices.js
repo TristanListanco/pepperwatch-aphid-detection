@@ -15,6 +15,7 @@ export class DeviceList {
     this.session = null;
     this.telemetry = null;
     this.worker = null;
+    this.camerasOn = [];
     this.signature = '';
   }
 
@@ -25,6 +26,12 @@ export class DeviceList {
 
   setTelemetry(telemetry) {
     this.telemetry = telemetry;
+    this.render();
+  }
+
+  // From the pipeline telemetry: a camera turned off on the live card.
+  setCamerasOn(on) {
+    this.camerasOn = on || [];
     this.render();
   }
 
@@ -100,10 +107,12 @@ export class DeviceList {
         (used) => used.kind === candidate.kind && String(used.device) === String(candidate.device),
       );
       const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : candidate.device;
+      const off = position >= 0 && this.camerasOn[position] === false;
       let role = 'standby';
       if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
+      if (off) role += ', turned off';
       out.push({
-        status: position >= 0 ? 'ok' : 'idle',
+        status: position >= 0 && !off ? 'ok' : 'idle',
         name: candidate.model || 'Camera',
         meta: [where, role].filter(Boolean).join(' · '),
       });

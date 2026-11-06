@@ -250,3 +250,13 @@ def test_frame_jpeg_serves_the_camera_asked_for(app, cfg, client, published_fram
         assert client.get("/stream.mjpg?camera=7").status_code == 404
     finally:
         second.close()
+
+
+def test_a_camera_turned_off_hands_its_stream_share_to_the_other(app) -> None:
+    from pepperwatch.web.routes_stream import _cameras_running
+
+    hub = app.config["PW_HUB"]
+    hub._on_message("pepperwatch/status/session", {"cameras": [{}, {}]})
+    assert _cameras_running(hub) == 2
+    hub._on_message("pepperwatch/telemetry/pipeline", {"camera_on": [True, False]})
+    assert _cameras_running(hub) == 1

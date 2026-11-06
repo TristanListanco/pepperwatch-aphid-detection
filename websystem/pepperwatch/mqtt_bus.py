@@ -50,6 +50,7 @@ class Topics:
     CMD_INFERENCE = f"{ROOT}/cmd/inference"
     CMD_CONFIG = f"{ROOT}/cmd/config"
     CMD_SESSION = f"{ROOT}/cmd/session"
+    CMD_CAMERA = f"{ROOT}/cmd/camera"
     # The running session's figures, every [sessions].summary_interval_s.
     SESSION_SUMMARY = f"{ROOT}/session/summary"
 

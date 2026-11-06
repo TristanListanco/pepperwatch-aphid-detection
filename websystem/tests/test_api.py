@@ -350,6 +350,34 @@ def test_inference_control_validates_the_action(client) -> None:
     assert client.post("/api/inference/explode").status_code == 400
 
 
+def _two_cameras(app, on=None) -> None:
+    hub = app.config["PW_HUB"]
+    hub._on_message("pepperwatch/status/session", {"cameras": [{"index": 0}, {"index": 1}]})
+    if on is not None:
+        hub._on_message("pepperwatch/telemetry/pipeline", {"camera_on": on})
+
+
+def test_camera_switch_validates_before_forwarding(app, client) -> None:
+    _two_cameras(app)
+    assert client.post("/api/camera/1", json={"enabled": "no"}).status_code == 400
+    assert client.post("/api/camera/2", json={"enabled": False}).status_code == 404
+    assert client.post("/api/camera/1", json={"enabled": False}).status_code == 503  # valid, bus down
+    # A one-camera session's telemetry still cached when two cameras start.
+    _two_cameras(app, on=[True])
+    assert client.post("/api/camera/1", json={"enabled": False}).status_code == 503
+
+
+def test_the_last_camera_on_cannot_be_turned_off(app, client, monkeypatch) -> None:
+    import pepperwatch.web.routes_api as api
+
+    sent = []
+    monkeypatch.setattr(api, "_publish_command", lambda topic, payload: sent.append((topic, payload)) or True)
+    _two_cameras(app, on=[True, False])
+    assert client.post("/api/camera/0", json={"enabled": False}).status_code == 409
+    assert client.post("/api/camera/1", json={"enabled": True}).status_code == 202
+    assert sent == [("pepperwatch/cmd/camera", {"camera": 1, "enabled": True})]
+
+
 def test_config_exposes_only_the_tunables(client) -> None:
     body = client.get("/api/config").get_json()
     assert set(body) == {"site", "inference", "severity", "web", "locales", "advisory"}

@@ -1052,10 +1052,24 @@ button {
 }
 
 .camera-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin: 0 0 8px;
   font-size: var(--type-label);
   font-weight: 500;
   color: var(--ink-2);
+}
+
+/* A camera turned off keeps only its label and the Turn on button. */
+.camera-view.is-off .viewport,
+.camera-view.is-off .live-summary {
+  display: none;
+}
+
+.camera-view.is-off .camera-label {
+  margin: 0;
 }
 
 .live-summary {

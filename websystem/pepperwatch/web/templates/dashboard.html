@@ -16,7 +16,10 @@
          camera the session runs (main.js). #}
       <div class="viewports" data-viewports>
       <figure class="camera-view" data-camera-view>
-      <figcaption class="camera-label" data-camera-label hidden></figcaption>
+      <figcaption class="camera-label" data-camera-label hidden>
+        <span data-camera-name></span>
+        <button class="btn is-quiet" type="button" data-camera-switch>Turn off</button>
+      </figcaption>
       <div class="viewport" data-viewport>
         <img data-live-image alt="Live camera feed of the bell pepper canopy">
         <canvas data-live-canvas aria-hidden="true"></canvas>

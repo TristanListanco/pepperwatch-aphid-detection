@@ -64,11 +64,10 @@ export function renderPipeline(root, pipeline) {
   if (!pipeline) return;
 
   setText(root, 'pipeline-inference-rate', num(pipeline.inference_fps, 1));
-  // One rate per camera when there are several: "30.2 · 29.8".
-  const rates = pipeline.camera_fps && pipeline.camera_fps.length > 1
-    ? pipeline.camera_fps.map((fps) => num(fps, 1)).join(' · ')
-    : num(pipeline.preview_fps, 1);
-  setText(root, 'pipeline-preview-rate', rates);
+  // One rate per camera that is on: "30.2 · 29.8".
+  const on = pipeline.camera_on || [];
+  const rates = (pipeline.camera_fps || [pipeline.preview_fps]).filter((fps, index) => on[index] !== false);
+  setText(root, 'pipeline-preview-rate', rates.map((fps) => num(fps, 1)).join(' · '));
   setText(root, 'pipeline-latency', num(pipeline.inference_ms, 1));
   setText(root, 'pipeline-dropped', String(pipeline.dropped ?? 0));
 

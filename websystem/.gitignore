@@ -25,3 +25,5 @@ MANUSCRIPT-NOTES.md
 
 # Local design-checker settings
 .impeccable/
+# Ultralytics training runs: .pt weights, gigabytes
+models/detect/

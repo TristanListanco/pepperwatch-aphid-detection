@@ -258,6 +258,9 @@ class Worker:
 
         self.governor = ThermalGovernor()
         self.latest = [LatestFrame() for _ in range(count)]
+        # Turned off from the dashboard: no reads, no encodes, no inference, so
+        # the other camera gets the whole detector. Until the next session.
+        self.camera_on = [True] * count
         self.preview_fps = [FpsMeter() for _ in range(count)]
         self.inference_fps = FpsMeter()
 
@@ -420,6 +423,9 @@ class Worker:
         quality = self.cfg.camera.jpeg_quality
         camera, meter, writer = self.cameras[index], self.preview_fps[index], self.frames[index]
         while not self._stopping.is_set():
+            if not self.camera_on[index]:
+                self._stopping.wait(timeout=0.2)
+                continue
             try:
                 frame = camera.read()
             except Exception:  # noqa: BLE001
@@ -481,7 +487,12 @@ class Worker:
                 Topics.TELEMETRY_PIPELINE,
                 {
                     "preview_fps": round(self.preview_fps[0].fps, 2),
-                    "camera_fps": [round(meter.fps, 2) for meter in self.preview_fps],
+                    # An off camera's meter keeps its last marks; report it as stopped.
+                    "camera_fps": [
+                        round(meter.fps, 2) if on else 0.0
+                        for meter, on in zip(self.preview_fps, self.camera_on)
+                    ],
+                    "camera_on": list(self.camera_on),
                     "inference_fps": round(self.inference_fps.fps, 2),
                     "inference_ms": round(self._inference_ms, 2),
                     "dropped": self._dropped(),
@@ -562,7 +573,6 @@ class Worker:
 
         info = self.detector.info
         base_interval = 1.0 / max(self.cfg.inference.target_fps, 1)
-        count = len(self.cameras)
         turn = 0
 
         while not self._stopping.is_set():
@@ -573,10 +583,11 @@ class Worker:
                 continue
 
             # One detector, several cameras: take their newest frames in turn,
-            # so each gets an equal share of the inference rate.
-            index = turn % count
+            # so each camera that is on gets an equal share of the inference rate.
+            on = [i for i, flag in enumerate(self.camera_on) if flag]
+            index = on[turn % len(on)]
             turn += 1
-            frame = self.latest[index].take(timeout=0.5 / count)
+            frame = self.latest[index].take(timeout=0.5 / len(on))
             if frame is None:
                 continue
 
@@ -858,6 +869,9 @@ class Worker:
         elif topic == Topics.CMD_CONFIG:
             self._apply_config(payload)
 
+        elif topic == Topics.CMD_CAMERA:
+            self._switch_camera(payload)
+
         elif topic == Topics.CMD_SESSION:
             # Stop this session cleanly; main() then builds a new Worker, which
             # detects the camera and the AI HAT+ afresh. In-process rather than
@@ -887,6 +901,23 @@ class Worker:
             event="config_change", source="web", detail=f"conf={conf} iou={iou}"
         )
 
+    def _switch_camera(self, payload: dict[str, Any]) -> None:
+        """Turn one camera off or back on; the last one on stays on."""
+        index, on = payload.get("camera"), payload.get("enabled")
+        if not isinstance(index, int) or not isinstance(on, bool) or not 0 <= index < len(self.cameras):
+            log.warning("ignoring camera command %r", payload)
+            return
+        if self.camera_on[index] == on:
+            return
+        if not on and sum(self.camera_on) == 1:
+            log.warning("camera %d is the only one on; leaving it on", index)
+            return
+        self.camera_on[index] = on
+        self.latest[index].take(timeout=0)  # a frame from before the switch is stale
+        state = "on" if on else "off"
+        log.info("camera %d turned %s", index, state)
+        self.db.log_system(event=f"camera_{state}", source="web", detail=f"camera {index}")
+
     def _drain_snapshots(self) -> None:
         with self._snapshot_lock:
             pending, self._pending_snapshots = self._pending_snapshots, []
@@ -900,6 +931,8 @@ class Worker:
         """Capture a high-resolution still from every camera; one manual event each."""
         hi_res = bool(request.get("hi_res", True))
         for index, camera in enumerate(self.cameras):
+            if not self.camera_on[index]:
+                continue
             still = camera.capture_still() if hi_res else None
             frame = self.latest[index].take(timeout=1.0)
             if frame is None and index == 0:

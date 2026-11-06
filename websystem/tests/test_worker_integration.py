@@ -85,17 +85,25 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     monkeypatch.setattr(worker_module, "open_cameras", lambda _cfg: (cameras, found))
 
     # Watch what the worker publishes, as the dashboard would.
-    seen: dict[str, list[dict]] = {"frame": [], "session": []}
+    seen: dict[str, list[dict]] = {"frame": [], "session": [], "pipeline": []}
+
+    def on_message(_c, _u, msg) -> None:
+        kind = msg.topic.rsplit("/", 1)[-1]
+        seen[kind].append({**json.loads(msg.payload), "received": time.time()})
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    client.on_message = lambda _c, _u, msg: seen[
-        "frame" if msg.topic.endswith("detect/frame") else "session"
-    ].append(json.loads(msg.payload))
+    client.on_message = on_message
     client.connect("127.0.0.1", int(PORT))
-    client.subscribe([("pepperwatch/detect/frame", 0), ("pepperwatch/status/session", 0)])
+    client.subscribe([
+        ("pepperwatch/detect/frame", 0),
+        ("pepperwatch/status/session", 0),
+        ("pepperwatch/telemetry/pipeline", 0),
+    ])
     client.loop_start()
 
     worker = worker_module.Worker(cfg)
     streamed: list[bool] = []
+    switched_off_at: list[float] = []
 
     def during_the_run() -> None:
         time.sleep(3.0)
@@ -104,6 +112,9 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
         for reader in readers:
             reader.close()
         client.publish("pepperwatch/cmd/capture", json.dumps({"hi_res": True}), qos=1)
+        time.sleep(3.0)
+        client.publish("pepperwatch/cmd/camera", json.dumps({"camera": 1, "enabled": False}), qos=1)
+        switched_off_at.append(time.time())
         time.sleep(3.0)
         worker.request_stop()
 
@@ -130,6 +141,13 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     ).fetchall()
     assert (0, "auto") in rows and (1, "auto") in rows
     assert (0, "manual") in rows and (1, "manual") in rows
+
+    # Camera 2 turned off: its boxes stop (bar one already in flight), camera 1
+    # carries on, and the pipeline telemetry says so.
+    after = [m["camera"] for m in seen["frame"] if m["received"] > switched_off_at[0] + 1.0]
+    assert after and set(after) == {0}
+    assert seen["pipeline"][-1]["camera_on"] == [True, False]
+    assert seen["pipeline"][-1]["camera_fps"][1] == 0.0
 
     # The session CSV says which camera every inference came from.
     (inference_csv,) = (tmp_path / "sessions").glob("*/inference.csv")

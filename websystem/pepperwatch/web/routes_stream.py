@@ -47,8 +47,12 @@ def _reader():
     return readers[index] if index is not None and 0 <= index < len(readers) else None
 
 
-def _cameras_running() -> int:
-    return len(current_app.config["PW_HUB"].session.get("cameras") or []) or 1
+def _cameras_running(hub) -> int:
+    """Cameras streaming now: the session's, less any turned off."""
+    on = hub.snapshot()["latest"].get("telemetry/pipeline", {}).get("camera_on")
+    if on:
+        return sum(on) or 1
+    return len(hub.session.get("cameras") or []) or 1
 
 
 @bp.get("/frame.jpg")
@@ -111,9 +115,10 @@ def stream_mjpeg():
         _viewers += 1
 
     # Each camera gets its share of the stream rate, so a phone watching two
-    # costs the radio no more than one did.
-    target_fps = max(1.0, float(cfg.web.stream_fps) / _cameras_running())
-    interval = 1.0 / target_fps
+    # costs the radio no more than one did. Re-read every frame: turning a
+    # camera off hands its share to the other without a reconnect.
+    hub = current_app.config["PW_HUB"]
+    stream_fps = float(cfg.web.stream_fps)
 
     def generate():
         global _viewers
@@ -121,6 +126,7 @@ def stream_mjpeg():
         try:
             while True:
                 began = time.monotonic()
+                interval = 1.0 / max(1.0, stream_fps / _cameras_running(hub))
                 packet = reader.read()
 
                 # Only send genuinely new frames: repeating one wastes the

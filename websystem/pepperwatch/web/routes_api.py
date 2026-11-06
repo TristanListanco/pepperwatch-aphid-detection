@@ -296,6 +296,31 @@ def inference_control(action: str):
     return jsonify({"accepted": True, "action": action}), 202
 
 
+@bp.post("/camera/<int:index>")
+def camera_switch(index: int):
+    """Turn one camera off, or back on, until the next session.
+
+    With two cameras the detector alternates between them; turning one off
+    gives the other the whole detector and the whole stream rate.
+    """
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return jsonify({"error": "enabled must be true or false"}), 400
+    hub = _hub()
+    count = len(hub.session.get("cameras") or [])
+    if not 0 <= index < count:
+        return jsonify({"error": "no such camera"}), 404
+    on = hub.snapshot()["latest"].get("telemetry/pipeline", {}).get("camera_on")
+    if not isinstance(on, list) or len(on) != count:  # none yet, or a previous session's
+        on = [True] * count
+    if not enabled and on[index] and sum(on) == 1:
+        return jsonify({"error": "at least one camera has to stay on"}), 409
+    if not _publish_command(Topics.CMD_CAMERA, {"camera": index, "enabled": enabled}):
+        return jsonify({"error": "worker unreachable"}), 503
+    return jsonify({"accepted": True, "camera": index, "enabled": enabled}), 202
+
+
 @bp.get("/config")
 def get_config():
     """The tunables the Settings page exposes. Never the whole config."""
