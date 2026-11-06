@@ -20,8 +20,8 @@ RemainAfterExit=yes
 ExecStart=/opt/pepperwatch/deploy/network/setup-ap.sh
 # "-": on a saved network the hotspot was never up, so there is nothing to stop.
 ExecStop=-/usr/bin/nmcli connection down pepperwatch-ap
-# A scan, up to 30 s joining a saved network, then the hotspot if that failed.
-TimeoutStartSec=120
+# A scan, up to 30 s joining a saved network, then up to three tries at the hotspot.
+TimeoutStartSec=180
 
 [Install]
 WantedBy=pepperwatch.target

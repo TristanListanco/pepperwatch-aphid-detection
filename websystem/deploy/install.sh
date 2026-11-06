@@ -319,7 +319,8 @@ if [ -z "$AP_NOTE" ]; then
   AP_SUMMARY="Wi-Fi network:  PepperWatch
     Password:       $AP_PSK
     Join it from a phone or tablet; the dashboard should open by itself.
-    If it does not, browse to http://192.168.4.1:8000/"
+    If it does not, browse to http://192.168.4.1:8000/
+    The hotspot is on only when no saved Wi-Fi network is in range at boot."
 else
   AP_SUMMARY="$AP_NOTE"
 fi
@@ -351,7 +352,7 @@ EOF
 # password. Special characters are escaped as the WIFI: format requires.
 if [ -z "$AP_NOTE" ] && [ -n "$AP_PSK" ] && command -v qrencode >/dev/null; then
   QR_PSK="$(printf '%s' "$AP_PSK" | sed 's/[\\;,:"]/\\&/g')"
-  echo "    Scan with a phone camera to join PepperWatch:"
+  echo "    Scan with a phone camera to join PepperWatch (when the hotspot is on):"
   qrencode -t ANSIUTF8 -m 2 "WIFI:T:WPA;S:PepperWatch;P:$QR_PSK;;"
 fi
 

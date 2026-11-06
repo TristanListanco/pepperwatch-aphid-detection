@@ -129,6 +129,11 @@ fi
 # 2.4 GHz by default. 5 GHz is faster but its range is much shorter, and this
 # is a pole-mounted unit in an open field where reach matters more than
 # throughput — the dashboard defaults to ~0.4 Mbit/s polling for that reason.
+#
+# WPA2 with AES only, and PMF off: what `nmcli device wifi hotspot` sets. Left
+# at the defaults, NetworkManager also offers WPA1/TKIP and, when the supplicant
+# supports it, WPA3; the Pi's brcmfmac radio cannot do PMF or WPA3 as an access
+# point, so phones then fail to join, or never see the network at all.
 if nmcli -g NAME connection show | grep -x "$CON_NAME" >/dev/null; then
   log "updating existing connection ${CON_NAME}"
   nmcli connection modify "$CON_NAME" \
@@ -137,6 +142,10 @@ if nmcli -g NAME connection show | grep -x "$CON_NAME" >/dev/null; then
     wifi.band "$BAND" \
     wifi.channel "$CHANNEL" \
     wifi-sec.key-mgmt wpa-psk \
+    wifi-sec.proto rsn \
+    wifi-sec.pairwise ccmp \
+    wifi-sec.group ccmp \
+    wifi-sec.pmf disable \
     wifi-sec.psk "$PSK" \
     ipv4.method shared \
     ipv4.addresses "$ADDRESS" \
@@ -154,13 +163,27 @@ else
     wifi.band "$BAND" \
     wifi.channel "$CHANNEL" \
     wifi-sec.key-mgmt wpa-psk \
+    wifi-sec.proto rsn \
+    wifi-sec.pairwise ccmp \
+    wifi-sec.group ccmp \
+    wifi-sec.pmf disable \
     wifi-sec.psk "$PSK" \
     ipv4.method shared \
     ipv4.addresses "$ADDRESS"
 fi
 
 log "bringing up ${CON_NAME}"
-nmcli connection up "$CON_NAME"
+up=""
+for _ in 1 2 3; do  # right after boot the radio may not be ready yet
+  if nmcli --wait 20 connection up "$CON_NAME"; then up=1; break; fi
+  sleep 5
+done
+if [ -z "$up" ]; then
+  log "ERROR: the hotspot did not start. Wi-Fi radio: $(nmcli radio wifi 2>&1)."
+  log "       If it is blocked, set the Wi-Fi country (sudo raspi-config,"
+  log "       Localisation Options) and reboot."
+  exit 1
+fi
 
 log "access point is up:"
 nmcli -f GENERAL.STATE,IP4.ADDRESS connection show "$CON_NAME" | sed 's/^/          /'

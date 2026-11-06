@@ -196,14 +196,21 @@ case "$*" in
   "-g connection.autoconnect connection show $FAKE_SAVED") echo yes ;;
   "-g 802-11-wireless.ssid connection show $FAKE_SAVED") echo "$FAKE_SAVED" ;;
   "-t -f SSID device wifi list ifname wlan0 --rescan yes") printf '%s\n' $FAKE_VISIBLE ;;
-  "-g NAME connection show") echo pepperwatch-ap ;;
+  "-g NAME connection show") echo "${FAKE_NAMES-pepperwatch-ap}" ;;
+  "--wait 20 connection up pepperwatch-ap")
+    tries=$(( $(cat "$FAKE_LOG.tries" 2>/dev/null || echo 0) + 1 ))
+    echo "$tries" > "$FAKE_LOG.tries"
+    [ "$tries" -le "${FAKE_AP_FAILS:-0}" ] && exit 4 ;;
+  "radio wifi") echo enabled ;;
   "-g IP4.ADDRESS device show wlan0") echo 10.0.0.5/24 ;;
 esac
 exit 0
 """
 
 
-def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "", **fake: str) -> str:
+def run_setup_ap(
+    tmp_path: Path, saved: str = "", visible: str = "", check: bool = True, **fake: str,
+) -> str:
     """Run setup-ap.sh against a fake nmcli; return what it was asked."""
     import os
     import subprocess
@@ -212,6 +219,8 @@ def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "", **fake: str
     bin_dir.mkdir()
     (bin_dir / "nmcli").write_text(FAKE_NMCLI)
     (bin_dir / "nmcli").chmod(0o755)
+    (bin_dir / "sleep").write_text("#!/bin/sh\n")  # the retries need not wait here
+    (bin_dir / "sleep").chmod(0o755)
     log = tmp_path / "calls.log"
     env = {
         **os.environ,
@@ -224,7 +233,7 @@ def run_setup_ap(tmp_path: Path, saved: str = "", visible: str = "", **fake: str
     }
     subprocess.run(
         ["bash", str(DEPLOY / "network" / "setup-ap.sh")],
-        env=env, check=True, capture_output=True, text=True,
+        env=env, check=check, capture_output=True, text=True,
     )
     return log.read_text()
 
@@ -239,13 +248,36 @@ def test_with_no_saved_network_the_hotspot_starts(tmp_path) -> None:
     calls = run_setup_ap(tmp_path)
     modify = next(line for line in calls.splitlines() if "connection modify" in line)
     assert "connection.autoconnect no" in modify  # only setup-ap.sh starts it
-    assert "nmcli connection up pepperwatch-ap" in calls
+    assert "connection up pepperwatch-ap" in calls
+
+
+@pytest.mark.parametrize("names", ["pepperwatch-ap", ""], ids=["update", "create"])
+def test_the_hotspot_is_wpa2_aes_with_pmf_off(tmp_path, names) -> None:
+    """The Pi's radio can't do PMF or WPA3 as an access point; left on, phones
+    fail to join or never see the network."""
+    calls = run_setup_ap(tmp_path, names=names)
+    command = next(line for line in calls.splitlines() if "wifi-sec.key-mgmt" in line)
+    for setting in ("wifi-sec.proto rsn", "wifi-sec.pairwise ccmp",
+                    "wifi-sec.group ccmp", "wifi-sec.pmf disable"):
+        assert setting in command
+
+
+def test_a_hotspot_that_fails_to_start_at_boot_is_retried(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path, ap_fails="2")
+    assert calls.count("connection up pepperwatch-ap") == 3
+
+
+def test_a_hotspot_that_never_starts_fails_the_service(tmp_path) -> None:
+    import subprocess
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_setup_ap(tmp_path, ap_fails="9")
 
 
 def test_a_saved_network_out_of_range_falls_back_to_the_hotspot(tmp_path) -> None:
     calls = run_setup_ap(tmp_path, saved="FarmWiFi", visible="Neighbour")
     assert "connection up FarmWiFi" not in calls
-    assert "nmcli connection up pepperwatch-ap" in calls
+    assert "connection up pepperwatch-ap" in calls
 
 
 def test_already_connected_keeps_the_network_and_turns_hotspot_autoconnect_off(tmp_path) -> None:
@@ -267,7 +299,7 @@ def test_a_join_still_in_progress_that_fails_starts_the_hotspot(tmp_path) -> Non
         tmp_path, saved="FarmWiFi", visible="FarmWiFi", current="FarmWiFi",
         state="70 (connecting (getting IP configuration))", up_fails="1",
     )
-    assert "nmcli connection up pepperwatch-ap" in calls
+    assert "connection up pepperwatch-ap" in calls
 
 
 def test_a_network_with_a_colon_in_its_name_is_joined(tmp_path) -> None:
