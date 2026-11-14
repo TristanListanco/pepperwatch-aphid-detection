@@ -66,7 +66,7 @@ pepperwatch/
   detect/        postprocess.py, hailo_detector.py, onnx_detector.py, stub_detector.py
   web/           Flask app, ES6 modules, Jinja templates
 deploy/          install.sh, update.sh, systemd units, mosquitto conf, NetworkManager AP
-scripts/         bench_fps.py (--accelerator cpu|hailo), check_js.sh
+scripts/         bench_fps.py (--accelerator cpu|hailo), finetune_model.py (teach the model what isn't a leaf), check_js.sh
 tests/           433 hardware-free unit and API tests, plus a worker integration test
 ```
 

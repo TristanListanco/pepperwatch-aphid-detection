@@ -82,7 +82,7 @@ Python 3.11+, since it needs no hardware.
     │   ├── maintenance.py      Nightly WAL truncation + log pruning
     │   └── web/                Flask app: REST, SSE, MJPEG, pages, captive portal
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
-    ├── scripts/                bench_fps.py (CPU vs AI HAT+), check_js.sh
+    ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
     └── tests/                  433 hardware-free unit and API tests, plus a worker integration test
 ```
@@ -968,6 +968,46 @@ card shows *heuristic stub, not a trained model*.
 
 On start, the worker logs which model and accelerator it chose; the dashboard's
 Session card shows both, and `session.json` records the model's SHA-256.
+
+**Teaching the model what isn't a leaf.** The deployed model is train-24
+(`models/detect/train-24/weights/best.pt`; its ONNX export is identical to
+`models/best.onnx`). Its validation confusion matrix shows 241 aphid and 42
+healthy boxes on background, and in the field it calls a green wall healthy
+and brown or black spots on non-leaf objects aphid-infested. It has seldom been
+shown what isn't a leaf. `scripts/finetune_model.py` fine-tunes it on exactly
+that, then compares the two models before you swap:
+
+1. **Collect negatives with the Pi's own camera**: 100–300 frames with no
+   pepper leaf anywhere in them. Point the camera at the green wall, brown and
+   black objects, soil, mulch, pots and the frame, moving it between shots. On
+   the Pi, while the worker runs:
+
+   ```bash
+   mkdir -p ~/negatives && for i in $(seq -w 1 150); do
+     curl -s "http://localhost:8000/frame.jpg?camera=0" -o ~/negatives/neg_$i.jpg; sleep 2
+   done
+   ```
+
+   These are clean frames. Don't use the detection log's images: their boxes
+   are drawn into them. Delete any frame that shows a leaf.
+2. **On the GPU machine or Colab**, with the labelled dataset train-24 used
+   (its `data.yaml`, images and labels) and the negatives folder:
+
+   ```bash
+   pip install ultralytics==8.4.163
+   python scripts/finetune_model.py --data <dataset>/data.yaml \
+       --negatives <negatives> --weights models/detect/train-24/weights/best.pt
+   ```
+
+   It adds four in five negatives to training as background (no labels), holds
+   the rest out, and fine-tunes from train-24 at a low learning rate with
+   train-24's augmentation. It then prints both models side by side: precision,
+   recall and mAP on the original validation split, boxes on background, and
+   boxes found on the held-out negatives.
+3. **Swap only if it's better**: fewer boxes where there's no leaf, and mAP50
+   within 0.01 of train-24's. The script says which, and exports
+   `runs/finetune/train/weights/best.onnx`; copy it to `models/pepperwatch.onnx`
+   in the Pi's checkout and run `sudo ./deploy/install.sh`.
 
 ---
 
