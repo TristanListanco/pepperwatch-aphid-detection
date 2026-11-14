@@ -390,11 +390,57 @@ def test_config_default_threshold_is_not_figure_3_3s_value(client) -> None:
     assert client.get("/api/config").get_json()["inference"]["conf_threshold"] == 0.25
 
 
-def test_patch_config_updates_thresholds(client) -> None:
+def _worker_that_applies(app, monkeypatch) -> list:
+    """A worker on the other end of the bus: it applies the thresholds and
+    reports them in its next pipeline telemetry, as the real one does."""
+    import pepperwatch.web.routes_api as api
+
+    sent = []
+    hub = app.config["PW_HUB"]
+    reported = {"conf_threshold": 0.25, "iou_threshold": 0.45}
+
+    def publish(topic, payload):
+        sent.append((topic, payload))
+        reported.update(payload)
+        hub._on_message("pepperwatch/telemetry/pipeline", dict(reported))
+        return True
+
+    monkeypatch.setattr(api, "_publish_command", publish)
+    return sent
+
+
+def test_patch_config_is_applied_once_the_detector_reports_it(app, client, monkeypatch) -> None:
+    sent = _worker_that_applies(app, monkeypatch)
     response = client.patch("/api/config", json={"conf_threshold": 0.4})
     assert response.status_code == 200
-    assert response.get_json()["updated"]["conf_threshold"] == 0.4
+    assert response.get_json() == {"updated": {"conf_threshold": 0.4}, "applied": True}
+    assert sent == [("pepperwatch/cmd/config", {"conf_threshold": 0.4})]
     assert client.get("/api/config").get_json()["inference"]["conf_threshold"] == 0.4
+
+
+def test_patch_config_says_so_when_the_detector_is_unreachable(client) -> None:
+    response = client.patch("/api/config", json={"conf_threshold": 0.4})
+    assert response.status_code == 503  # no broker in tests
+    assert client.get("/api/config").get_json()["inference"]["conf_threshold"] == 0.25
+
+
+def test_patch_config_is_not_applied_without_the_detectors_confirmation(app, client, monkeypatch) -> None:
+    import pepperwatch.web.routes_api as api
+
+    monkeypatch.setattr(api, "_publish_command", lambda topic, payload: True)  # sent, but no worker
+    monkeypatch.setattr(api, "CONFIRM_TIMEOUT_S", 0.2)
+    response = client.patch("/api/config", json={"iou_threshold": 0.6})
+    assert response.status_code == 504
+    assert client.get("/api/config").get_json()["inference"]["iou_threshold"] == 0.45
+
+
+def test_config_shows_the_thresholds_the_detector_reports(app, client) -> None:
+    """A new session starts again from the config files; show what is running."""
+    app.config["PW_HUB"]._on_message(
+        "pepperwatch/telemetry/pipeline", {"conf_threshold": 0.35, "iou_threshold": 0.5}
+    )
+    inference = client.get("/api/config").get_json()["inference"]
+    assert (inference["conf_threshold"], inference["iou_threshold"]) == (0.35, 0.5)
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.5, 1.5, "high"])

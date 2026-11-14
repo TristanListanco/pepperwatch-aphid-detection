@@ -112,6 +112,7 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
         for reader in readers:
             reader.close()
         client.publish("pepperwatch/cmd/capture", json.dumps({"hi_res": True}), qos=1)
+        client.publish("pepperwatch/cmd/config", json.dumps({"conf_threshold": 0.4}), qos=1)
         time.sleep(3.0)
         client.publish("pepperwatch/cmd/camera", json.dumps({"camera": 1, "enabled": False}), qos=1)
         switched_off_at.append(time.time())
@@ -148,6 +149,8 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     assert after and set(after) == {0}
     assert seen["pipeline"][-1]["camera_on"] == [True, False]
     assert seen["pipeline"][-1]["camera_fps"][1] == 0.0
+    # A threshold from Settings reaches the detector, which reports it back.
+    assert seen["pipeline"][-1]["conf_threshold"] == 0.4
 
     # The session CSV says which camera every inference came from.
     (inference_csv,) = (tmp_path / "sessions").glob("*/inference.csv")

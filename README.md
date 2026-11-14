@@ -84,7 +84,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  429 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  433 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -1002,7 +1002,7 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
 | POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera on can't be turned off (`409`) |
-| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99) |
+| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Lasts until the next session |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
@@ -1112,7 +1112,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 429 tests (~1 min)
+.venv/bin/python -m pytest               # 433 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1165,7 +1165,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 429 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 433 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |

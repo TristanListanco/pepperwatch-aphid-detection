@@ -13,6 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import time
 import uuid
 from datetime import datetime, timezone
@@ -24,6 +25,10 @@ from ..session import csv_safe
 from ..mqtt_bus import Topics
 
 log = logging.getLogger(__name__)
+
+# The worker reports its thresholds every [sessions].system_interval_s (1 s), from
+# its own thread; three seconds allow for a missed report.
+CONFIRM_TIMEOUT_S = 3.0
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -325,12 +330,15 @@ def camera_switch(index: int):
 def get_config():
     """The tunables the Settings page exposes. Never the whole config."""
     cfg = _cfg()
+    live = _detector_thresholds()
     return jsonify(
         {
             "site": {"name": cfg.site.name, "operator": cfg.site.operator, "role": cfg.site.role},
             "inference": {
-                "conf_threshold": cfg.inference.conf_threshold,
-                "iou_threshold": cfg.inference.iou_threshold,
+                # The detector's own values when it has reported them: a new
+                # session starts again from the config files.
+                "conf_threshold": live.get("conf_threshold", cfg.inference.conf_threshold),
+                "iou_threshold": live.get("iou_threshold", cfg.inference.iou_threshold),
                 "input_size": cfg.inference.input_size,
                 "target_fps": cfg.inference.target_fps,
                 "class_names": list(cfg.inference.class_names),
@@ -372,12 +380,28 @@ def patch_config():
     if not updates:
         return jsonify({"error": "nothing to update"}), 400
 
-    cfg = _cfg()
-    for key, value in updates.items():
-        cfg.inference._data[key] = value  # noqa: SLF001
+    if not _publish_command(Topics.CMD_CONFIG, updates):
+        return jsonify({"error": "the dashboard is not connected to the detector; try again in a moment"}), 503
 
-    forwarded = _publish_command(Topics.CMD_CONFIG, updates)
-    return jsonify({"updated": updates, "forwarded_to_worker": forwarded})
+    # The worker reports its thresholds once a second. Only call it applied
+    # when they match, so the page never claims a change the detector lacks.
+    deadline = time.monotonic() + CONFIRM_TIMEOUT_S
+    while True:
+        live = _detector_thresholds()
+        if all(key in live and math.isclose(live[key], value) for key, value in updates.items()):
+            cfg = _cfg()
+            for key, value in updates.items():
+                cfg.inference._data[key] = value  # noqa: SLF001
+            return jsonify({"updated": updates, "applied": True})
+        if time.monotonic() >= deadline:
+            return jsonify({"error": "the detector did not confirm the change; is it running?"}), 504
+        time.sleep(0.1)
+
+
+def _detector_thresholds() -> dict[str, float]:
+    """The thresholds the detector reported in its last pipeline telemetry."""
+    live = _hub().snapshot()["latest"].get("telemetry/pipeline", {})
+    return {key: float(live[key]) for key in ("conf_threshold", "iou_threshold") if live.get(key) is not None}
 
 
 @bp.post("/time")

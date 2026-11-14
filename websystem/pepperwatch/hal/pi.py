@@ -224,9 +224,13 @@ class UsbCamera(CameraSource):
             )
 
     def read(self) -> Frame | None:
-        if self._capture is None:
-            raise CameraError("read() before start()")
-        ok, frame = self._capture.read()
+        # A snapshot reads from another thread than the capture loop, and
+        # OpenCV's VideoCapture is not thread-safe: two reads at once can hand
+        # back the same V4L2 buffer twice and stall or fail the camera.
+        with self._lock:
+            if self._capture is None:
+                raise CameraError("read() before start()")
+            ok, frame = self._capture.read()
         if not ok or frame is None:
             return None
         self._seq += 1

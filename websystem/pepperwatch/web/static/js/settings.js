@@ -89,6 +89,7 @@ function bindSlider(root, key, initial) {
   const status = root.querySelector('[data-settings-status]');
   if (!slider) return;
 
+  let applied = initial;
   slider.value = String(initial);
   if (readout) readout.textContent = num(initial, 2);
 
@@ -101,17 +102,21 @@ function bindSlider(root, key, initial) {
   // worker over MQTT.
   slider.addEventListener('change', async () => {
     const field = key === 'conf' ? 'conf_threshold' : 'iou_threshold';
+    if (status) {
+      status.textContent = 'Applying…';
+      status.className = 'note';
+    }
     try {
-      const result = await patchJson('/api/config', { [field]: Number(slider.value) });
-      if (status) {
-        status.textContent = result.forwarded_to_worker
-          ? 'Applied and sent to the detector.'
-          : 'Applied here; the worker is offline and will pick it up on restart.';
-        status.className = 'note';
-      }
+      // Answers only once the detector reports the new value, a second or two.
+      await patchJson('/api/config', { [field]: Number(slider.value) });
+      applied = Number(slider.value);
+      if (status) status.textContent = 'Applied: the detector is using it now, until the next session.';
     } catch (error) {
+      // Show what the detector is really using, not the value that failed.
+      slider.value = String(applied);
+      if (readout) readout.textContent = num(applied, 2);
       if (status) {
-        status.textContent = `Could not apply: ${error.message}`;
+        status.textContent = `Not applied: ${error.message}`;
         status.className = 'note sev-high';
       }
     }

@@ -493,6 +493,9 @@ class Worker:
                         for meter, on in zip(self.preview_fps, self.camera_on)
                     ],
                     "camera_on": list(self.camera_on),
+                    # What the detector is using, so Settings can confirm a change.
+                    "conf_threshold": self.cfg.inference.conf_threshold,
+                    "iou_threshold": self.cfg.inference.iou_threshold,
                     "inference_fps": round(self.inference_fps.fps, 2),
                     "inference_ms": round(self._inference_ms, 2),
                     "dropped": self._dropped(),
@@ -933,14 +936,18 @@ class Worker:
         for index, camera in enumerate(self.cameras):
             if not self.camera_on[index]:
                 continue
-            still = camera.capture_still() if hi_res else None
-            frame = self.latest[index].take(timeout=1.0)
-            if frame is None and index == 0:
-                frame = self._await_first_frame(timeout=2.0)
-            if frame is None:
-                log.warning("snapshot requested but camera %d has no frame", index)
-                continue
-            self._snapshot_one(index, frame, still, request)
+            try:  # one camera failing must not lose the other's snapshot
+                still = camera.capture_still() if hi_res else None
+                frame = self.latest[index].take(timeout=1.0)
+                if frame is None and index == 0:
+                    frame = self._await_first_frame(timeout=2.0)
+                if frame is None:
+                    log.warning("snapshot requested but camera %d has no frame", index)
+                    continue
+                self._snapshot_one(index, frame, still, request)
+            except Exception:  # noqa: BLE001
+                log.exception("snapshot from camera %d failed", index)
+                self.db.log_system(level="error", event="snapshot_failed", source="worker", detail=f"camera {index}")
 
     def _snapshot_one(
         self, index: int, frame: Frame, still: np.ndarray | None, request: dict[str, Any]

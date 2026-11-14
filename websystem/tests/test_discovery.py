@@ -131,3 +131,33 @@ def test_a_configured_device_means_that_camera_alone(monkeypatch) -> None:
     started, _ = pi.open_cameras(cfg)
     assert [c.candidate.device for c in started] == ["/dev/video2"]
     assert pi.open_camera(load({}, use_env=False))[0].candidate.device == "/dev/video0"
+
+
+def test_a_usb_snapshot_never_reads_the_camera_alongside_the_capture_loop(cfg) -> None:
+    """OpenCV's VideoCapture is not thread-safe; reads from the capture loop and
+    from a snapshot must take turns."""
+    import threading
+    import time
+
+    import numpy as np
+
+    from pepperwatch.hal.pi import UsbCamera
+
+    class Capture:
+        inside = most = 0
+
+        def read(self):
+            Capture.inside += 1
+            Capture.most = max(Capture.most, Capture.inside)
+            time.sleep(0.005)
+            Capture.inside -= 1
+            return True, np.zeros((4, 4, 3), np.uint8)
+
+    camera = UsbCamera(cfg, CameraCandidate("usb", "/dev/video0", "fake"))
+    camera._capture = Capture()
+    loop = threading.Thread(target=lambda: [camera.read() for _ in range(40)])
+    loop.start()
+    for _ in range(20):
+        camera.capture_still()
+    loop.join()
+    assert Capture.most == 1
