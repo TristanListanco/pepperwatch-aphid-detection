@@ -55,12 +55,12 @@ def test_services_restart_automatically(name) -> None:
 def test_target_pulls_in_everything_needed_for_unattended_boot(name="pepperwatch.target") -> None:
     """§3.4.5: one enable, and power-on brings the whole node up."""
     section = unit(name)["Unit"]
-    for service in ("pepperwatch-worker", "pepperwatch-web"):
-        assert service in section["Requires"]
-    # Wanted, not required: a board with no Wi-Fi radio still runs the
-    # detector and serves the dashboard over Ethernet.
-    assert "pepperwatch-ap" in section["Wants"]
-    assert "pepperwatch-ap" not in section["Requires"]
+    for service in ("pepperwatch-worker", "pepperwatch-web", "pepperwatch-ap"):
+        assert service in section["Wants"]
+    # Not required: systemd restarts the target, and the access point that is
+    # PartOf it, every time a required service restarts itself. A worker
+    # crash-looping with no camera dropped the hotspot every few seconds.
+    assert "Requires" not in section
     assert unit(name)["Install"]["WantedBy"] == "multi-user.target"
 
 

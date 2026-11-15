@@ -316,10 +316,16 @@ def camera_switch(index: int):
     count = len(hub.session.get("cameras") or [])
     if not 0 <= index < count:
         return jsonify({"error": "no such camera"}), 404
-    on = hub.snapshot()["latest"].get("telemetry/pipeline", {}).get("camera_on")
+    pipeline = hub.snapshot()["latest"].get("telemetry/pipeline", {})
+    on, connected = pipeline.get("camera_on"), pipeline.get("camera_connected")
     if not isinstance(on, list) or len(on) != count:  # none yet, or a previous session's
         on = [True] * count
-    if not enabled and on[index] and sum(on) == 1:
+    if not isinstance(connected, list) or len(connected) != count:
+        connected = [True] * count
+    if enabled and not connected[index]:
+        return jsonify({"error": f"camera {index + 1} is unplugged; plug it back in"}), 409
+    active = [i for i in range(count) if on[i] and connected[i]]
+    if not enabled and active == [index]:
         return jsonify({"error": "at least one camera has to stay on"}), 409
     if not _publish_command(Topics.CMD_CAMERA, {"camera": index, "enabled": enabled}):
         return jsonify({"error": "worker unreachable"}), 503

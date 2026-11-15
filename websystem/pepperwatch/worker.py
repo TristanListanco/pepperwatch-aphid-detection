@@ -53,9 +53,18 @@ from .db import Database, utcnow
 from .detect import Detector, get_detector, severity_from_config
 from .detect.postprocess import drop_non_plant
 from .frames import make_writer
-from .hal import CameraSource, Frame, get_telemetry, open_cameras
+from .hal import CameraError, CameraSource, Frame, discover_cameras, get_telemetry, open_cameras
+from .hal.discovery import SYSFS_VIDEO, usb_cameras
 from .models import Detection
-from .mqtt_bus import STATUS_OFFLINE, STATUS_ONLINE, MqttBus, Topics, make_bus
+from .mqtt_bus import (
+    STATUS_NO_CAMERA,
+    STATUS_OFFLINE,
+    STATUS_ONLINE,
+    STATUS_RESTARTING,
+    MqttBus,
+    Topics,
+    make_bus,
+)
 from .render import draw_detections, encode_jpeg, make_thumbnail
 from .session import SessionRecorder, recover_interrupted, request_next_label, write_durably
 from .thermal import ThermalGovernor
@@ -262,6 +271,13 @@ class Worker:
         # Turned off from the dashboard: no reads, no encodes, no inference, so
         # the other camera gets the whole detector. Until the next session.
         self.camera_on = [True] * count
+        # Unplugged while running (USB only): stopped and shown as such, while
+        # the others carry on. Plugging one in restarts the session instead.
+        self.camera_connected = [True] * count
+        # USB cameras seen this session. One that appears and is not in here (a
+        # new camera, or one plugged back in) is picked up by a new session.
+        self._usb_seen = {c.device for c in self.cameras_found if c.kind == "usb"}
+        self._usb_arriving: set[str] = set()
         self.preview_fps = [FpsMeter() for _ in range(count)]
         self.inference_fps = FpsMeter()
 
@@ -415,7 +431,9 @@ class Worker:
             pass
         # A clean disconnect suppresses the Last Will, so publish the offline
         # status deliberately — an intentional stop should not look like a crash.
-        self.bus.stop(final_status=(Topics.STATUS_WORKER, STATUS_OFFLINE))
+        # A new session follows a restart at once, so that is "restarting".
+        final = STATUS_RESTARTING if self.restart_requested else STATUS_OFFLINE
+        self.bus.stop(final_status=(Topics.STATUS_WORKER, final))
         for camera in self.cameras:
             camera.stop()
         self.telemetry.close()
@@ -431,12 +449,14 @@ class Worker:
         quality = self.cfg.camera.jpeg_quality
         camera, meter, writer = self.cameras[index], self.preview_fps[index], self.frames[index]
         while not self._stopping.is_set():
-            if not self.camera_on[index]:
+            if not (self.camera_on[index] and self.camera_connected[index]):
                 self._stopping.wait(timeout=0.2)
                 continue
             try:
                 frame = camera.read()
             except Exception:  # noqa: BLE001
+                if not self.camera_connected[index]:
+                    continue  # unplugged during the read
                 log.exception("camera read failed")
                 self.db.log_system(level="error", event="camera_error", source="worker")
                 time.sleep(0.5)
@@ -489,18 +509,21 @@ class Worker:
             payload["thermal_multiplier"] = state.multiplier
             payload["backing_off"] = state.backing_off
             self._record_system(sample, payload, state.level)
+            self._check_cameras()
 
             self.bus.publish(Topics.TELEMETRY_SYSTEM, payload, qos=0)
+            active = self._active()
             self.bus.publish(
                 Topics.TELEMETRY_PIPELINE,
                 {
                     "preview_fps": round(self.preview_fps[0].fps, 2),
                     # An off camera's meter keeps its last marks; report it as stopped.
                     "camera_fps": [
-                        round(meter.fps, 2) if on else 0.0
-                        for meter, on in zip(self.preview_fps, self.camera_on)
+                        round(meter.fps, 2) if index in active else 0.0
+                        for index, meter in enumerate(self.preview_fps)
                     ],
                     "camera_on": list(self.camera_on),
+                    "camera_connected": list(self.camera_connected),
                     # What the detector is using, so Settings can confirm a change.
                     "conf_threshold": self.cfg.inference.conf_threshold,
                     "iou_threshold": self.cfg.inference.iou_threshold,
@@ -595,10 +618,13 @@ class Worker:
 
             # One detector, several cameras: take their newest frames in turn,
             # so each camera that is on gets an equal share of the inference rate.
-            on = [i for i, flag in enumerate(self.camera_on) if flag]
-            index = on[turn % len(on)]
+            active = self._active()
+            if not active:  # every camera off or unplugged
+                self._stopping.wait(timeout=0.2)
+                continue
+            index = active[turn % len(active)]
             turn += 1
-            frame = self.latest[index].take(timeout=0.5 / len(on))
+            frame = self.latest[index].take(timeout=0.5 / len(active))
             if frame is None:
                 continue
 
@@ -923,7 +949,10 @@ class Worker:
             return
         if self.camera_on[index] == on:
             return
-        if not on and sum(self.camera_on) == 1:
+        if on and not self.camera_connected[index]:
+            log.warning("camera %d is unplugged; it cannot be turned on", index)
+            return
+        if not on and self._active() == [index]:
             log.warning("camera %d is the only one on; leaving it on", index)
             return
         self.camera_on[index] = on
@@ -931,6 +960,40 @@ class Worker:
         state = "on" if on else "off"
         log.info("camera %d turned %s", index, state)
         self.db.log_system(event=f"camera_{state}", source="web", detail=f"camera {index}")
+
+    def _active(self) -> list[int]:
+        """The cameras the detector takes frames from: turned on and plugged in."""
+        return [i for i, on in enumerate(self.camera_on) if on and self.camera_connected[i]]
+
+    def _check_cameras(self) -> None:
+        """Notice USB cameras unplugged or plugged in. Called about once a second.
+
+        CSI cameras are not watched: a ribbon cable must not be plugged in or
+        out with the power on.
+        """
+        present = _usb_present()
+        if present is None:
+            return
+        for index, camera in enumerate(self.cameras):
+            device = camera.info.detail.get("device")
+            if camera.info.kind != "usb" or not self.camera_connected[index] or device in present:
+                continue
+            self.camera_connected[index] = False
+            camera.stop()
+            self.latest[index].take(timeout=0)
+            log.warning("camera %d (%s) was unplugged", index, device)
+            self.db.log_system(level="warn", event="camera_unplugged", source="worker", detail=f"camera {index} {device}")
+
+        self._usb_seen &= present  # one that went away is new again when it is back
+        arrived = present - self._usb_seen
+        # On two checks in a row: udev needs a moment before a new camera opens.
+        ready = arrived & self._usb_arriving
+        self._usb_arriving = arrived
+        if ready and not self._stopping.is_set():
+            log.info("camera plugged in (%s); starting a new session to use it", ", ".join(sorted(ready)))
+            self.db.log_system(event="camera_connected", source="worker", detail=", ".join(sorted(ready)))
+            self.restart_requested = True
+            self.request_stop()
 
     def _drain_snapshots(self) -> None:
         with self._snapshot_lock:
@@ -945,7 +1008,7 @@ class Worker:
         """Capture a high-resolution still from every camera; one manual event each."""
         hi_res = bool(request.get("hi_res", True))
         for index, camera in enumerate(self.cameras):
-            if not self.camera_on[index]:
+            if index not in self._active():
                 continue
             try:  # one camera failing must not lose the other's snapshot
                 still = camera.capture_still() if hi_res else None
@@ -997,6 +1060,36 @@ def _os_name() -> str:
     return platform.platform()
 
 
+def _usb_present() -> set[str] | None:
+    """Device paths of the USB cameras attached now, or None where sysfs cannot tell."""
+    if not SYSFS_VIDEO.is_dir():
+        return None
+    return {camera.device for camera in usb_cameras()}
+
+
+def wait_for_camera(cfg: Config, *, poll_s: float = 2.0, retry_s: float = 30.0) -> None:
+    """Tell the dashboard no camera is connected, until the cameras attached change.
+
+    Returns then, or, when a camera is attached but would not start, after
+    ``retry_s`` to try it again. Replaces exiting and being restarted by
+    systemd, which left the dashboard saying only "offline" and, through the
+    target's dependencies, restarted the Wi-Fi access point each time.
+    """
+    bus = make_bus(cfg, "worker", with_will=True)
+    bus.start(timeout=3.0)
+    bus.publish_raw(Topics.STATUS_WORKER, STATUS_NO_CAMERA, qos=1, retain=True)
+    log.info("waiting for a camera to be plugged in")
+    before = {camera.describe() for camera in discover_cameras()}
+    # A camera attached that would not start is tried again now and then. With
+    # none attached only a change is worth it: each try reloads the model.
+    deadline = time.monotonic() + retry_s if before else None
+    while deadline is None or time.monotonic() < deadline:
+        time.sleep(poll_s)
+        if {camera.describe() for camera in discover_cameras()} != before:
+            break
+    bus.stop()  # no closing status: the next worker announces itself
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -1012,7 +1105,13 @@ def main() -> int:
         board.model, board.family, board.cpu, board.mem_mb, board.tier,
     )
     while True:
-        worker = Worker(load())
+        cfg = load()
+        try:
+            worker = Worker(cfg)
+        except CameraError as exc:
+            log.error("%s", exc)
+            wait_for_camera(cfg)
+            continue
         code = worker.run()
         if code != 0 or not worker.restart_requested:
             return code

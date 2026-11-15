@@ -85,6 +85,10 @@ class Topics:
 
 STATUS_ONLINE = "online"
 STATUS_OFFLINE = "offline"
+# Not running, but on purpose: a new session is starting, or no camera is
+# plugged in yet. The dashboard says so instead of "offline".
+STATUS_RESTARTING = "restarting"
+STATUS_NO_CAMERA = "no_camera"
 
 
 class MqttBus:

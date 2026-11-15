@@ -83,6 +83,8 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     cameras = [FakeCamera((40, 160, 60), "/dev/video0"), FakeCamera((60, 120, 200), "/dev/video2")]
     found = [CameraCandidate("usb", c.info.detail["device"], c.info.detail["model"]) for c in cameras]
     monkeypatch.setattr(worker_module, "open_cameras", lambda _cfg: (cameras, found))
+    plugged = {"/dev/video0", "/dev/video2"}  # what the camera watcher sees in sysfs
+    monkeypatch.setattr(worker_module, "_usb_present", lambda: plugged)
 
     # Watch what the worker publishes, as the dashboard would.
     seen: dict[str, list[dict]] = {"frame": [], "session": [], "pipeline": []}
@@ -124,6 +126,8 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
         client.publish("pepperwatch/cmd/camera", json.dumps({"camera": 1, "enabled": False}), qos=1)
         switched_off_at.append(time.time())
         time.sleep(3.0)
+        plugged.discard("/dev/video2")  # pulled out of the Pi
+        time.sleep(2.0)
         worker.request_stop()
 
     handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}
@@ -169,6 +173,9 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     after = [m["camera"] for m in seen["frame"] if m["received"] > switched_off_at[0] + 1.0]
     assert after and set(after) == {0}
     assert seen["pipeline"][-1]["camera_on"] == [True, False]
+    # Then unplugged: shown as such, without a restart.
+    assert seen["pipeline"][-1]["camera_connected"] == [True, False]
+    assert not worker.restart_requested
     assert seen["pipeline"][-1]["camera_fps"][1] == 0.0
     # A threshold from Settings reaches the detector, which reports it back.
     assert seen["pipeline"][-1]["conf_threshold"] == 0.4

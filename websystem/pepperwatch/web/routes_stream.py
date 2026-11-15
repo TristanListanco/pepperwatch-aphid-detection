@@ -48,10 +48,12 @@ def _reader():
 
 
 def _cameras_running(hub) -> int:
-    """Cameras streaming now: the session's, less any turned off."""
-    on = hub.snapshot()["latest"].get("telemetry/pipeline", {}).get("camera_on")
+    """Cameras streaming now: the session's, less any turned off or unplugged."""
+    pipeline = hub.snapshot()["latest"].get("telemetry/pipeline", {})
+    on = pipeline.get("camera_on")
     if on:
-        return sum(on) or 1
+        connected = pipeline.get("camera_connected") or [True] * len(on)
+        return sum(a and b for a, b in zip(on, connected)) or 1
     return len(hub.session.get("cameras") or []) or 1
 
 

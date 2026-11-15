@@ -42,6 +42,7 @@ def current_session():
             "summary": snapshot["latest"].get("session/summary"),
             # Which cameras are on, so the page never opens a stream for one that is off.
             "camera_on": snapshot["latest"].get("telemetry/pipeline", {}).get("camera_on"),
+            "camera_connected": snapshot["latest"].get("telemetry/pipeline", {}).get("camera_connected"),
         }
     )
 

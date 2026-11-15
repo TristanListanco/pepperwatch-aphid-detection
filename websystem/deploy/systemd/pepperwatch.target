@@ -6,11 +6,17 @@ Description=Pepper Watch edge node
 #
 #   sudo systemctl enable pepperwatch.target
 #
-# The access point is wanted, not required: boards without a Wi-Fi radio
-# (Banana Pi M5, some Orange Pi 5 variants) serve the dashboard over Ethernet
-# instead, and install.sh leaves the AP disabled there.
-Requires=pepperwatch-worker.service pepperwatch-web.service
-Wants=pepperwatch-ap.service
+# Everything is wanted, not required. A Requires= on a service with
+# Restart=always restarts this target each time that service restarts itself,
+# and with it every PartOf= unit, the Wi-Fi access point included: a worker
+# crash-looping (it used to, with no camera plugged in) dropped the hotspot
+# every few seconds. The services still start at boot and restart on their
+# own; the target no longer follows them.
+#
+# Boards without a Wi-Fi radio (Banana Pi M5, some Orange Pi 5 variants)
+# serve the dashboard over Ethernet instead; install.sh leaves the AP
+# disabled there.
+Wants=pepperwatch-worker.service pepperwatch-web.service pepperwatch-ap.service
 After=pepperwatch-ap.service
 
 [Install]

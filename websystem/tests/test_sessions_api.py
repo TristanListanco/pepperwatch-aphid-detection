@@ -57,7 +57,9 @@ def test_the_cross_session_csv_is_built_on_request(client, recorded) -> None:
 
 
 def test_no_session_is_reported_without_a_worker(client) -> None:
-    assert client.get("/api/session").get_json() == {"session": None, "summary": None, "camera_on": None}
+    assert client.get("/api/session").get_json() == {
+        "session": None, "summary": None, "camera_on": None, "camera_connected": None,
+    }
 
 
 def test_a_new_session_needs_the_worker(client) -> None:

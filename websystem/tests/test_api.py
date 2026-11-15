@@ -350,11 +350,11 @@ def test_inference_control_validates_the_action(client) -> None:
     assert client.post("/api/inference/explode").status_code == 400
 
 
-def _two_cameras(app, on=None) -> None:
+def _two_cameras(app, on=None, connected=None) -> None:
     hub = app.config["PW_HUB"]
     hub._on_message("pepperwatch/status/session", {"cameras": [{"index": 0}, {"index": 1}]})
     if on is not None:
-        hub._on_message("pepperwatch/telemetry/pipeline", {"camera_on": on})
+        hub._on_message("pepperwatch/telemetry/pipeline", {"camera_on": on, "camera_connected": connected})
 
 
 def test_camera_switch_validates_before_forwarding(app, client) -> None:
@@ -376,6 +376,20 @@ def test_the_last_camera_on_cannot_be_turned_off(app, client, monkeypatch) -> No
     assert client.post("/api/camera/0", json={"enabled": False}).status_code == 409
     assert client.post("/api/camera/1", json={"enabled": True}).status_code == 202
     assert sent == [("pepperwatch/cmd/camera", {"camera": 1, "enabled": True})]
+
+
+def test_an_unplugged_camera_cannot_be_turned_on_and_does_not_count_as_on(app, client, monkeypatch) -> None:
+    import pepperwatch.web.routes_api as api
+
+    sent = []
+    monkeypatch.setattr(api, "_publish_command", lambda topic, payload: sent.append((topic, payload)) or True)
+    _two_cameras(app, on=[True, True], connected=[True, False])
+    response = client.post("/api/camera/1", json={"enabled": True})
+    assert response.status_code == 409 and "unplugged" in response.get_json()["error"]
+    # Camera 2 is unplugged, so camera 1 is the last one running.
+    assert client.post("/api/camera/0", json={"enabled": False}).status_code == 409
+    assert sent == []
+    assert client.get("/api/session").get_json()["camera_connected"] == [True, False]
 
 
 def test_config_exposes_only_the_tunables(client) -> None:
