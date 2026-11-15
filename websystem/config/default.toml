@@ -75,8 +75,8 @@ inference.intra_op_threads = 1
 # systemd units point this at /var/lib/pepperwatch/sessions.
 root = "var/sessions"
 system_interval_s = 1.0      # system.csv sample period
-flush_interval_s = 2.0       # how often buffered rows reach the disk
-summary_interval_s = 15.0    # live summary to the dashboard and summary.json
+flush_interval_s = 2.0       # how often buffered rows are handed to the OS
+summary_interval_s = 15.0    # summary.json and the dashboard; rows are synced to the SD card then
 
 [severity]
 # Derived in software from box count and affected area, since the model itself

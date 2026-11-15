@@ -35,6 +35,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import platform
+import shutil
 import signal
 import threading
 import time
@@ -56,7 +57,7 @@ from .hal import CameraSource, Frame, get_telemetry, open_cameras
 from .models import Detection
 from .mqtt_bus import STATUS_OFFLINE, STATUS_ONLINE, MqttBus, Topics, make_bus
 from .render import draw_detections, encode_jpeg, make_thumbnail
-from .session import SessionRecorder, request_next_label
+from .session import SessionRecorder, recover_interrupted, request_next_label, write_durably
 from .thermal import ThermalGovernor
 
 log = logging.getLogger(__name__)
@@ -292,7 +293,11 @@ class Worker:
         self.restart_requested = False
 
         self.media_root = cfg.media_root
-        self.media_root.mkdir(parents=True, exist_ok=True)
+        # Photos are written here, synced, then moved into place, so a power
+        # cut leaves its half-written photo here rather than in the gallery.
+        self.incoming = self.media_root / ".incoming"
+        shutil.rmtree(self.incoming, ignore_errors=True)
+        self.incoming.mkdir(parents=True, exist_ok=True)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -311,6 +316,9 @@ class Worker:
             )
 
         self.db.initialise(writer="worker")
+        for session_id in recover_interrupted(self.cfg.sessions_root):
+            log.warning("session %s was cut off (power loss or crash); closed as interrupted", session_id)
+            self.db.log_system(level="warn", event="session_recovered", source="worker", detail=session_id)
         self.bus.start(timeout=3.0)
         self.bus.subscribe(Topics.COMMANDS, self._on_command, qos=1)
         self.bus.publish_raw(Topics.STATUS_WORKER, STATUS_ONLINE, qos=1, retain=True)
@@ -801,9 +809,12 @@ class Worker:
         quality = self.cfg.camera.jpeg_quality
 
         try:
-            (self.media_root / image_rel).write_bytes(encode_jpeg(annotated, quality))
-            (self.media_root / thumb_rel).write_bytes(
-                encode_jpeg(make_thumbnail(annotated, self.cfg.persist.thumb_width), quality)
+            # On the disk before the row that points at them is committed.
+            write_durably(self.media_root / image_rel, encode_jpeg(annotated, quality), scratch=self.incoming)
+            write_durably(
+                self.media_root / thumb_rel,
+                encode_jpeg(make_thumbnail(annotated, self.cfg.persist.thumb_width), quality),
+                scratch=self.incoming,
             )
         except Exception:  # noqa: BLE001
             log.exception("could not write media for frame %d", frame.seq)

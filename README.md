@@ -84,7 +84,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  433 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  435 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -451,6 +451,24 @@ erDiagram
 
 Detection events are never pruned automatically; they're the research record.
 `system_log` rows older than `retention_days` (90) are pruned nightly.
+
+**After a power cut.** Saved detections and photos survive whole; session CSVs lose at most their last 15 s:
+
+- **Detections**: every database commit is synced to the SD card before the
+  worker moves on (`synchronous = FULL`), so a saved event survives the cut.
+- **Photos**: each one is written to `media/.incoming`, synced, and only then
+  moved into its dated folder, all before its database row is written. A row
+  never points at a cut-off photo; a photo half-written when the power went is
+  left in `.incoming`, which the worker empties when it starts.
+- **Session CSVs**: rows are synced every 15 s, when `summary.json` is
+  rewritten. When the worker starts again it closes any session the cut left
+  open: it removes a half-written last row, marks the session `interrupted` in
+  `summary.json` and `sessions.csv`, sets its end to the last recorded row, and
+  logs `session_recovered` to `system_log`. At most the last 15 s of rows are
+  lost.
+
+This relies on the SD card honouring a sync. Cheap or counterfeit cards may
+not, so use a card from a known brand.
 
 ### Networking and the captive portal
 
@@ -1152,7 +1170,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 433 tests (~1 min)
+.venv/bin/python -m pytest               # 435 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1205,7 +1223,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 433 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 435 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1246,6 +1264,7 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | fps drops after a while | Check the Performance & Power card for thermal back-off or throttling. Improve cooling or ventilation |
 | Power shows "PMIC estimate" | No INA219 found. The PMIC figure omits the HAT, USB devices and the fan; fit an INA219 for whole-device power |
 | Timestamps wrong after a power cut | No RTC battery. Fit one on J5 |
+| A session shows `interrupted` | The power went (or the worker crashed) during it. Its data up to the last 15 s is kept; see *After a power cut* |
 | Live view frozen but data updates | MJPEG viewer limit reached (4). Close other tabs, or stay in the default poll mode |
 | Dashboard shows the worker offline | `journalctl -u pepperwatch-worker`; check `systemctl status mosquitto` |
 

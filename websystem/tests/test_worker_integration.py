@@ -101,6 +101,13 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     ])
     client.loop_start()
 
+    # A session a power cut left open: the worker closes it before starting its own.
+    from datetime import datetime, timezone
+
+    from pepperwatch.session import SessionRecorder, list_sessions
+
+    cut = SessionRecorder(cfg.sessions_root, {}, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
     worker = worker_module.Worker(cfg)
     streamed: list[bool] = []
     switched_off_at: list[float] = []
@@ -143,6 +150,20 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     assert (0, "auto") in rows and (1, "auto") in rows
     assert (0, "manual") in rows and (1, "manual") in rows
 
+    statuses = {s["session_id"]: s["status"] for s in list_sessions(cfg.sessions_root)}
+    assert statuses.pop(cut.session_id) == "interrupted" and list(statuses.values()) == ["complete"]
+    recovered = sqlite3.connect(cfg.db_path).execute(
+        "SELECT detail FROM system_log WHERE event = 'session_recovered'"
+    ).fetchall()
+    assert recovered == [(cut.session_id,)]
+
+    # Every photo a row points at was moved into place whole, via .incoming.
+    for paths in sqlite3.connect(cfg.db_path).execute("SELECT image_path, thumb_path FROM detection_event"):
+        for relative in paths:
+            jpeg = (cfg.media_root / relative).read_bytes()
+            assert jpeg[:2] == b"\xff\xd8" and jpeg[-2:] == b"\xff\xd9", relative
+    assert list((cfg.media_root / ".incoming").iterdir()) == []
+
     # Camera 2 turned off: its boxes stop (bar one already in flight), camera 1
     # carries on, and the pipeline telemetry says so.
     after = [m["camera"] for m in seen["frame"] if m["received"] > switched_off_at[0] + 1.0]
@@ -153,6 +174,6 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     assert seen["pipeline"][-1]["conf_threshold"] == 0.4
 
     # The session CSV says which camera every inference came from.
-    (inference_csv,) = (tmp_path / "sessions").glob("*/inference.csv")
-    with inference_csv.open() as handle:
+    (session_id,) = statuses
+    with (tmp_path / "sessions" / session_id / "inference.csv").open() as handle:
         assert {row["camera"] for row in csv.DictReader(handle)} == {"0", "1"}

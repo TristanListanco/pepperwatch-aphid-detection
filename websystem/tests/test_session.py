@@ -17,6 +17,7 @@ from pepperwatch.session import (
     SessionRecorder,
     list_sessions,
     rebuild_index,
+    recover_interrupted,
     request_next_label,
 )
 
@@ -144,6 +145,48 @@ def test_the_cross_session_index_lists_every_session(tmp_path: Path, clock: Cloc
     assert [r["status"] for r in rows] == ["complete", "running"]
     assert list_sessions(tmp_path)[0]["session_id"] == running.session_id  # newest first
     running.close()
+
+
+def test_a_session_cut_off_by_a_power_loss_is_closed_as_interrupted(tmp_path: Path, clock: Clock) -> None:
+    from datetime import datetime, timezone
+
+    SessionRecorder(tmp_path, META, now=datetime(2026, 11, 14, 8, 0, tzinfo=timezone.utc)).close()
+    cut = SessionRecorder(tmp_path, META, now=datetime(2026, 11, 14, 9, 0, tzinfo=timezone.utc))
+    for index in range(5):
+        cut.record_inference({"frame_seq": index, "infer_ms": 10.0})
+        cut.record_system({"power_w": 5.0})
+        if index == 2:
+            cut.write_summary()  # the last summary before the cut: 2 s stale
+        clock.now += 1.0
+    cut.flush()
+    # The power goes: no close(), a row half written, a summary rewrite unfinished.
+    with (cut.directory / "inference.csv").open("a") as handle:
+        handle.write("2026-11-14T09:00:05.000+00:00,5.0,0,5,0.5,1")
+    (cut.directory / "summary.json.tmp").write_text('{"sess')
+
+    assert recover_interrupted(tmp_path) == [cut.session_id]
+
+    inference = _rows(cut.directory / "inference.csv")
+    assert [row["frame_seq"] for row in inference] == ["0", "1", "2", "3", "4"]
+    last = max(inference[-1]["timestamp"], _rows(cut.directory / "system.csv")[-1]["timestamp"])
+    summary = json.loads((cut.directory / "summary.json").read_text())
+    assert summary["status"] == "interrupted"
+    assert summary["ended_at"] == last
+    assert summary["duration_s"] == pytest.approx(4.0)  # from the rows, not the stale summary
+    assert not (cut.directory / "summary.json.tmp").exists()
+    assert [row["status"] for row in _rows(tmp_path / "sessions.csv")] == ["complete", "interrupted"]
+    assert recover_interrupted(tmp_path) == []  # already closed
+
+
+def test_trimming_reads_back_past_a_long_torn_tail(tmp_path: Path) -> None:
+    from pepperwatch.session import _trim_torn_row
+
+    path = tmp_path / "rows.csv"
+    path.write_bytes(b"timestamp,elapsed_s\r\nA,1\r\nB,2\r\n" + b"\0" * 100)
+    assert _trim_torn_row(path, block=16) == {"timestamp": "B", "elapsed_s": "2"}
+    assert path.read_bytes() == b"timestamp,elapsed_s\r\nA,1\r\nB,2\r\n"
+    path.write_bytes(b"timestamp,elapsed_s\r\nA,")
+    assert _trim_torn_row(path) is None and path.read_bytes() == b"timestamp,elapsed_s\r\n"
 
 
 def test_a_deleted_session_drops_out_of_the_index(tmp_path: Path) -> None:

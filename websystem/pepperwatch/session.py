@@ -15,10 +15,12 @@ its own folder under ``[sessions].root``::
 with the accelerator, camera and model beside the frame rates, latency
 percentiles and energy, so CPU and AI HAT+ sessions compare directly.
 
-Rows are buffered and flushed every ``flush_interval_s``; ``summary.json`` is
-rewritten every ``summary_interval_s``. A session cut off by a power failure
-therefore keeps all but the last few seconds of rows and a summary at most one
-interval stale, and the next session start folds it into ``sessions.csv``.
+Rows are buffered and flushed every ``flush_interval_s``; every
+``summary_interval_s`` they are synced to the disk and ``summary.json`` is
+rewritten. A session cut off by a power failure therefore keeps all but the
+last interval of rows, and when the worker starts again
+:func:`recover_interrupted` trims any half-written last row and marks the
+session "interrupted" in ``summary.json`` and ``sessions.csv``.
 
 Latency percentiles come from a fixed-size uniform reservoir sample, so memory
 stays flat over an eight-hour session; ``inference.csv`` keeps every value if
@@ -382,6 +384,7 @@ class SessionRecorder:
         return summary
 
     def write_summary(self, *, status: str = "running") -> dict[str, Any]:
+        self.flush(sync=True)  # the rows the summary counts are on the disk before it is
         summary = self.summary(status=status)
         _write_json(self.directory / "summary.json", summary)
         self._last_summary = time.monotonic()
@@ -392,16 +395,18 @@ class SessionRecorder:
 
     # -- lifecycle -------------------------------------------------------------
 
-    def flush(self) -> None:
+    def flush(self, *, sync: bool = False) -> None:
+        """Hand buffered rows to the OS; ``sync`` also waits until they are on the disk."""
         with self._lock:
             for handle in (self._inference_file, self._system_file):
                 if not handle.closed:
                     handle.flush()
+                    if sync:
+                        os.fsync(handle.fileno())
             self._last_flush = time.monotonic()
 
     def close(self) -> dict[str, Any]:
-        """Flush, write the final summary, and rebuild ``sessions.csv``."""
-        self.flush()
+        """Sync the rows, write the final summary, and rebuild ``sessions.csv``."""
         summary = self.write_summary(status="complete")
         with self._lock:
             self._closed = True
@@ -459,6 +464,67 @@ def rebuild_index(root: Path) -> Path:
             writer.writerow(_format(row))
     os.replace(temporary, target)
     return target
+
+
+def recover_interrupted(root: Path) -> list[str]:
+    """Close the records of sessions a power cut (or a crash) left open.
+
+    The worker calls this before it starts a session, when none can still be
+    running. Each open session loses a half-written last CSV row, and its last
+    periodic summary is marked "interrupted", ending at its last recorded row.
+    Unfinished ``.tmp`` rewrites are removed. Returns the ids it closed.
+    """
+    root = Path(root)
+    for leftover in [*root.glob("*/*.tmp"), *root.glob("*.tmp")]:
+        leftover.unlink(missing_ok=True)
+
+    closed = []
+    for summary in list_sessions(root):
+        if summary.get("status") != "running":
+            continue
+        directory = root / str(summary["session_id"])
+        rows = [row for row in (_trim_torn_row(directory / name) for name in ("inference.csv", "system.csv")) if row]
+        last = max(rows, key=lambda row: row.get("timestamp") or "", default={})
+        summary["status"] = "interrupted"
+        summary["ended_at"] = last.get("timestamp") or None
+        summary["duration_s"] = max(_num(summary.get("duration_s")) or 0.0, _num(last.get("elapsed_s")) or 0.0)
+        _write_json(directory / "summary.json", summary)
+        closed.append(str(summary["session_id"]))
+    if closed:
+        rebuild_index(root)
+    return closed
+
+
+def _trim_torn_row(path: Path, block: int = 65536) -> dict[str, str] | None:
+    """Cut a half-written last row off a CSV and return the last whole one.
+
+    Reads back from the end, since inference.csv reaches ~170 MB in a day.
+    """
+    try:
+        handle = path.open("r+b")
+    except OSError:
+        return None
+    with handle:
+        header = handle.readline()
+        size = end = handle.seek(0, os.SEEK_END)
+        while end > 0:
+            start = max(0, end - block)
+            handle.seek(start)
+            cut = handle.read(end - start).rfind(b"\n")
+            if cut >= 0:
+                end = start + cut + 1
+                break
+            end = start
+        if end != size:
+            handle.truncate(end)
+            handle.flush()
+            os.fsync(handle.fileno())
+        start = max(0, end - block)
+        handle.seek(start)
+        lines = handle.read(end - start).splitlines()
+    if not lines or end <= len(header):
+        return None
+    return next(csv.DictReader([header.decode(errors="replace"), lines[-1].decode(errors="replace")]))
 
 
 def request_next_label(root: Path, label: str) -> None:
@@ -548,6 +614,21 @@ def _format(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, default=str))
+    write_durably(path, json.dumps(payload, indent=2, default=str).encode())
+
+
+def write_durably(path: Path, data: bytes, *, scratch: Path | None = None) -> None:
+    """Write ``data`` to ``path`` so a power cut leaves the old file or the whole new one.
+
+    The bytes go to a temporary file (in ``scratch`` if given, which must be on
+    the same filesystem), are synced to the disk, and only then renamed into place.
+    shortcut: the rename itself is not synced; on ext4 (Raspberry Pi OS) the
+    next fsync anywhere, such as the event's database commit, makes it durable.
+    Sync the directory too if this ever runs on another filesystem.
+    """
+    temporary = (scratch or path.parent) / (path.name + ".tmp")
+    with temporary.open("wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(temporary, path)

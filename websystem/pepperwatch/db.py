@@ -96,11 +96,11 @@ class Database:
         # that refuses to wait is just as fatal to a page load as a writer.
         conn.execute(f"PRAGMA busy_timeout = {self._busy_timeout_ms}")
         conn.execute("PRAGMA journal_mode = WAL")
-        # NORMAL can lose the last few transactions on an abrupt power cut but
-        # never corrupts the file. For a solar-powered device that loses power
-        # nightly by design, that is the right trade against an fsync per commit
-        # on an SD card. Stated here because §3.3.2.1 leaves it implicit.
-        conn.execute("PRAGMA synchronous = NORMAL")
+        # FULL syncs the WAL on every commit, so a detection that was committed
+        # survives a power cut; NORMAL could lose the last ~30 s of them. The
+        # worker commits a few times a minute (events, 15 s telemetry), so the
+        # extra SD-card writes are negligible. §3.3.2.1 leaves this implicit.
+        conn.execute("PRAGMA synchronous = FULL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA temp_store = MEMORY")
         # 8 MB page cache. Enough for the gallery and weekly-stats queries,
