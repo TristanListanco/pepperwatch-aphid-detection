@@ -11,14 +11,19 @@ control. The Wi-Fi password is the only gate.
 from __future__ import annotations
 
 import csv
+import hmac
 import io
 import logging
 import math
+import os
+import threading
 import time
 import uuid
+import zipfile
 from datetime import datetime, timezone
 
 from flask import Blueprint, Response, current_app, jsonify, request
+from werkzeug.security import safe_join
 
 from ..models import Detection
 from ..session import csv_safe
@@ -65,6 +70,35 @@ def _locale() -> str:
     """Requested locale, restricted to what the content file actually has."""
     requested = request.args.get("locale", "en")
     return requested if requested in _advisory().locales else "en"
+
+
+_pin_lock = threading.Lock()
+
+
+def _pin_refusal():
+    """None if the request may go ahead; otherwise the response refusing it.
+
+    Clearing every detection and changing the thresholds need the admin PIN
+    (install.sh writes it; ``X-Admin-Pin`` carries it). Anyone on the Wi-Fi can
+    reach the dashboard, and the data is the research record. Five wrong PINs
+    in a minute lock it for the rest of that minute, so six digits cannot be
+    guessed over the network. A checkout with no PIN file needs none.
+    """
+    pin = current_app.config.get("PW_ADMIN_PIN")
+    if not pin:
+        return None
+    failures: list[float] = current_app.config.setdefault("PW_PIN_FAILURES", [])
+    now = time.monotonic()
+    with _pin_lock:
+        failures[:] = [at for at in failures if now - at < 60.0]
+        if len(failures) >= 5:
+            return jsonify({"error": "too many wrong PINs; wait a minute"}), 429
+    given = request.headers.get("X-Admin-Pin", "")
+    if hmac.compare_digest(given.encode(), pin.encode()):
+        return None
+    with _pin_lock:
+        failures.append(now)
+    return jsonify({"error": "wrong admin PIN" if given else "this needs the admin PIN"}), 403
 
 
 def _publish_command(topic: str, payload: dict) -> bool:
@@ -135,13 +169,16 @@ def latest_detections():
     """The newest detection set, for the live overlay."""
     payload = _hub().snapshot()["latest"].get("detect/frame")
     if not payload:
-        return jsonify({"frame_seq": None, "boxes": []}), 200
+        return jsonify({"frame_seq": None, "boxes": [], "cameras": []}), 200
 
     severity = payload.get("severity", "none")
     return jsonify(
         {
             **payload,
             "advice": _advisory().for_severity(severity, locale=_locale()),
+            # Every camera's, for a page that polls: the newest alone would
+            # leave the other cameras without boxes.
+            "cameras": _hub().frames,
         }
     )
 
@@ -226,6 +263,13 @@ def weekly_stats():
     locale = _locale()
     stats["insight"] = _advisory().insight(stats, locale=locale)
     stats["advice"] = _advisory().for_severity(stats["severity"], locale=locale)
+    # The farmer's card: what recent photos typically show, not the week's worst
+    # single frame; and whether the detector is the stub (no model installed),
+    # whose results must not be passed off as advice.
+    status = _db().recent_status(site=request.args.get("site") or None)
+    status["advice"] = _advisory().for_severity(status["severity"], locale=locale)
+    stats["status"] = status
+    stats["detector_synthetic"] = bool(_hub().detector.get("synthetic"))
     return jsonify(stats)
 
 
@@ -269,6 +313,78 @@ def export_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="pepperwatch_{stamp}.csv"'},
     )
+
+
+@bp.get("/export.zip")
+def export_zip():
+    """The detections CSV plus the saved photo of every scan, in one ZIP.
+
+    Streamed like the CSV, entry by entry, so months of photos never sit in
+    memory. Photos go in images/ uncompressed (a JPEG does not shrink), and
+    the CSV's image_path points at each one inside the archive; it is empty
+    for a scan whose photo is missing.
+    """
+    since = request.args.get("from") or None
+    until = request.args.get("to") or None
+    database = _db()
+    root = str(_cfg().media_root)
+
+    def generate():
+        sink = _Sink()
+        photos: dict[str, str | None] = {}  # image_path -> the file, if it is there
+        with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            with archive.open("detections.csv", "w") as entry, io.TextIOWrapper(
+                entry, encoding="utf-8", newline=""
+            ) as text:
+                writer = csv.writer(text)
+                writer.writerow(EXPORT_COLUMNS)
+                for count, row in enumerate(database.iter_export_rows(since=since, until=until)):
+                    image = row["image_path"]
+                    if image and image not in photos:
+                        found = safe_join(root, image)  # None if it would leave the media root
+                        photos[image] = found if found and os.path.isfile(found) else None
+                    values = {column: row[column] if column in row.keys() else "" for column in EXPORT_COLUMNS}
+                    values["image_path"] = f"images/{image}" if image and photos[image] else ""
+                    writer.writerow([csv_safe(values[column]) for column in EXPORT_COLUMNS])
+                    if count % 256 == 255:
+                        text.flush()
+                        yield sink.take()
+            yield sink.take()
+            for image, found in photos.items():
+                if found:
+                    archive.write(found, f"images/{image}", compress_type=zipfile.ZIP_STORED)
+                    yield sink.take()
+        yield sink.take()  # the archive's table of contents
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return Response(
+        (chunk for chunk in generate() if chunk),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="pepperwatch_{stamp}.zip"'},
+    )
+
+
+class _Sink(io.RawIOBase):
+    """Where the ZIP is written, held until the response sends it.
+
+    Not seekable, which zipfile handles by writing each entry's sizes after
+    its data instead of going back for them.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[bytes] = []
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, data) -> int:
+        self._parts.append(bytes(data))
+        return len(data)
+
+    def take(self) -> bytes:
+        data = b"".join(self._parts)
+        self._parts.clear()
+        return data
 
 
 # -- control ---------------------------------------------------------------
@@ -369,6 +485,9 @@ def patch_config():
     detector. Bounded to 0.01..0.99: a threshold of 0 or 1 makes the detector
     useless in opposite directions, and there is no reason to allow it.
     """
+    refused = _pin_refusal()
+    if refused:
+        return refused
     payload = request.get_json(silent=True) or {}
     updates: dict[str, float] = {}
 
@@ -479,6 +598,9 @@ def clear_detections():
     record. Session CSV files are left alone: they are measurements, not
     detections.
     """
+    refused = _pin_refusal()
+    if refused:
+        return refused
     payload = request.get_json(silent=True) or {}
     if payload.get("confirm") != "DELETE":
         return jsonify({"error": 'send {"confirm": "DELETE"} to clear all detections'}), 400

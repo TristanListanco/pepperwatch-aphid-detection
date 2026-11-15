@@ -12,8 +12,39 @@ import { fetchJson, patchJson, postJson } from './bus.js';
 import { num } from './fmt.js';
 import { displayPrefs, setDisplayPref } from './liveview.js';
 
+// The admin PIN, for this tab only: thresholds and clearing data need it.
+function adminHeaders() {
+  let pin = '';
+  try {
+    pin = window.sessionStorage.getItem('pw-admin-pin') || '';
+  } catch (error) {
+    // Blocked storage: read it from the field instead.
+  }
+  const field = document.querySelector('[data-admin-pin]');
+  if (!pin && field) pin = field.value;
+  return pin ? { 'X-Admin-Pin': pin } : {};
+}
+
+function bindPin(root) {
+  const field = root.querySelector('[data-admin-pin]');
+  if (!field) return;
+  try {
+    field.value = window.sessionStorage.getItem('pw-admin-pin') || '';
+  } catch (error) {
+    // Not kept; typed again after a reload.
+  }
+  field.addEventListener('input', () => {
+    try {
+      window.sessionStorage.setItem('pw-admin-pin', field.value.trim());
+    } catch (error) {
+      // Still sent from the field.
+    }
+  });
+}
+
 export async function initSettings(root) {
   bindDisplayPrefs(root);
+  bindPin(root);
   bindClear(root);
 
   const config = await fetchJson('/api/config');
@@ -51,7 +82,10 @@ function bindDisplayPrefs(root) {
   if (view && window.pwView) {
     view.querySelectorAll('input[name="view"]').forEach((input) => {
       input.checked = input.value === window.pwView.get();
-      input.addEventListener('change', () => window.pwView.set(input.value));
+      input.addEventListener('change', () => {
+        const note = root.querySelector('[data-view-note]');
+        if (note) note.hidden = window.pwView.set(input.value);
+      });
     });
   }
 
@@ -80,7 +114,7 @@ function bindClear(root) {
   root.querySelector('[data-clear-yes]').addEventListener('click', async (event) => {
     event.target.disabled = true;
     try {
-      const result = await postJson('/api/data/clear', { confirm: 'DELETE' });
+      const result = await postJson('/api/data/clear', { confirm: 'DELETE' }, adminHeaders());
       status.textContent = `Deleted ${result.deleted_events} detections and ${result.deleted_files} image files.`;
     } catch (error) {
       status.textContent = `Could not clear: ${error.message}`;
@@ -117,9 +151,9 @@ function bindSlider(root, key, initial) {
     }
     try {
       // Answers only once the detector reports the new value, a second or two.
-      await patchJson('/api/config', { [field]: Number(slider.value) });
+      await patchJson('/api/config', { [field]: Number(slider.value) }, adminHeaders());
       applied = Number(slider.value);
-      if (status) status.textContent = 'Applied: the detector is using it now, until the next session.';
+      if (status) status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
     } catch (error) {
       // Show what the detector is really using, not the value that failed.
       slider.value = String(applied);

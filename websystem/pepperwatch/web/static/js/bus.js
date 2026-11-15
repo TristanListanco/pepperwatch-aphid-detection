@@ -23,6 +23,9 @@ const MAX_SSE_FAILURES = 3;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 15000;
 const POLL_INTERVAL_MS = 2000;
+// While polling, try live updates again this often: a Pi that rebooted is
+// back long before the page is reloaded.
+const SSE_RETRY_MS = 30000;
 
 export class Bus {
   constructor() {
@@ -31,6 +34,8 @@ export class Bus {
     this.failures = 0;
     this.mode = 'idle';
     this.pollTimer = null;
+    this.sseRetryTimer = null;
+    this.lastEventId = null;
     this.reconnectTimer = null;
     this.lastFrameSeq = null;
 
@@ -192,12 +197,23 @@ export class Bus {
         window.__pw.pollTicks += 1;
         if (telemetry) this.emit('telemetry', telemetry);
         if (pipeline) this.emit('pipeline', pipeline);
-        if (detections) this.emit('detections', detections);
+        // Every camera's newest boxes, not just whichever camera was last.
+        if (detections && detections.cameras && detections.cameras.length) {
+          detections.cameras.forEach((frame) => this.emit('detections', frame));
+        } else if (detections) {
+          this.emit('detections', detections);
+        }
         if (session && session.session) this.emit('session', session.session);
         if (session && session.summary) this.emit('summary', session.summary);
 
         const health = await fetchJson('/api/health');
         if (health && health.worker) this.emit('worker', health.worker);
+
+        // A newly saved photo, as the live channel would announce it.
+        const newest = await fetchJson('/api/events?limit=1&archived=all');
+        const event = newest && newest.items && newest.items[0];
+        if (event && this.lastEventId !== null && event.id !== this.lastEventId) this.emit('persisted', event);
+        if (event) this.lastEventId = event.id;
       } catch (error) {
         window.__pw.errors += 1;
         console.error('[pw] poll failed', error);
@@ -206,12 +222,19 @@ export class Bus {
 
     tick();
     this.pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+    this.sseRetryTimer = setInterval(() => {
+      if (!this.source) this.connectSse();
+    }, SSE_RETRY_MS);
   }
 
   stopPolling() {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.sseRetryTimer) {
+      clearInterval(this.sseRetryTimer);
+      this.sseRetryTimer = null;
     }
   }
 
@@ -267,8 +290,8 @@ export async function fetchJson(url, options = {}) {
   }
 }
 
-export async function postJson(url, body = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+export async function postJson(url, body = {}, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
 
   const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));
@@ -276,8 +299,8 @@ export async function postJson(url, body = {}) {
   return payload;
 }
 
-export async function patchJson(url, body = {}) {
-  const headers = { 'Content-Type': 'application/json' };
+export async function patchJson(url, body = {}, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
 
   const response = await fetch(url, { method: 'PATCH', headers, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));

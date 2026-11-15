@@ -335,6 +335,86 @@ def test_csv_export_of_an_empty_database_is_still_valid(client) -> None:
     assert rows[0][0] == "event_id"
 
 
+_FRAMES = iter(range(10_000, 20_000))  # (site, frame, time) is unique
+
+
+def _event(database, severity, *, camera=0, hours_ago=1.0, synthetic=False) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    database.insert_event(
+        site="Naawan", camera=camera, frame_seq=next(_FRAMES), detections=[], model_version="m",
+        conf_threshold=0.25, iou_threshold=0.45, severity=severity, trigger="auto",
+        captured_at=at.isoformat(timespec="milliseconds"), image_path=None, thumb_path=None,
+        inference_ms=1.0, preview_fps=1.0, inference_fps=1.0, synthetic=synthetic,
+    )
+
+
+def test_one_false_alarm_does_not_set_the_farmers_status(app) -> None:
+    database = app.config["PW_DB"]
+    for _ in range(5):
+        _event(database, "none")
+    _event(database, "high")  # the green wall, once
+    assert database.recent_status() == {"severity": "none", "basis": "24h", "photos": 6}
+
+
+def test_the_camera_whose_plants_look_worst_sets_the_status(app) -> None:
+    database = app.config["PW_DB"]
+    for _ in range(4):
+        _event(database, "none", camera=0)
+        _event(database, "moderate", camera=1)
+    assert database.recent_status()["severity"] == "moderate"
+
+
+def test_the_status_falls_back_to_the_week_and_ignores_the_stub(app) -> None:
+    database = app.config["PW_DB"]
+    _event(database, "high", hours_ago=0.5, synthetic=True)  # stub detector: not a measurement
+    _event(database, "low", hours_ago=72)
+    assert database.recent_status() == {"severity": "low", "basis": "7d", "photos": 1}
+    assert database.weekly_stats()["events"] == 1
+
+
+def test_weekly_stats_carry_the_farmers_status_and_the_stub_flag(app, client) -> None:
+    _event(app.config["PW_DB"], "low")
+    app.config["PW_HUB"]._on_message("pepperwatch/status/detector", {"synthetic": True})
+    stats = client.get("/api/stats/weekly?locale=ceb").get_json()
+    assert stats["status"]["severity"] == "low" and stats["status"]["advice"]["locale"] == "ceb"
+    assert stats["detector_synthetic"] is True
+
+
+def test_zip_export_has_the_csv_and_every_saved_photo(seeded_db, client, cfg) -> None:
+    import zipfile
+
+    for index in (0, 1):  # two photos on disk; the other events' are missing
+        photo = cfg.media_root / f"2026/09/22/frame{index}.jpg"
+        photo.parent.mkdir(parents=True, exist_ok=True)
+        photo.write_bytes(b"\xff\xd8jpeg " + bytes([index]) + b"\xff\xd9")
+
+    response = client.get("/api/export.zip")
+    assert response.status_code == 200 and response.mimetype == "application/zip"
+    assert ".zip" in response.headers["Content-Disposition"]
+
+    archive = zipfile.ZipFile(io.BytesIO(response.get_data()))
+    assert archive.testzip() is None
+    assert sorted(archive.namelist()) == [
+        "detections.csv", "images/2026/09/22/frame0.jpg", "images/2026/09/22/frame1.jpg",
+    ]
+    assert archive.read("images/2026/09/22/frame1.jpg") == b"\xff\xd8jpeg \x01\xff\xd9"
+    rows = list(csv.DictReader(io.StringIO(archive.read("detections.csv").decode())))
+    assert len(rows) == (2 + 2 + 4 + 4 + 8 + 8 + 8) + 1  # the same rows as the CSV export
+    linked = {row["image_path"] for row in rows}
+    assert linked == {"images/2026/09/22/frame0.jpg", "images/2026/09/22/frame1.jpg", ""}
+    assert all(name in archive.namelist() for name in linked - {""})
+
+
+def test_zip_export_of_an_empty_database_has_just_the_header(client) -> None:
+    import zipfile
+
+    archive = zipfile.ZipFile(io.BytesIO(client.get("/api/export.zip").get_data()))
+    assert archive.namelist() == ["detections.csv"]
+    assert archive.read("detections.csv").decode().startswith("event_id,")
+
+
 # -- control ---------------------------------------------------------------
 
 
@@ -390,6 +470,55 @@ def test_an_unplugged_camera_cannot_be_turned_on_and_does_not_count_as_on(app, c
     assert client.post("/api/camera/0", json={"enabled": False}).status_code == 409
     assert sent == []
     assert client.get("/api/session").get_json()["camera_connected"] == [True, False]
+
+
+def test_clearing_data_and_thresholds_need_the_admin_pin(app, client) -> None:
+    app.config["PW_ADMIN_PIN"] = "482913"
+    body = {"confirm": "DELETE"}
+    assert client.post("/api/data/clear", json=body).status_code == 403
+    assert client.patch("/api/config", json={"conf_threshold": 0.4}).status_code == 403
+    wrong = client.post("/api/data/clear", json=body, headers={"X-Admin-Pin": "000000"})
+    assert wrong.status_code == 403 and "wrong" in wrong.get_json()["error"]
+    right = client.post("/api/data/clear", json=body, headers={"X-Admin-Pin": "482913"})
+    assert right.status_code == 200
+    # Viewing stays open.
+    assert client.get("/api/config").status_code == 200
+
+
+def test_guessing_the_pin_is_locked_out_after_five_tries(app, client) -> None:
+    app.config["PW_ADMIN_PIN"] = "482913"
+    for guess in range(5):
+        client.post("/api/data/clear", json={"confirm": "DELETE"}, headers={"X-Admin-Pin": f"{guess:06d}"})
+    locked = client.post("/api/data/clear", json={"confirm": "DELETE"}, headers={"X-Admin-Pin": "482913"})
+    assert locked.status_code == 429
+
+
+def test_polling_pages_get_every_cameras_detections(app, client) -> None:
+    hub = app.config["PW_HUB"]
+    hub._on_message("pepperwatch/detect/frame", {"camera": 0, "frame_seq": 1, "boxes": [], "severity": "none"})
+    hub._on_message("pepperwatch/detect/frame", {"camera": 1, "frame_seq": 9, "boxes": [], "severity": "low"})
+    body = client.get("/api/detections/latest").get_json()
+    assert body["camera"] == 1  # the newest, as before
+    assert [frame["camera"] for frame in body["cameras"]] == [0, 1]
+
+
+def test_one_off_events_are_not_replayed_to_pages_that_load_later(app) -> None:
+    """A page loading after a severity flag or a saved photo must not toast it again."""
+    hub = app.config["PW_HUB"]
+    hub._on_message("pepperwatch/detect/flag", {"severity": "high"})
+    hub._on_message("pepperwatch/event/persisted", {"event_id": 1, "trigger": "manual"})
+    hub._on_message("pepperwatch/telemetry/system", {"cpu_temp_c": 50})
+    assert set(hub.snapshot()["latest"]) == {"telemetry/system"}
+
+
+def test_a_to_date_includes_that_whole_day(seeded_db, client) -> None:
+    from datetime import datetime, timezone
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    everything = client.get("/api/events?archived=all&limit=100").get_json()["total"]
+    assert client.get(f"/api/events?archived=all&limit=100&to={today}").get_json()["total"] == everything
+    rows = list(csv.reader(io.StringIO(client.get(f"/api/export.csv?to={today}").get_data(as_text=True))))
+    assert len(rows) > 1
 
 
 def test_config_exposes_only_the_tunables(client) -> None:

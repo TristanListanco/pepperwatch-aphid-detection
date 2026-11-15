@@ -55,12 +55,18 @@ export class Controls {
       });
     }
 
+    // Plain navigations, so the browser's own download UI handles them and
+    // the response streams rather than buffering in memory.
     const exportBtn = this.root.querySelector('[data-action-export]');
     if (exportBtn) {
       exportBtn.addEventListener('click', () => {
-        // A plain navigation, so the browser's own download UI handles it and
-        // the response streams rather than buffering in memory.
         window.location.href = '/api/export.csv';
+      });
+    }
+    const exportZip = this.root.querySelector('[data-action-export-zip]');
+    if (exportZip) {
+      exportZip.addEventListener('click', () => {
+        window.location.href = '/api/export.zip';
       });
     }
   }

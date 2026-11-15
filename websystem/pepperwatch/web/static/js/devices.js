@@ -32,9 +32,10 @@ export class DeviceList {
 
   // From the pipeline telemetry: a camera turned off on the live card, or
   // unplugged.
-  setCameras(on, connected) {
+  setCameras(on, connected, stalled) {
     this.camerasOn = on || [];
     this.camerasConnected = connected || [];
+    this.camerasStalled = stalled || [];
     this.render();
   }
 
@@ -116,12 +117,20 @@ export class DeviceList {
       if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
       if (off && !unplugged) role += ', turned off';
       let status = position >= 0 && !off ? 'ok' : 'idle';
+      const stalled = position >= 0 && !unplugged && (this.camerasStalled || [])[position] === true;
       if (unplugged) status = 'off';
+      else if (stalled) status = 'warn';
+      let pill = null;
+      if (unplugged) pill = { kind: 'off', text: 'Unplugged: plug it back in' };
+      else if (stalled) pill = { kind: 'warn', text: 'No picture: check the cable' };
+      const model = candidate.model || 'Camera';
+      const twins = found.filter((other) => (other.model || 'Camera') === model).length > 1;
+      const port = candidate.kind === 'csi' ? `CSI ${candidate.device}` : String(candidate.device).replace('/dev/', '');
       out.push({
         status,
-        name: candidate.model || 'Camera',
+        name: twins ? `${model} (${port})` : model,
         meta: [where, role].filter(Boolean).join(' · '),
-        pill: unplugged ? { kind: 'off', text: 'Unplugged: plug it back in' } : null,
+        pill,
       });
     });
 

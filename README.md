@@ -48,6 +48,7 @@ Python 3.11+, since it needs no hardware.
 - [Operations](#operations)
 - [Testing and benchmarking](#testing-and-benchmarking)
 - [CI/CD: test before deploy](#cicd-test-before-deploy)
+- [Failure handling: edge cases and what the system does](#failure-handling-edge-cases-and-what-the-system-does)
 - [Troubleshooting](#troubleshooting)
 - [Field dataset](#field-dataset)
 
@@ -84,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  446 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  483 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -177,9 +178,11 @@ dashboard), it checks the hardware before any frame is taken:
 3. **Cameras.** CSI cameras are listed through libcamera and USB webcams
    through sysfs (`uvcvideo` driver). Every camera found is started, CSI
    first, up to `[camera] max_cameras` (default 4); one that won't start is
-   skipped. With several, the dashboard shows them side by side (stacked on a
-   phone), each with its own boxes, and the one detector takes their frames in
-   turn, so each camera is checked less often as more are added. **Turn off**
+   skipped. With several, the dashboard shows them side by side, two to a
+   row on a phone in portrait, each with its own boxes; tap one to expand it,
+   and *All cameras* (or Escape) to go back. The others stop streaming while
+   one is expanded. The one detector takes their frames in turn, so each
+   camera is checked less often as more are added. **Turn off**
    on a camera's label (full view) stops it (no frames, no inference) and
    gives the others the whole detector, until the next session; **Turn on**
    brings it back. Saved scans, the detections CSV and `inference.csv` record
@@ -517,9 +520,15 @@ At every boot the Pi picks one, since it has one radio:
 
 The dashboard works the same either way. Notes:
 
-- The choice is made at boot. If the Pi leaves the network's range while
-  running, reboot it, or run `sudo systemctl restart pepperwatch-ap` to choose
-  again.
+- The choice is made at boot, and checked again every two minutes
+  (`pepperwatch-ap-watch.timer`). If the Wi-Fi isn't connected to anything,
+  for example after the phone hotspot it joined went away, it chooses again,
+  so the PepperWatch hotspot comes back within a few minutes. To choose again
+  at once: `sudo systemctl restart pepperwatch-ap`.
+- **Field mode:** where a saved network is in range but useless (campus Wi-Fi
+  that stops devices from reaching each other), always use the hotspot:
+  `sudo touch /etc/pepperwatch/ap.always && sudo systemctl restart pepperwatch-ap`.
+  Delete the file to go back.
 - To keep a saved network from taking over (to test the hotspot at home),
   untick "Connect automatically" for it, or run
   `nmcli connection modify "<name>" connection.autoconnect no`.
@@ -881,6 +890,7 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 | `camera.kind` | `auto` | `auto` (CSI if attached, else USB), `csi` (Picamera2) or `usb` (OpenCV V4L2) |
 | `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`). Set, it means that camera alone |
 | `camera.max_cameras` | 4 | How many cameras to run side by side (1 on the `low` and `tiny` profiles) |
+| `web.max_stream_clients` | 4 | Phones watching live video at once, each with all its cameras; others fall back to a picture a second |
 | `camera.preview_width/height` | 640×480 | Live preview and inference input |
 | `camera.preview_fps` | 25 | Overridden per session by `[profiles.*]` |
 | `camera.still_width/height` | 2304×1296 | Manual snapshot resolution |
@@ -1065,10 +1075,14 @@ draft and should be checked by a native speaker before field use.
 
 | Page | Contents (full view) |
 |---|---|
-| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; detections CSV) |
+| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; *Export CSV*, or *Export with photos* as a ZIP) |
 | `/settings` | **View** for this device (simple or full) · **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
-There's no login: anyone on the PepperWatch Wi-Fi can use every control.
+There's no login: anyone on the PepperWatch Wi-Fi can view everything and use
+the live controls. **Changing the detection thresholds and clearing data ask
+for the admin PIN** (Settings, full view). `install.sh` generates it and shows
+it with the Wi-Fi password; it's kept in `/etc/pepperwatch/admin.pin`. Five
+wrong tries lock it for a minute.
 
 ---
 
@@ -1088,11 +1102,12 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | GET | `/api/stats/weekly` | KPI aggregates |
 | GET | `/api/recommendations[/<severity>]` | Advisory text (`?locale=en\|ceb`) |
 | GET | `/api/export.csv` | One row per box, with provenance columns. Query: `from`, `to` |
+| GET | `/api/export.zip` | The same CSV plus every scan's saved JPEG (as stored, with its boxes drawn) under `images/`; the CSV's `image_path` points at each one. Streamed, so its size is only limited by the photos. Query: `from`, `to` |
 | POST | `/api/capture` | Request a high-res snapshot → `202` |
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
 | POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
-| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Lasts until the next session |
+| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
@@ -1123,7 +1138,7 @@ reachable by anyone within Wi-Fi range or on the same wired network.
 | Layer | Protection |
 |---|---|
 | Wi-Fi | WPA2 with a random 12-character password, generated at install |
-| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause, change thresholds, start sessions and clear data. Clearing needs a two-step confirmation (`{"confirm": "DELETE"}` over the API), against accidents only |
+| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause and start sessions. **Changing thresholds and clearing data need the admin PIN** (`X-Admin-Pin`; 6 digits from install, 5 wrong tries a minute lock it). Clearing also needs `{"confirm": "DELETE"}` |
 | Requests | Bodies over 1 MB are refused; ingested class names must be the known ones (they are drawn into the charts); file downloads are confined to their folders by path, not string prefix |
 | Data exports | CSV cells that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) are written as plain text |
 | Broker | Mosquitto listens on `127.0.0.1` only; nothing on the network can publish commands |
@@ -1136,9 +1151,10 @@ reachable by anyone within Wi-Fi range or on the same wired network.
   access point WPA2 encrypts it; on a wired network data travels in the clear,
   and anyone on that network can use the dashboard. Use the wired connection
   only on a network you trust.
-- **The Wi-Fi password is the only gate.** Anyone on the PepperWatch network
-  can see the camera and scans, change settings and clear data. Share the
-  password only with people who should have that.
+- **The Wi-Fi password is the main gate.** Anyone on the PepperWatch network
+  can see the camera and scans and use the live controls; only thresholds and
+  clearing data need the admin PIN. Share each only with people who should
+  have it.
 - **Secure the OS itself:** change the default user's password, prefer SSH
   keys, and turn SSH off for field deployment if you don't need it.
 
@@ -1202,7 +1218,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 446 tests (~1 min)
+.venv/bin/python -m pytest               # 483 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1255,7 +1271,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 446 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 483 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1270,6 +1286,49 @@ Branches → require status checks: the *Tests* and *Lint* jobs).
 The Pi can't be deployed to from GitHub: in the field it has no internet and
 isn't reachable from outside. Deployment therefore stays a pull. When the Pi
 has Ethernet, `update.sh` fetches whatever CI last approved.
+
+---
+
+## Failure handling: edge cases and what the system does
+
+A field unit runs for a season with nobody watching it, so these were traced
+through every layer and handled:
+
+| Edge case | What happens now |
+|---|---|
+| No camera, or a camera that sends nothing, at start | The worker waits instead of exiting; the dashboard says *No camera is connected*; plugging one in starts detection |
+| A corrupt model, or any other start-up failure | The worker logs it, the dashboard says the system hit a problem, and it tries again every 30 s. systemd never stops restarting either service (`StartLimitIntervalSec=0`) |
+| The SD card filling up | Below 2 GB free, photos stop being saved (events still are); below 512 MB nothing is saved. Detection carries on, the dashboard warns in both views, and nothing is deleted automatically (`[persist] min_free_mb`, `critical_free_mb`) |
+| A save or record failing (disk, database) | Live detection carries on; the error is logged at most once a minute |
+| Phones leaving with live streams open | Their connections are dropped after 20 s of silence (`TCP_USER_TIMEOUT`), and the dashboard has 32 threads, more than every stream slot together, so pages always load |
+| One false alarm (the green wall, once) | The farmer's card shows what most of the last 24 hours' photos show, per camera, taking the worst camera; one frame can't set it |
+| No model installed (stub detector) | Its events are left out of every figure, and the farmer's card says the results aren't real instead of giving advice |
+| The saved network the Pi joined going away | Checked every two minutes; the hotspot comes back. Field mode skips saved networks entirely |
+| The broker dropping the worker's connection | The worker announces itself again on every reconnect, so the dashboard never sticks at "offline" |
+| A camera browning out (plugged, unplugged, plugged…) | A camera must stay plugged in for 10 s, and starts at most one new session a minute |
+| A camera that stays plugged in but freezes | After 10 s with no picture its frame says *isn't sending pictures*, and it's reopened every 30 s until it recovers |
+| A loose ribbon or a broken model failing constantly | Logged once a minute with a count, not twice a second |
+| The clock wrong after a power cut (no RTC battery) | The full view compares the Pi's clock with the phone's and warns past 5 minutes |
+| Clearing data or changing thresholds | Needs the admin PIN |
+| A camera replugged into another port, or in another order | USB cameras are numbered by the port they're in, not by `/dev/videoN`, so *Camera 1* stays the camera in the same port |
+| Thresholds tuned from the dashboard | Saved in the database and restored at every new session, so a camera plugged in doesn't undo them |
+| A session restarting while phones watch | The frame reader that every web thread shares is locked while it re-attaches |
+| CPU heat from the previews | Each camera's preview is encoded only as often as the web can send it (`[web] stream_fps`), not at the camera's 25 fps; the detector still gets every frame |
+| A fresh image with no Wi-Fi country | `install.sh` sets one (`PW_WIFI_COUNTRY`, default PH), and the hotspot script switches the radio on first |
+| Phones leaving a Wi-Fi with no internet | The dashboard says once, in English or Cebuano, to choose *Stay connected* / *Use without internet* |
+| Several phones and several cameras | Live video is limited per phone (`[web] max_stream_clients`, 4 phones, each with all its cameras), and the web has 48 threads for it |
+| Live updates refused or lost | The polling fallback shows every camera's boxes, refreshes the photo list, and tries live updates again every 30 s |
+| Opening the dashboard | Past toasts (a severity change, a saved photo) aren't replayed |
+| The gallery's dates | Taken as the phone's local days, and *To* includes the whole day (also over the API: a date alone means through that day) |
+| Sessions started by a camera plugged in | Labelled `camera-plugged-in` in `sessions.csv`. They're kept: even a short one may be a measurement |
+| Private browsing (no saved settings) | `?view=full` in the address opens the full view; Settings says why the choice isn't kept |
+| Two cameras of the same model | The Hardware list adds each one's device to its name |
+
+One limit isn't in the code: the trained model. `models/best.onnx` is
+YOLOv8**m** (26 M parameters), about a second per frame on the Pi 5's CPU, so
+with two cameras each is checked every 2 s or so, with the CPU busy throughout.
+For more, fit the AI HAT+ or export a smaller model (YOLOv8**n** or **s**, as
+the manuscript assumes) with `scripts/finetune_model.py`'s training settings.
 
 ---
 
@@ -1289,6 +1348,12 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | Wrong camera used with several attached | `auto` prefers CSI and runs up to four. To run one, set `[camera] device` (or `max_cameras = 1`) in `local.toml` |
 | *No camera is connected* | The worker found no camera and is waiting. Plug a USB camera in (it starts within seconds), or check the CSI ribbon with the power off |
 | *Camera 2 is unplugged* | Its USB cable came out. Plug it back in; a new session starts with it |
+| *Camera 2 isn't sending pictures* | Plugged in but frozen: a loose cable, or not enough USB power. It's reopened every 30 s. A Pi 5 on a 3 A supply limits USB to 600 mA in total: with 3–4 webcams use the 27 W supply (`usb_max_current_enable=1` in `config.txt`) or a powered hub |
+| *Storage is almost full* | Photos are no longer saved. *Export with photos* (full view), then clear old data (admin PIN), or move `/var/lib/pepperwatch/media` to a bigger card |
+| *The detection model is missing* | `models/pepperwatch.onnx` isn't on the Pi, so the stub runs. Copy the model and `sudo systemctl restart pepperwatch-worker` |
+| *The camera system hit a problem* | The worker failed to start and retries every 30 s. `journalctl -u pepperwatch-worker -b` says why |
+| *The Pi's clock is … behind this phone* | No RTC battery: fit one on J5. Photos taken meanwhile carry the wrong time |
+| Settings says *this needs the admin PIN* | Type the PIN from install (`sudo cat /etc/pepperwatch/admin.pin`) in Settings → Admin PIN |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
 | No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |

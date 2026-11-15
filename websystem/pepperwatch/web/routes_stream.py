@@ -19,6 +19,7 @@ stayed connected, and the ``-wal`` file would grow without bound.
 from __future__ import annotations
 
 import logging
+import socket
 import threading
 import time
 
@@ -32,7 +33,10 @@ _BOUNDARY = "pepperwatchframe"
 
 # Concurrent MJPEG viewers, counted across the process. One process is
 # guaranteed by the deploy units, so a module-level counter is accurate.
-_viewers = 0
+# Live viewers, counted by phone (address): each stream is sent at
+# stream_fps / cameras, so a phone watching four cameras costs the radio what
+# one watching one does, and the limit is on phones, not streams.
+_viewers: dict[str, int] = {}
 _viewers_lock = threading.Lock()
 
 
@@ -45,6 +49,28 @@ def _reader():
     readers = current_app.config["PW_FRAMES"]
     index = request.args.get("camera", default=0, type=int)
     return readers[index] if index is not None and 0 <= index < len(readers) else None
+
+
+def _drop_if_unacknowledged(environ) -> None:
+    """Free a stream's thread soon after its phone vanishes.
+
+    A phone that walks out of Wi-Fi range never closes its connection, and the
+    send then blocks until TCP gives up, about 15 minutes, holding a thread and
+    a viewer slot all that time. TCP_USER_TIMEOUT fails the send after 20 s of
+    unacknowledged data instead, and keepalive probes catch a quiet connection.
+    Linux only; elsewhere this does nothing.
+    """
+    sock = environ.get("gunicorn.socket")
+    if sock is None or not hasattr(socket, "TCP_USER_TIMEOUT"):
+        return
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, 20_000)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        for option, value in (("TCP_KEEPIDLE", 10), ("TCP_KEEPINTVL", 5), ("TCP_KEEPCNT", 2)):
+            if hasattr(socket, option):
+                sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, option), value)
+    except OSError as exc:
+        log.debug("could not set stream socket timeouts: %s", exc)
 
 
 def _cameras_running(hub) -> int:
@@ -93,15 +119,17 @@ def frame_jpeg():
 @bp.get("/stream.mjpg")
 def stream_mjpeg():
     """Multipart MJPEG, rate-limited and capped by viewer count."""
-    global _viewers
     cfg = _cfg()
     limit = int(cfg.web.max_stream_clients)
+    per_phone = max(1, int(cfg.camera.max_cameras))
     reader = _reader()
     if reader is None:
         return jsonify({"error": "no such camera"}), 404
+    phone = request.remote_addr or "?"
 
     with _viewers_lock:
-        if _viewers >= limit:
+        new_phone = phone not in _viewers
+        if (new_phone and len(_viewers) >= limit) or _viewers.get(phone, 0) >= per_phone:
             # Refusing plainly beats degrading everyone's stream silently.
             return (
                 jsonify(
@@ -114,7 +142,8 @@ def stream_mjpeg():
                 503,
                 {"Retry-After": "5"},
             )
-        _viewers += 1
+        _viewers[phone] = _viewers.get(phone, 0) + 1
+    _drop_if_unacknowledged(request.environ)
 
     # Each camera gets its share of the stream rate, so a phone watching two
     # costs the radio no more than one did. Re-read every frame: turning a
@@ -123,7 +152,6 @@ def stream_mjpeg():
     stream_fps = float(cfg.web.stream_fps)
 
     def generate():
-        global _viewers
         last_seq = -1
         try:
             while True:
@@ -150,7 +178,11 @@ def stream_mjpeg():
             raise
         finally:
             with _viewers_lock:
-                _viewers = max(0, _viewers - 1)
+                left = _viewers.get(phone, 0) - 1
+                if left > 0:
+                    _viewers[phone] = left
+                else:
+                    _viewers.pop(phone, None)
 
     return Response(
         generate(),
@@ -167,6 +199,7 @@ def stream_events():
     proxy or buffer between here and the phone would otherwise hold events until
     a block filled, which for a 200-byte telemetry message could be minutes.
     """
+    _drop_if_unacknowledged(request.environ)
     return Response(
         current_app.config["PW_HUB"].stream(),
         mimetype="text/event-stream",
@@ -182,11 +215,13 @@ def stream_events():
 def stream_status():
     """Viewer and subscriber counts, so the UI can show the slots in use."""
     with _viewers_lock:
-        viewers = _viewers
+        viewers = sum(_viewers.values())
+        phones = len(_viewers)
     cfg = _cfg()
     return jsonify(
         {
             "mjpeg_viewers": viewers,
+            "mjpeg_phones": phones,
             "mjpeg_limit": cfg.web.max_stream_clients,
             "sse_clients": current_app.config["PW_HUB"].client_count,
             "sse_limit": cfg.web.max_sse_clients,

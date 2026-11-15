@@ -51,7 +51,12 @@ export class History {
     const data = new FormData(form);
     this.filters = {};
     for (const [key, value] of data.entries()) {
-      if (value) this.filters[key] = value;
+      if (!value) continue;
+      // Dates are the phone's local days, through the end of the "to" day;
+      // scans are stored in UTC.
+      if (key === 'from') this.filters.from = new Date(`${value}T00:00:00`).toISOString();
+      else if (key === 'to') this.filters.to = new Date(`${value}T23:59:59.999`).toISOString();
+      else this.filters[key] = value;
     }
     this.offset = 0;
     this.load();

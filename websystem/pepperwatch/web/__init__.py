@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 
 from flask import Flask, jsonify, redirect, request, url_for
 
@@ -49,6 +50,7 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     # just has no frames yet.
     app.config["PW_FRAMES"] = [make_reader(cfg, i) for i in range(max(1, int(cfg.camera.max_cameras)))]
     app.config["PW_ADVISORY"] = load_advisory(cfg)
+    app.config["PW_ADMIN_PIN"] = _admin_pin(cfg)
 
     hub = EventHub(cfg)
     app.config["PW_HUB"] = hub
@@ -103,3 +105,14 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
 
     log.info("web app ready: site=%s db=%s", cfg.site.name, database.path)
     return app
+
+
+def _admin_pin(cfg: Config) -> str | None:
+    """The PIN that guards clearing data and changing thresholds, if one is set up."""
+    path = Path(str(cfg.web.admin_pin_file))
+    try:
+        pin = path.read_text().strip()
+    except OSError:
+        log.warning("no admin PIN at %s: clearing data and thresholds are unprotected", path)
+        return None
+    return pin or None

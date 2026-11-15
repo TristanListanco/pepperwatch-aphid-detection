@@ -259,6 +259,16 @@ def test_the_simple_view_hides_the_technical_parts(client) -> None:
     assert "pw-view" in theme and "dataset.view" in theme
 
 
+def test_cameras_can_be_expanded_and_the_log_exported_with_photos(client) -> None:
+    html = client.get("/").get_data(as_text=True)
+    for hook in ("data-camera-expand", "data-camera-exit", "data-action-export-zip"):
+        assert hook in html, hook
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+    # Side by side on a portrait phone too: the two-column rule is not inside a media query.
+    rule = css.index(".viewports.is-multi {")
+    assert css.rfind("@media", 0, rule) < css.rfind("}\n", 0, rule)
+
+
 def test_every_phrase_of_the_simple_view_is_in_cebuano_too(client) -> None:
     words = client.get("/static/js/words.js").get_data(as_text=True)
     english, cebuano = words.split("\n  ceb: {", 1)

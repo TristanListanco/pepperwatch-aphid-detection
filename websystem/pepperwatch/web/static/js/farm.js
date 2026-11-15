@@ -20,20 +20,31 @@ export function renderFarm(root, stats) {
 function renderStatus(root, stats) {
   const card = root.querySelector('[data-farm-status]');
   if (!card) return;
-  const photos = stats.events ?? 0;
-  const advice = stats.advice || {};
-  // With no photos, "no damage" would be a claim the camera has not made.
-  const band = photos ? stats.severity || 'none' : 'empty';
+  // What recent photos typically show (the server's status), not the week's
+  // worst single frame, which one false alarm could set.
+  const status = stats.status || {};
+  const noModel = stats.detector_synthetic === true;
+  const photos = noModel ? 0 : status.photos ?? 0;
+  const advice = status.advice || {};
+  // With no photos, "no damage" would be a claim the camera has not made; with
+  // no model, any advice would rest on made-up boxes.
+  const band = photos ? status.severity || 'none' : 'empty';
   ['none', 'low', 'moderate', 'high', 'empty'].forEach((name) => {
     card.classList.toggle(`is-${name}`, name === band);
   });
 
-  const urgency = photos ? advice.urgency || 'unknown' : null;
+  const urgency = noModel ? 'no_model' : photos ? advice.urgency || 'unknown' : null;
   const icon = card.querySelector('[data-farm-icon]');
-  if (icon) icon.setAttribute('href', `#${URGENCY_ICONS[urgency] || 'i-sprout'}`);
+  if (icon) icon.setAttribute('href', `#${noModel ? 'i-triangle-alert' : URGENCY_ICONS[urgency] || 'i-sprout'}`);
   text(card, '[data-farm-urgency]', urgency ? word(`urgency.${urgency}`) : '');
-  text(card, '[data-farm-headline]', photos ? advice.headline || '' : word('status.empty'));
-  text(card, '[data-farm-body]', photos ? advice.body || '' : word('status.empty_note'));
+  let headline = photos ? advice.headline || '' : word('status.empty');
+  let body = photos ? advice.body || '' : word('status.empty_note');
+  if (noModel) {
+    headline = word('status.no_model');
+    body = word('status.no_model_note');
+  }
+  text(card, '[data-farm-headline]', headline);
+  text(card, '[data-farm-body]', body);
 
   const todo = card.querySelector('[data-farm-todo]');
   const list = card.querySelector('[data-farm-actions]');
@@ -47,8 +58,10 @@ function renderStatus(root, stats) {
     }));
   }
 
+  const day = status.basis === '24h';
+  const basis = day ? 'status.based_day' : 'status.based';
   text(card, '[data-farm-based]', photos
-    ? word(photos === 1 ? 'status.based_one' : 'status.based', { n: photos })
+    ? word(photos === 1 ? `${basis}_one` : basis, { n: photos })
     : '');
   const draft = card.querySelector('[data-farm-draft]');
   if (draft) {

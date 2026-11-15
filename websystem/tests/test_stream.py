@@ -99,20 +99,38 @@ def test_mjpeg_first_part_parses_with_a_correct_content_length(client, published
     assert payload[: len(published_frame)] == published_frame
 
 
-def test_mjpeg_viewer_count_is_capped(client, cfg, published_frame) -> None:
-    """Bandwidth, not CPU, is the limit: ~6-7 Mbit/s per viewer over one radio."""
-    limit = cfg.web.max_stream_clients
-    open_streams = []
-    try:
-        for _ in range(limit):
-            response = client.get("/stream.mjpg")
-            next(iter(response.response))  # force the generator to register
-            open_streams.append(response)
+def _watch(client, phone: str, camera: int = 0):
+    response = client.get(f"/stream.mjpg?camera={camera}", environ_overrides={"REMOTE_ADDR": phone})
+    if response.status_code == 200:
+        next(iter(response.response))  # force the generator to register
+    return response
 
-        refused = client.get("/stream.mjpg")
+
+def test_mjpeg_phones_are_capped_not_streams(client, cfg, published_frame) -> None:
+    """Bandwidth, not CPU, is the limit, and each camera of a phone gets a share
+    of one stream's rate: so the cap is on phones, each with all its cameras."""
+    limit = cfg.web.max_stream_clients
+    open_streams = [_watch(client, f"10.0.0.{index}") for index in range(limit)]
+    try:
+        assert all(response.status_code == 200 for response in open_streams)
+        refused = _watch(client, "10.0.0.99")
         assert refused.status_code == 503
         assert refused.get_json()["max"] == limit
         assert refused.headers["Retry-After"] == "5"
+        # A phone already watching may still open another stream (its next camera).
+        second = _watch(client, "10.0.0.0")
+        open_streams.append(second)
+        assert second.status_code == 200
+    finally:
+        for response in open_streams:
+            response.close()
+
+
+def test_one_phone_cannot_open_more_streams_than_there_are_cameras(client, cfg, published_frame) -> None:
+    per_phone = int(cfg.camera.max_cameras)
+    open_streams = [_watch(client, "10.0.0.5") for _ in range(per_phone)]
+    try:
+        assert _watch(client, "10.0.0.5").status_code == 503
     finally:
         for response in open_streams:
             response.close()
@@ -260,3 +278,21 @@ def test_a_camera_turned_off_hands_its_stream_share_to_the_other(app) -> None:
     assert _cameras_running(hub) == 2
     hub._on_message("pepperwatch/telemetry/pipeline", {"camera_on": [True, False]})
     assert _cameras_running(hub) == 1
+
+
+def test_a_vanished_phone_frees_its_stream_within_seconds(monkeypatch) -> None:
+    """Without a send timeout a phone that walks off holds its thread ~15 min."""
+    import socket
+
+    from pepperwatch.web.routes_stream import _drop_if_unacknowledged
+
+    monkeypatch.setattr(socket, "TCP_USER_TIMEOUT", 18, raising=False)
+    options = {}
+
+    class Sock:
+        def setsockopt(self, level, option, value) -> None:
+            options[option] = value
+
+    _drop_if_unacknowledged({"gunicorn.socket": Sock()})
+    assert options[18] == 20_000 and options[socket.SO_KEEPALIVE] == 1
+    _drop_if_unacknowledged({})  # the development server: nothing to set

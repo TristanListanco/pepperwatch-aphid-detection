@@ -31,6 +31,9 @@ from ..mqtt_bus import STATUS_OFFLINE, STATUS_ONLINE, MqttBus, Topics, make_bus
 
 log = logging.getLogger(__name__)
 
+# Things that happen rather than states: not cached for pages that load later.
+_EVENTS = {"detect/flag", "event/persisted", "data/cleared"}
+
 
 # eq=False keeps identity-based hashing, which is required because
 # subscribers live in a set: two connections are distinct even if their
@@ -75,6 +78,7 @@ class EventHub:
         self._worker_seen_at = 0.0
         self._detector: dict[str, Any] = {}
         self._session: dict[str, Any] = {}
+        self._frames: dict[int, dict[str, Any]] = {}  # newest detections, per camera
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -116,8 +120,12 @@ class EventHub:
             self._detector = dict(payload)
         elif topic == Topics.STATUS_SESSION:
             self._session = dict(payload)
+        elif short in _EVENTS:
+            pass  # happened once: replaying it to every new page would repeat its toast
         else:
             self._latest[short] = payload
+            if short == "detect/frame":
+                self._frames[int(payload.get("camera") or 0)] = payload
             if "telemetry" in short or short == "detect/frame":
                 self._worker_seen_at = time.time()
 
@@ -200,6 +208,11 @@ class EventHub:
             "last_seen_s": round(age, 1) if age is not None else None,
             "stale_after_s": stale_after,
         }
+
+    @property
+    def frames(self) -> list[dict[str, Any]]:
+        """The newest detections of each camera, in camera order."""
+        return [self._frames[camera] for camera in sorted(self._frames)]
 
     @property
     def detector(self) -> dict[str, Any]:

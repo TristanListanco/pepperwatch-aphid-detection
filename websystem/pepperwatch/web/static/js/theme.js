@@ -30,7 +30,18 @@
   try {
     view = localStorage.getItem('pw-view') === 'full' ? 'full' : 'simple';
   } catch (error) {
-    // Private mode or blocked storage: the simple view.
+    // Private mode or blocked storage: the simple view, unless the address asks.
+  }
+  // ?view=full in the address: for a browser that keeps no settings, and to
+  // hand someone a link straight to the expert view.
+  var asked = /[?&]view=(simple|full)(&|$)/.exec(window.location.search);
+  if (asked) {
+    view = asked[1];
+    try {
+      localStorage.setItem('pw-view', view);
+    } catch (error) {
+      // Applies to this page only.
+    }
   }
   document.documentElement.dataset.view = view;
 
@@ -39,14 +50,16 @@
     get: function () {
       return view;
     },
+    // Returns whether the choice was saved for the next visit.
     set: function (value) {
       view = value === 'full' ? 'full' : 'simple';
+      document.documentElement.dataset.view = view;
       try {
         localStorage.setItem('pw-view', view);
+        return localStorage.getItem('pw-view') === view;
       } catch (error) {
-        // Not persisted; applies until the page reloads.
+        return false;
       }
-      document.documentElement.dataset.view = view;
     },
   };
 

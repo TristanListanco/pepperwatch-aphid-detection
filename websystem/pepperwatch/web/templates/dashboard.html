@@ -34,6 +34,8 @@
       <figure class="camera-view" data-camera-view>
       <figcaption class="camera-label" data-camera-label hidden>
         <span data-camera-name></span>
+        <button class="btn is-quiet camera-exit" type="button" data-camera-exit>
+          <svg class="icon" aria-hidden="true"><use href="#i-minimize"/></svg><span data-word="camera.all">All cameras</span></button>
         <button class="btn is-quiet" type="button" data-camera-switch data-expert>Turn off</button>
       </figcaption>
       <div class="viewport" data-viewport>
@@ -47,7 +49,11 @@
         <div class="viewport-unplugged" role="status">
           <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
           <p data-camera-unplugged></p>
+          <p class="viewport-short" data-camera-short>Plug it back in</p>
         </div>
+        {# Shown with several cameras: tap the picture, or this, to expand one. #}
+        <button class="viewport-expand" type="button" data-camera-expand>
+          <svg class="icon" aria-hidden="true"><use href="#i-maximize"/></svg></button>
         <div class="viewport-meta">
           <span class="chip" data-pipeline-paused hidden>
             <span class="dot"></span><span data-word="live.paused">Paused</span>
@@ -276,6 +282,8 @@
       <h2><span data-expert>Historical Detection Log</span><span data-simple data-word="photos.title">Recent photos</span></h2>
       <div class="card-head-actions" data-expert>
         <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
+        <button class="btn is-quiet" type="button" data-action-export-zip
+                title="The CSV and the saved photo of every scan, as one ZIP">Export with photos</button>
       </div>
     </div>
     <div class="card-body">

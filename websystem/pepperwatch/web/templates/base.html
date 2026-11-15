@@ -64,6 +64,24 @@
           </div>
         </div>
 
+        {# Phones drop a Wi-Fi with no internet unless told to stay (main.js, once per phone). #}
+        <div class="banner" data-wifi-tip hidden role="note">
+          <svg class="icon" aria-hidden="true"><use href="#i-wifi"/></svg>
+          <div>
+            <span data-word="tip.no_internet">Your phone may say this Wi-Fi has no internet. That is normal:
+              choose "Stay connected" (Android) or "Use without internet" (iPhone) to keep watching.</span>
+            <button class="btn is-quiet" type="button" data-wifi-tip-close data-word="tip.ok">Got it</button>
+          </div>
+        </div>
+        <div class="banner is-caution" data-storage-banner hidden role="status">
+          <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
+          <div data-storage-text></div>
+        </div>
+        <div class="banner is-caution" data-clock-banner data-expert hidden role="status">
+          <svg class="icon" aria-hidden="true"><use href="#i-timer"/></svg>
+          <div data-clock-text></div>
+        </div>
+
         <div class="banner" data-toast hidden role="status" aria-live="polite"></div>
 
         {% block content %}{% endblock %}

@@ -21,6 +21,9 @@
           <span class="note">Everything: frame rates, latency, power, temperature, hardware, detection thresholds and session records.</span></span>
       </label>
     </fieldset>
+    <p class="note" data-view-note hidden>This browser isn't keeping settings (private browsing, or
+      storage turned off), so the next visit opens the simple view again. To open the full view,
+      add <code class="mono">?view=full</code> to the address.</p>
   </div>
 </section>
 
@@ -54,6 +57,23 @@
           <option value="dark">Dark</option>
         </select>
         <p class="note">Light reads best in direct sun; dark is easier at dusk and indoors.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="card" data-expert>
+  <div class="card-head">
+    <h2>Admin PIN</h2>
+    <span class="card-sub">Kept until this tab closes</span>
+  </div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div class="field">
+        <label for="admin-pin">PIN</label>
+        <input id="admin-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" data-admin-pin>
+        <p class="note">Needed to change the detection thresholds or clear data. It was shown when the
+          Pi was installed, and is in <code class="mono">/etc/pepperwatch/admin.pin</code>.</p>
       </div>
     </div>
   </div>

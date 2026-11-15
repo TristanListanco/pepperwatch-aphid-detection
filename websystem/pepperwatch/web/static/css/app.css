@@ -1043,10 +1043,104 @@ button {
   gap: 16px;
 }
 
+/* Several cameras sit side by side at every width, a portrait phone
+ * included, two to a row there; tap one to expand it to the whole card. */
+.viewports.is-multi {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
 @media (min-width: 900px) {
   .viewports.is-multi {
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    align-items: start;
+    gap: 16px;
+  }
+}
+
+.viewports.has-focus {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.viewports.has-focus .camera-view:not(.is-focused) {
+  display: none;
+}
+
+.viewports.is-multi:not(.has-focus) .viewport {
+  cursor: zoom-in;
+}
+
+.viewport-expand {
+  display: none;
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--glass);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.viewports.is-multi:not(.has-focus) .camera-view:not(.is-off):not(.is-unplugged):not(.is-stalled) .viewport-expand {
+  display: grid;
+}
+
+/* Under the label's selector, or .btn's display wins. */
+.camera-label .camera-exit {
+  display: none;
+}
+
+.camera-view.is-focused .camera-label .camera-exit {
+  display: inline-flex;
+  margin-left: auto;
+}
+
+/* A camera two to a row on a phone is ~160px wide: keep its messages to
+ * what fits, and the full sentence for wider frames. */
+.viewport {
+  container-type: inline-size;
+}
+
+.viewport-short {
+  display: none;
+}
+
+@container (max-width: 260px) {
+  .viewport-idle .muted,
+  .viewport-unplugged [data-camera-unplugged] {
+    display: none;
+  }
+
+  .viewport-unplugged .viewport-short {
+    display: block;
+  }
+
+  .viewport-idle p,
+  .viewport-unplugged p {
+    font-size: var(--type-note);
+  }
+
+  .viewport-idle .icon,
+  .viewport-unplugged .icon {
+    width: 24px;
+    height: 24px;
+    margin: 0;
+  }
+
+  .viewport-meta {
+    left: 6px;
+    bottom: 6px;
+  }
+}
+
+@media (max-width: 899px) {
+  .viewports.is-multi:not(.has-focus) .live-summary {
+    font-size: var(--type-note);
   }
 }
 
@@ -1072,11 +1166,16 @@ button {
 }
 
 .camera-view.is-unplugged .viewport-idle,
-.camera-view.is-unplugged .live-summary {
+.camera-view.is-unplugged .live-summary,
+.camera-view.is-stalled .viewport-idle,
+.camera-view.is-stalled .live-summary,
+.camera-view.is-stalled .viewport img,
+.camera-view.is-stalled .viewport canvas {
   display: none;
 }
 
-.camera-view.is-unplugged .viewport-unplugged {
+.camera-view.is-unplugged .viewport-unplugged,
+.camera-view.is-stalled .viewport-unplugged {
   position: absolute;
   inset: 0;
   display: grid;

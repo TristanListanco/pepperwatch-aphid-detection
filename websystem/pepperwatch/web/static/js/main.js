@@ -85,25 +85,41 @@ function bootDashboard() {
   // its frame, saying so. Neither fetches frames.
   let camerasOn = [];
   let camerasConnected = [];
+  let camerasStalled = [];
+  // The camera expanded to the whole card, or null. The others fetch no
+  // frames meanwhile: the radio's bandwidth goes to the one being looked at.
+  let focused = null;
   function showCamerasOn() {
     if (!viewsRoot) return;
     const unplugged = (index) => camerasConnected[index] === false;
+    // Plugged in and on, but sending no pictures: shown like an unplugged one.
+    const stalled = (index) => camerasStalled[index] === true && !unplugged(index);
     const active = (index) => camerasOn[index] !== false && !unplugged(index);
     const onCount = views.filter((view, index) => active(index)).length;
     const framed = views.filter((view, index) => active(index) || unplugged(index)).length;
+    if (focused !== null && (framed < 2 || !active(focused))) focused = null;
     viewsRoot.classList.toggle('is-multi', framed > 1);
+    viewsRoot.classList.toggle('has-focus', focused !== null);
     views.forEach((view, index) => {
       view.off = !active(index);
+      view.idle = view.off || (focused !== null && index !== focused);
+      view.root.classList.toggle('is-focused', index === focused);
+      const expand = view.root.querySelector('[data-camera-expand]');
+      if (expand) expand.setAttribute('aria-label', word('camera.expand', { n: index + 1 }));
       view.root.classList.toggle('is-off', !active(index) && !unplugged(index));
       view.root.classList.toggle('is-unplugged', unplugged(index));
+      view.root.classList.toggle('is-stalled', stalled(index));
+      const n = index + 1;
       const name = view.root.querySelector('[data-camera-name]');
       if (name) {
-        name.textContent = unplugged(index)
-          ? word('camera.label_unplugged', { n: index + 1 })
-          : view.name || word('camera.n', { n: index + 1 });
+        if (unplugged(index)) name.textContent = word('camera.label_unplugged', { n });
+        else if (stalled(index)) name.textContent = word('camera.label_stalled', { n });
+        else name.textContent = view.name || word('camera.n', { n });
       }
       const note = view.root.querySelector('[data-camera-unplugged]');
-      if (note) note.textContent = word('camera.unplugged', { n: index + 1 });
+      if (note) note.textContent = word(stalled(index) ? 'camera.stalled' : 'camera.unplugged', { n });
+      const short = view.root.querySelector('[data-camera-short]');
+      if (short) short.textContent = word(stalled(index) ? 'camera.stalled_short' : 'camera.plug_back');
       const button = view.root.querySelector('[data-camera-switch]');
       if (button) {
         const action = view.off ? 'Turn on' : 'Turn off';
@@ -112,16 +128,36 @@ function bootDashboard() {
         button.setAttribute('aria-label', `${action} camera ${index + 1}`);
         button.disabled = !view.off && onCount < 2; // the last camera on stays on
       }
-      if (view.off) view.setMode('idle');
+      if (view.idle) view.setMode('idle');
       else if (view.mode === 'idle' && pageLoaded && !document.hidden) view.setMode(liveMode);
     });
   }
 
+  // Tap a camera to expand it; All cameras (or Escape) goes back to them all.
+  const focusCamera = (index) => {
+    focused = index;
+    showCamerasOn();
+    if (index !== null) views[index].root.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && focused !== null) focusCamera(null);
+  });
+
   if (viewsRoot) {
     viewsRoot.addEventListener('click', async (event) => {
+      const at = views.findIndex((view) => view.root.contains(event.target));
+      if (event.target.closest('[data-camera-exit]')) {
+        focusCamera(null);
+        return;
+      }
+      const picture = event.target.closest('[data-camera-expand], [data-viewport]');
+      if (picture && focused === null && viewsRoot.classList.contains('is-multi') && !views[at].off) {
+        focusCamera(at);
+        return;
+      }
       const button = event.target.closest('[data-camera-switch]');
       if (!button) return;
-      const index = views.findIndex((view) => view.root.contains(button));
+      const index = at;
       const enabled = camerasOn[index] === false;
       button.disabled = true; // until the worker's next report shows the switch
       try {
@@ -138,12 +174,12 @@ function bootDashboard() {
   // browser shows the page as loading for as long as the stream runs.
   window.addEventListener('load', () => {
     pageLoaded = true;
-    views.forEach((view) => view.setMode(view.off ? 'idle' : liveMode));
+    views.forEach((view) => view.setMode(view.idle ? 'idle' : liveMode));
   }, { once: true });
   // A background tab would otherwise hold MJPEG slots, and the radio's
   // bandwidth, for nobody.
   document.addEventListener('visibilitychange', () => {
-    views.forEach((view) => view.setMode(document.hidden || view.off ? 'idle' : liveMode));
+    views.forEach((view) => view.setMode(document.hidden || view.idle ? 'idle' : liveMode));
   });
   bus.on('detections', (payload) => {
     if (payload.ts) lastFrameAt = payload.ts * 1000;
@@ -176,8 +212,14 @@ function bootDashboard() {
       }
     });
     camerasConnected = connected;
+    const stalledNow = payload.camera_stalled || [];
+    stalledNow.forEach((quiet, index) => {
+      if (quiet === true && camerasStalled[index] === false) toast(word('toast.stalled', { n: index + 1 }), 'error');
+    });
+    camerasStalled = stalledNow;
+    showStorage(payload.storage, payload.disk_free_mb);
     showCamerasOn();
-    if (devices) devices.setCameras(payload.camera_on, payload.camera_connected);
+    if (devices) devices.setCameras(payload.camera_on, payload.camera_connected, payload.camera_stalled);
   });
   bus.on('summary', (payload) => renderSummary(document, payload));
 
@@ -265,6 +307,7 @@ function bootDashboard() {
     refreshStats();
   });
 
+  fetchJson('/api/health').then(checkClock).catch(() => {});
   bus.start();
   window.addEventListener('beforeunload', () => {
     bus.stop();
@@ -291,13 +334,41 @@ function showWorker(state) {
   const banner = document.querySelector('[data-worker-banner]');
   if (banner) {
     banner.hidden = alive;
-    const reason = ['no_camera', 'restarting'].includes(state.status) ? state.status : 'offline';
+    const reason = ['no_camera', 'restarting', 'error'].includes(state.status) ? state.status : 'offline';
     banner.classList.toggle('is-offline', reason !== 'restarting');
     const text = banner.querySelector('[data-banner-text]');
     if (text) text.textContent = word(`banner.${reason}`);
     const ssh = banner.querySelector('[data-banner-ssh]');
     if (ssh) ssh.hidden = reason !== 'offline';
   }
+}
+
+// Low on SD card space: the worker has stopped saving photos (low) or
+// everything (full). Said in both views; the full view adds the figure.
+function showStorage(level, freeMb) {
+  const banner = document.querySelector('[data-storage-banner]');
+  if (!banner) return;
+  banner.hidden = !level || level === 'ok';
+  if (banner.hidden) return;
+  let text = word(level === 'full' ? 'banner.storage_full' : 'banner.storage_low');
+  if (!isSimple() && freeMb != null) text += ` (${Math.round(freeMb)} MB free)`;
+  banner.querySelector('[data-storage-text]').textContent = text;
+}
+
+// The Pi has no network time in the field; without its RTC battery the clock
+// restarts from its last saved time after every power cut, and every photo is
+// misdated. The phone's clock is the best check there is.
+function checkClock(health) {
+  const banner = document.querySelector('[data-clock-banner]');
+  if (!banner || !health || !health.server_time) return;
+  const skewMs = Date.parse(health.server_time) - Date.now();
+  banner.hidden = Math.abs(skewMs) < 5 * 60 * 1000;
+  if (banner.hidden) return;
+  const minutes = Math.round(Math.abs(skewMs) / 60000);
+  const span = minutes >= 120 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+  banner.querySelector('[data-clock-text]').textContent =
+    `The Pi's clock is ${span} ${skewMs < 0 ? 'behind' : 'ahead of'} this phone. ` +
+    'Photos and records are being misdated. Fit the RTC battery (J5) so the clock survives power cuts.';
 }
 
 // With the detector down the live tiles and the camera hold their last
@@ -332,6 +403,7 @@ function checkWorker() {
   fetchJson('/api/health')
     .then((health) => {
       if (health && health.worker) showWorker(health.worker);
+      checkClock(health);
     })
     .catch(() => {});
 }
@@ -341,7 +413,29 @@ function bootSettings() {
   initSettings(document).catch((error) => console.error('[pw] settings failed', error));
 }
 
+// Once per phone: the PepperWatch Wi-Fi has no internet, and phones offer to
+// leave such a network. Saying so up front keeps farmers connected.
+function showWifiTip() {
+  const tip = document.querySelector('[data-wifi-tip]');
+  if (!tip) return;
+  try {
+    if (localStorage.getItem('pw-tip-wifi')) return;
+  } catch (error) {
+    return; // nowhere to remember it was read: don't nag on every page
+  }
+  tip.hidden = false;
+  tip.querySelector('[data-wifi-tip-close]').addEventListener('click', () => {
+    tip.hidden = true;
+    try {
+      localStorage.setItem('pw-tip-wifi', '1');
+    } catch (error) {
+      // Shown again next time.
+    }
+  });
+}
+
 applyWords(document);
+showWifiTip();
 const page = document.body.dataset.page;
 if (page === 'dashboard') bootDashboard();
 else if (page === 'settings') bootSettings();
