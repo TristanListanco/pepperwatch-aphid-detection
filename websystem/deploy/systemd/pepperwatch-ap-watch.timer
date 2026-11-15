@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the Pepper Watch Wi-Fi every two minutes
+
+[Timer]
+# After pepperwatch-ap.service has had its turn at boot (up to three minutes).
+OnBootSec=4min
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

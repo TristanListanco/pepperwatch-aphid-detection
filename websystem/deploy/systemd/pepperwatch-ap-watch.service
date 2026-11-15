@@ -1,0 +1,14 @@
+[Unit]
+Description=Pepper Watch Wi-Fi check: bring the hotspot back if the network went away
+Documentation=man:nmcli(1)
+# Run by pepperwatch-ap-watch.timer. If the Wi-Fi is connected to anything it
+# does nothing; otherwise it decides again as at boot: a saved network that is
+# in range, or the PepperWatch hotspot. A Pi that joined a phone's hotspot at
+# boot is then reachable again within a few minutes of that phone leaving.
+After=NetworkManager.service pepperwatch-ap.service
+ConditionPathExists=!/etc/pepperwatch/ap.disabled
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pepperwatch/deploy/network/setup-ap.sh --if-offline
+TimeoutStartSec=180

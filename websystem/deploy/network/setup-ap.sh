@@ -3,6 +3,15 @@
 # Watch access point. Runs at every boot (pepperwatch-ap.service), and
 # `sudo systemctl restart pepperwatch-ap` re-decides without a reboot.
 #
+#   setup-ap.sh --if-offline   what pepperwatch-ap-watch.timer runs every two
+#                              minutes: decide again only if the Wi-Fi is not
+#                              connected to anything.
+#
+# Field mode: with /etc/pepperwatch/ap.always present, saved networks are
+# skipped and the hotspot always starts. Use it where a saved network is in
+# range but useless, such as campus Wi-Fi that keeps devices from reaching
+# each other.
+#
 # Raspberry Pi OS Bookworm and Trixie manage wireless through NetworkManager,
 # which means the hostapd + dnsmasq recipe in most Raspberry Pi AP tutorials is
 # the wrong approach on current images: NetworkManager owns wlan0 and will
@@ -24,6 +33,7 @@ IFACE="${PW_AP_IFACE:-wlan0}"
 ADDRESS="${PW_AP_ADDRESS:-192.168.4.1/24}"
 BAND="${PW_AP_BAND:-bg}"
 CHANNEL="${PW_AP_CHANNEL:-6}"
+ALWAYS_FLAG="${PW_AP_ALWAYS_FLAG:-/etc/pepperwatch/ap.always}"
 
 log() { printf '[pepperwatch-ap] %s\n' "$*"; }
 
@@ -47,6 +57,20 @@ if ! nmcli device status | grep -E "^${IFACE}\b" >/dev/null; then
   IFACE="$FOUND"
 fi
 
+# -- the periodic check ------------------------------------------------------
+# Connected to anything (a saved network, or the hotspot itself): leave it. A
+# Pi that joined a phone's hotspot or campus Wi-Fi at boot would otherwise be
+# unreachable once that network went away, until someone rebooted it. In field
+# mode, connected to anything but the hotspot is not good enough.
+if [ "${1:-}" = "--if-offline" ]; then
+  state="$(nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null || true)"
+  current="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" 2>/dev/null || true)"
+  if [ "${state%% *}" = "100" ] && { [ ! -e "$ALWAYS_FLAG" ] || [ "$current" = "$CON_NAME" ]; }; then
+    exit 0
+  fi
+  log "${IFACE} is not connected as it should be (${state:-unknown}); deciding again"
+fi
+
 # -- a saved network, or the hotspot -------------------------------------------
 # One radio, one job. If a saved Wi-Fi network is in range (added from the
 # desktop Wi-Fi menu, `nmcli device wifi connect`, or Raspberry Pi Imager), join
@@ -67,6 +91,10 @@ while IFS=: read -r kind name; do
   if [ "$(nmcli -g connection.autoconnect connection show "$name")" = "no" ]; then continue; fi
   saved+=("$name")
 done < <(nmcli -t --escape no -f TYPE,NAME connection show)
+if [ -e "$ALWAYS_FLAG" ] && [ "${#saved[@]}" -gt 0 ]; then
+  log "field mode (${ALWAYS_FLAG}): saved networks skipped"
+  saved=()
+fi
 
 joined=""
 # Only a finished connection counts. GENERAL.CONNECTION names one as soon as
@@ -173,6 +201,8 @@ else
 fi
 
 log "bringing up ${CON_NAME}"
+# A radio switched off (or soft-blocked) refuses the hotspot outright.
+nmcli radio wifi on >/dev/null 2>&1 || true
 up=""
 for _ in 1 2 3; do  # right after boot the radio may not be ready yet
   if nmcli --wait 20 connection up "$CON_NAME"; then up=1; break; fi

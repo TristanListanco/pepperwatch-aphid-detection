@@ -38,6 +38,8 @@ def unit(name: str) -> configparser.ConfigParser:
         "pepperwatch-web.service",
         "pepperwatch-maintenance.service",
         "pepperwatch-maintenance.timer",
+        "pepperwatch-ap-watch.service",
+        "pepperwatch-ap-watch.timer",
     ],
 )
 def test_unit_file_exists_and_parses(name) -> None:
@@ -50,6 +52,13 @@ def test_unit_file_exists_and_parses(name) -> None:
 def test_services_restart_automatically(name) -> None:
     """§3.4.5 requires auto-recovery from exceptions and power fluctuations."""
     assert unit(name)["Service"]["Restart"] == "always"
+
+
+@pytest.mark.parametrize("name", ["pepperwatch-worker.service", "pepperwatch-web.service"])
+def test_systemd_never_gives_up_restarting(name) -> None:
+    """A start limit leaves a field node with no detector until someone reboots it."""
+    assert unit(name)["Unit"]["StartLimitIntervalSec"] == "0"
+    assert "StartLimitBurst" not in unit(name)["Service"]
 
 
 def test_target_pulls_in_everything_needed_for_unattended_boot(name="pepperwatch.target") -> None:
@@ -85,6 +94,19 @@ def test_web_runs_exactly_one_gunicorn_worker() -> None:
     assert "--workers 1" in exec_start
     assert "--worker-class gthread" in exec_start
     assert "--threads" in exec_start
+
+
+def test_streams_cannot_take_every_web_thread() -> None:
+    """Each open stream holds a thread: with only as many threads as stream
+    slots, phones left streaming would freeze the dashboard for everyone."""
+    import re
+
+    from pepperwatch.config import load
+
+    threads = int(re.search(r"--threads (\d+)", unit("pepperwatch-web.service")["Service"]["ExecStart"])[1])
+    cfg = load(use_env=False)
+    streams = int(cfg.web.max_stream_clients) * int(cfg.camera.max_cameras)  # phones x cameras
+    assert threads >= streams + int(cfg.web.max_sse_clients) + 8
 
 
 def test_web_does_not_recycle_workers() -> None:
@@ -209,7 +231,8 @@ exit 0
 
 
 def run_setup_ap(
-    tmp_path: Path, saved: str = "", visible: str = "", check: bool = True, **fake: str,
+    tmp_path: Path, saved: str = "", visible: str = "", check: bool = True,
+    args: tuple[str, ...] = (), always: bool = False, **fake: str,
 ) -> str:
     """Run setup-ap.sh against a fake nmcli; return what it was asked."""
     import os
@@ -229,10 +252,13 @@ def run_setup_ap(
         "FAKE_SAVED": saved,
         "FAKE_VISIBLE": visible,
         "PW_AP_PSK": "a-test-passphrase",
+        "PW_AP_ALWAYS_FLAG": str(tmp_path / "ap.always"),
         **{f"FAKE_{key.upper()}": value for key, value in fake.items()},
     }
+    if always:
+        (tmp_path / "ap.always").touch()
     subprocess.run(
-        ["bash", str(DEPLOY / "network" / "setup-ap.sh")],
+        ["bash", str(DEPLOY / "network" / "setup-ap.sh"), *args],
         env=env, check=check, capture_output=True, text=True,
     )
     return log.read_text()
@@ -410,3 +436,54 @@ def test_manuscript_notes_exist_and_cover_the_serious_items() -> None:
     notes = path.read_text()
     for topic in ("H1", "MongoDB", "RTC", "TFT", "17 FPS"):
         assert topic in notes, f"MANUSCRIPT-NOTES.md does not mention {topic}"
+
+
+def test_the_periodic_check_leaves_a_connected_wifi_alone(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path, args=("--if-offline",), saved="FarmWiFi", current="FarmWiFi",
+                         state="100 (connected)")
+    assert "connection up" not in calls and "connection down" not in calls
+
+
+def test_the_periodic_check_brings_the_hotspot_back_when_the_network_went_away(tmp_path) -> None:
+    """Joined a phone's hotspot at boot; the phone left: unreachable until reboot."""
+    calls = run_setup_ap(tmp_path, args=("--if-offline",), saved="PhoneHotspot", visible="Neighbour")
+    assert "connection up pepperwatch-ap" in calls
+
+
+def test_field_mode_starts_the_hotspot_even_with_a_saved_network_in_range(tmp_path) -> None:
+    """Campus Wi-Fi in range but keeping phones from reaching the Pi."""
+    calls = run_setup_ap(tmp_path, saved="CampusWiFi", visible="CampusWiFi", always=True)
+    assert "connection up CampusWiFi" not in calls
+    assert "connection up pepperwatch-ap" in calls
+
+
+def test_field_mode_check_leaves_a_saved_network_for_the_hotspot(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path, args=("--if-offline",), saved="CampusWiFi", visible="CampusWiFi",
+                         current="CampusWiFi", state="100 (connected)", always=True)
+    assert "connection up pepperwatch-ap" in calls
+
+
+def test_the_wifi_check_runs_every_two_minutes_and_is_enabled() -> None:
+    timer = unit("pepperwatch-ap-watch.timer")
+    assert timer["Timer"]["OnUnitActiveSec"] == "2min"
+    assert "--if-offline" in unit("pepperwatch-ap-watch.service")["Service"]["ExecStart"]
+    assert "systemctl enable pepperwatch-ap-watch.timer" in (DEPLOY / "install.sh").read_text()
+
+
+def test_install_generates_an_admin_pin_the_dashboard_can_read() -> None:
+    script = (DEPLOY / "install.sh").read_text()
+    assert 'install -d -m 750 -o root -g "$APP_USER" "$CONFIG_DIR"' in script
+    assert '"$CONFIG_DIR/admin.pin"' in script and "chmod 640" in script
+    assert 'chmod 600 "$CONFIG_DIR/ap.psk"' in script  # the Wi-Fi password stays root-only
+
+
+def test_the_wifi_radio_is_switched_on_before_the_hotspot(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path)
+    assert calls.index("nmcli radio wifi on") < calls.index("connection up pepperwatch-ap")
+
+
+def test_install_sets_a_wifi_country_when_none_is_set() -> None:
+    """Without one Raspberry Pi OS keeps the radio blocked: no hotspot at all."""
+    script = (DEPLOY / "install.sh").read_text()
+    assert "raspi-config nonint get_wifi_country" in script
+    assert 'raspi-config nonint do_wifi_country "${PW_WIFI_COUNTRY:-PH}"' in script

@@ -171,7 +171,9 @@ done
 # which it would otherwise try to write into the read-only app directory.
 install -d -o "$APP_USER" -g "$APP_USER" \
   "$DATA_DIR" "$DATA_DIR/media" "$DATA_DIR/db" "$DATA_DIR/sessions" "$DATA_DIR/hailort"
-install -d -m 700 "$CONFIG_DIR"
+# Group-readable by the service account for admin.pin; ap.psk inside stays
+# root-only (600).
+install -d -m 750 -o root -g "$APP_USER" "$CONFIG_DIR"
 
 # -- application -----------------------------------------------------------
 
@@ -240,6 +242,16 @@ if [ ! -f "$CONFIG_DIR/ap.psk" ]; then
   note "WRITE THIS DOWN. Change it by editing $CONFIG_DIR/ap.psk."
 fi
 
+# Clearing every detection and changing the thresholds ask for this PIN on the
+# dashboard: anyone on the Wi-Fi can reach it, and the data is the research record.
+if [ ! -f "$CONFIG_DIR/admin.pin" ]; then
+  printf '%06d\n' "$(( $(od -An -N4 -tu4 /dev/urandom) % 1000000 ))" > "$CONFIG_DIR/admin.pin"
+  note "generated an admin PIN: $(cat "$CONFIG_DIR/admin.pin")"
+  note "WRITE THIS DOWN too. Change it by editing $CONFIG_DIR/admin.pin."
+fi
+chown "root:$APP_USER" "$CONFIG_DIR/admin.pin"
+chmod 640 "$CONFIG_DIR/admin.pin"
+
 # -- services --------------------------------------------------------------
 
 # The dashboard also listens on port 80 for the captive portal. If another web
@@ -284,6 +296,20 @@ else
   note "${MEM_MB} MB of RAM: the default memory limits fit"
 fi
 
+# Raspberry Pi OS keeps the Wi-Fi radio blocked until a country is set, and the
+# hotspot then never starts. Raspberry Pi Imager usually sets it; if not, set it
+# here (PW_WIFI_COUNTRY, default PH: this is deployed in Northern Mindanao).
+if [ "$BOARD_IS_RPI" = "1" ] && command -v raspi-config >/dev/null 2>&1; then
+  WIFI_COUNTRY="$(raspi-config nonint get_wifi_country 2>/dev/null || true)"
+  if [ -z "$WIFI_COUNTRY" ] || [ "$WIFI_COUNTRY" = "00" ]; then
+    if raspi-config nonint do_wifi_country "${PW_WIFI_COUNTRY:-PH}" >/dev/null 2>&1; then
+      note "Wi-Fi country was not set; set it to ${PW_WIFI_COUNTRY:-PH} (PW_WIFI_COUNTRY changes it)"
+    else
+      note "WARNING: Wi-Fi country not set, and setting it failed; the hotspot may not start"
+    fi
+  fi
+fi
+
 # The access point needs a Wi-Fi radio that NetworkManager manages. Boards
 # without one (Banana Pi M5, some Orange Pi 5 variants) or images that run
 # another network stack serve the dashboard over Ethernet instead. The
@@ -307,6 +333,7 @@ systemctl enable mosquitto >/dev/null
 systemctl restart mosquitto
 systemctl enable pepperwatch.target >/dev/null
 systemctl enable pepperwatch-maintenance.timer >/dev/null
+systemctl enable pepperwatch-ap-watch.timer >/dev/null
 
 # -- verify ----------------------------------------------------------------
 
@@ -315,6 +342,7 @@ sudo -u "$APP_USER" "$APP_DIR/.venv/bin/python" -m pepperwatch.doctor --camera-p
 
 log "Installed"
 AP_PSK="$(cat "$CONFIG_DIR/ap.psk" 2>/dev/null || true)"
+ADMIN_PIN="$(cat "$CONFIG_DIR/admin.pin" 2>/dev/null || true)"
 if [ -z "$AP_NOTE" ]; then
   AP_SUMMARY="Wi-Fi network:  PepperWatch
     Password:       $AP_PSK
@@ -336,6 +364,11 @@ cat <<EOF
 
     $AP_SUMMARY
     On the wired network: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8000/
+
+    Admin PIN:      $ADMIN_PIN
+    Settings asks for it to change the detection thresholds or clear data.
+    Field mode (always the hotspot, even near a saved network):
+                    sudo touch $CONFIG_DIR/ap.always && sudo systemctl restart pepperwatch-ap
 
     Session CSV files (inference, power, fps) are written to
     $DATA_DIR/sessions and can be downloaded from the dashboard.
