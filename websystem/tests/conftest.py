@@ -130,7 +130,9 @@ def seeded_db(app, cfg):
                 inference_ms=100.0 + index,
                 preview_fps=25.0,
                 inference_fps=8.0,
-                synthetic=True,
+                # Real detections: the stats and the farmer's status leave
+                # synthetic (stub-detector) events out.
+                synthetic=False,
             )
         )
     database.set_archived(ids[0], True)

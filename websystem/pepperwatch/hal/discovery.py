@@ -21,6 +21,7 @@ decoder, none of which is a camera; the USB ones are those bound to the
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -86,7 +87,13 @@ def csi_cameras(info_provider: Callable[[], list[dict]] | None = None) -> list[C
 
 
 def usb_cameras(sysfs_root: Path = SYSFS_VIDEO) -> list[CameraCandidate]:
-    """UVC webcams, one entry per physical camera."""
+    """UVC webcams, one entry per physical camera, in USB-port order.
+
+    Ordered by the port each is plugged into, not by /dev/videoN, which follows
+    the order they were plugged in: otherwise "Camera 1" and "Camera 2" swap
+    after a replug, and a saved scan's camera number means a different camera
+    in each session.
+    """
     if not sysfs_root.is_dir():
         return []
 
@@ -107,14 +114,25 @@ def usb_cameras(sysfs_root: Path = SYSFS_VIDEO) -> list[CameraCandidate]:
         vendor = _read(usb_device / "idVendor")
         product = _read(usb_device / "idProduct")
         found.append(
-            CameraCandidate(
-                kind="usb",
-                device=f"/dev/{node.name}",
-                model=_read(node / "name", "USB camera") or "USB camera",
-                detail={"usb_id": f"{vendor}:{product}" if vendor and product else None},
+            (
+                _natural(str(interface)),
+                CameraCandidate(
+                    kind="usb",
+                    device=f"/dev/{node.name}",
+                    model=_read(node / "name", "USB camera") or "USB camera",
+                    detail={
+                        "usb_id": f"{vendor}:{product}" if vendor and product else None,
+                        "port": usb_device.name,
+                    },
+                ),
             )
         )
-    return found
+    return [candidate for _, candidate in sorted(found, key=lambda item: item[0])]
+
+
+def _natural(text: str) -> list:
+    """Sort key that puts port 1-2 before 1-10."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text)]
 
 
 def discover_cameras(

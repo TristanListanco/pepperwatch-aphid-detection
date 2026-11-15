@@ -57,6 +57,7 @@ from .hal import CameraError, CameraSource, Frame, discover_cameras, get_telemet
 from .hal.discovery import SYSFS_VIDEO, usb_cameras
 from .models import Detection
 from .mqtt_bus import (
+    STATUS_ERROR,
     STATUS_NO_CAMERA,
     STATUS_OFFLINE,
     STATUS_ONLINE,
@@ -70,6 +71,44 @@ from .session import SessionRecorder, recover_interrupted, request_next_label, w
 from .thermal import ThermalGovernor
 
 log = logging.getLogger(__name__)
+
+# run() found no camera sending pictures: main() waits for the cameras to
+# change instead of exiting.
+EXIT_NO_FRAMES = 3
+# A camera with no frame for this long is reported, and reopened this often.
+STALL_S = 10.0
+REOPEN_S = 30.0
+# A camera plugged in must stay for this many checks (about a second each)
+# before it starts a new session, and camera-driven restarts are this far apart:
+# a camera browning out on a weak supply would otherwise restart the session,
+# and reload the model, every few seconds.
+ARRIVAL_CHECKS = 10
+CAMERA_RESTART_GAP_S = 60.0
+
+
+class _NoRoom(Exception):
+    """The SD card is low on space: the photo is skipped, the event still saved."""
+
+
+class _Throttle:
+    """At most one report per key per interval, counting the ones skipped."""
+
+    def __init__(self, interval_s: float = 60.0) -> None:
+        self._interval = interval_s
+        self._last: dict[str, float] = {}
+        self._skipped: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def due(self, key: str) -> int | None:
+        """How many were skipped since the last report, if one is due now; else None."""
+        now = time.monotonic()
+        with self._lock:
+            last = self._last.get(key)
+            if last is not None and now - last < self._interval:
+                self._skipped[key] = self._skipped.get(key, 0) + 1
+                return None
+            self._last[key] = now
+            return self._skipped.pop(key, 0)
 
 
 class LatestFrame:
@@ -245,6 +284,9 @@ def start_session_hardware(base: Config) -> tuple[Config, AcceleratorChoice, Det
 class Worker:
     """Runs the detection pipeline until told to stop."""
 
+    # When a camera last restarted a session, across sessions (see CAMERA_RESTART_GAP_S).
+    _camera_restart_at = float("-inf")
+
     def __init__(self, base_cfg: Config) -> None:
         self.base_cfg = base_cfg
         self.cfg, self.accelerator, self.detector = start_session_hardware(base_cfg)
@@ -277,7 +319,14 @@ class Worker:
         # USB cameras seen this session. One that appears and is not in here (a
         # new camera, or one plugged back in) is picked up by a new session.
         self._usb_seen = {c.device for c in self.cameras_found if c.kind == "usb"}
-        self._usb_arriving: set[str] = set()
+        self._usb_arriving: dict[str, int] = {}  # device -> checks in a row it has been seen
+        # Plugged in but sending nothing (a hung webcam, a loose ribbon).
+        self.camera_stalled = [False] * count
+        # ok | low (no photos saved) | full (nothing saved): see _check_storage.
+        self.storage = "ok"
+        self._disk_free_mb: int | None = None
+        self._storage_checked_at = float("-inf")
+        self._throttle = _Throttle(60.0)
         self.preview_fps = [FpsMeter() for _ in range(count)]
         self.inference_fps = FpsMeter()
 
@@ -331,12 +380,67 @@ class Worker:
                 "be reported as measurements", info.model_version,
             )
 
+        try:
+            return self._run()
+        finally:
+            self.shutdown()
+
+    def _run(self) -> int:
+        info = self.detector.info
         self.db.initialise(writer="worker")
+        self._restore_thresholds()
         for session_id in recover_interrupted(self.cfg.sessions_root):
             log.warning("session %s was cut off (power loss or crash); closed as interrupted", session_id)
             self.db.log_system(level="warn", event="session_recovered", source="worker", detail=session_id)
+        self._check_storage()
+        # Announced on every connect, not once: after a reconnect the broker
+        # holds this worker's Last Will ("offline") until it is overwritten.
+        self.bus.on_connected(self._announce)
         self.bus.start(timeout=3.0)
         self.bus.subscribe(Topics.COMMANDS, self._on_command, qos=1)
+
+        self.db.log_system(
+            event="startup",
+            source="worker",
+            detail=(
+                f"detector={info.kind}:{info.model_version} accelerator={self.accelerator.name} "
+                f"cameras={'; '.join(c.info.description for c in self.cameras)}"
+            ),
+        )
+
+        # Warm up before measuring anything: the first ONNX call allocates
+        # arenas and picks kernels, and that cost would otherwise land in the
+        # first reported frame and skew every benchmark.
+        primer = self._await_first_frame()
+        if primer is None:
+            log.error("no camera sent a picture in 10 s; waiting for the cameras to change")
+            return EXIT_NO_FRAMES
+        self.detector.warmup(primer.bgr, rounds=2)
+
+        # Recording starts after warm-up, so first-call allocation does not
+        # land in the session's latency figures.
+        self.recorder = SessionRecorder(
+            self.cfg.sessions_root,
+            self._session_meta(),
+            flush_interval_s=self.cfg.sessions.flush_interval_s,
+            summary_interval_s=self.cfg.sessions.summary_interval_s,
+        )
+        self.bus.publish(Topics.STATUS_SESSION, self._session_status(), qos=1, retain=True)
+
+        threads = [
+            threading.Thread(target=self._capture_loop, args=(index,), name=f"capture-{index}", daemon=True)
+            for index in range(len(self.cameras))
+        ]
+        threads.append(threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True))
+        for thread in threads:
+            thread.start()
+
+        self._inference_loop()
+        return 0
+
+    def _announce(self) -> None:
+        """The retained status: online, the detector, and the session if one runs."""
+        info = self.detector.info
         self.bus.publish_raw(Topics.STATUS_WORKER, STATUS_ONLINE, qos=1, retain=True)
         self.bus.publish(
             Topics.STATUS_DETECTOR,
@@ -354,62 +458,42 @@ class Worker:
             qos=1,
             retain=True,
         )
+        if self.recorder is not None:
+            self.bus.publish(Topics.STATUS_SESSION, self._session_status(), qos=1, retain=True)
 
-        self.db.log_system(
-            event="startup",
-            source="worker",
-            detail=(
-                f"detector={info.kind}:{info.model_version} accelerator={self.accelerator.name} "
-                f"cameras={'; '.join(c.info.description for c in self.cameras)}"
-            ),
-        )
-
-        # Warm up before measuring anything: the first ONNX call allocates
-        # arenas and picks kernels, and that cost would otherwise land in the
-        # first reported frame and skew every benchmark.
-        primer = self._await_first_frame()
-        if primer is None:
-            log.error("no frame arrived from the camera; aborting")
-            return 1
-        self.detector.warmup(primer.bgr, rounds=2)
-
-        # Recording starts after warm-up, so first-call allocation does not
-        # land in the session's latency figures.
-        self.recorder = SessionRecorder(
-            self.cfg.sessions_root,
-            self._session_meta(),
-            flush_interval_s=self.cfg.sessions.flush_interval_s,
-            summary_interval_s=self.cfg.sessions.summary_interval_s,
-        )
-        self.bus.publish(
-            Topics.STATUS_SESSION,
-            {**self.recorder.meta, "directory": str(self.recorder.directory)},
-            qos=1,
-            retain=True,
-        )
-
-        threads = [
-            threading.Thread(target=self._capture_loop, args=(index,), name=f"capture-{index}", daemon=True)
-            for index in range(len(self.cameras))
-        ]
-        threads.append(threading.Thread(target=self._telemetry_loop, name="telemetry", daemon=True))
-        for thread in threads:
-            thread.start()
-
-        try:
-            self._inference_loop()
-        finally:
-            self.shutdown()
-        return 0
+    def _session_status(self) -> dict[str, Any]:
+        assert self.recorder is not None
+        return {**self.recorder.meta, "directory": str(self.recorder.directory)}
 
     def _await_first_frame(self, timeout: float = 10.0) -> Frame | None:
+        """The first frame from any camera: one that stays silent must not stop the others."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            frame = self.camera.read()
-            if frame is not None:
-                return frame
+            for camera in self.cameras:
+                try:
+                    frame = camera.read()
+                except Exception:  # noqa: BLE001 — a camera failing here is reported by the capture loop
+                    frame = None
+                if frame is not None:
+                    return frame
             time.sleep(0.01)
         return None
+
+    def _report(self, key: str, event: str, detail: str = "") -> None:
+        """A recurring error: to the log and system_log at most once a minute per key.
+
+        Call from an except block. A loose camera ribbon fails twice a second and
+        a broken model on every frame; unthrottled, either fills the SD card.
+        """
+        skipped = self._throttle.due(key)
+        if skipped is None:
+            return
+        more = f" (+{skipped} more since the last report)" if skipped else ""
+        log.exception("%s%s%s", event, f": {detail}" if detail else "", more)
+        try:
+            self.db.log_system(level="error", event=event, source="worker", detail=f"{detail}{more}".strip() or None)
+        except Exception:  # noqa: BLE001 — a full disk refuses the log row too
+            pass
 
     def request_stop(self, *_: object) -> None:
         log.info("stop requested")
@@ -448,23 +532,46 @@ class Worker:
         """Run one camera flat out, publishing its clean preview as we go."""
         quality = self.cfg.camera.jpeg_quality
         camera, meter, writer = self.cameras[index], self.preview_fps[index], self.frames[index]
+        last_frame_at = time.monotonic()
+        reopened_at = time.monotonic()
+        # The web sends each camera at most [web] stream_fps frames a second;
+        # encoding the other 15 of 25 a second only heats the CPU.
+        publish_every = 1.0 / max(1.0, float(self.cfg.web.stream_fps))
+        published_at = float("-inf")
         while not self._stopping.is_set():
             if not (self.camera_on[index] and self.camera_connected[index]):
                 self._stopping.wait(timeout=0.2)
+                last_frame_at = time.monotonic()  # off is not stalled
                 continue
             try:
                 frame = camera.read()
             except Exception:  # noqa: BLE001
                 if not self.camera_connected[index]:
                     continue  # unplugged during the read
-                log.exception("camera read failed")
-                self.db.log_system(level="error", event="camera_error", source="worker")
+                self._report(f"camera_error:{index}", "camera_error", f"camera {index}")
                 time.sleep(0.5)
-                continue
+                frame = None
 
             if frame is None:
+                # Plugged in but silent: say so, and reopen it now and then,
+                # from this thread so nothing else touches the camera meanwhile.
+                now = time.monotonic()
+                if now - last_frame_at >= STALL_S:
+                    if not self.camera_stalled[index]:
+                        self.camera_stalled[index] = True
+                        log.warning("camera %d sent no picture for %.0f s", index, now - last_frame_at)
+                        self._log_once("camera_stalled", f"camera {index}")
+                    if now - reopened_at >= REOPEN_S:
+                        reopened_at = now
+                        self._reopen(index)
                 time.sleep(0.002)
                 continue
+
+            last_frame_at = time.monotonic()
+            if self.camera_stalled[index]:
+                self.camera_stalled[index] = False
+                log.info("camera %d is sending pictures again", index)
+                self._log_once("camera_resumed", f"camera {index}")
 
             meter.mark()
             self._frames_captured += 1
@@ -472,15 +579,17 @@ class Worker:
             # Published CLEAN. The browser draws boxes on a canvas over this,
             # which keeps encode cost off the inference budget and lets the
             # overlay be toggled and scaled per device.
-            try:
-                writer.publish(
-                    encode_jpeg(frame.bgr, quality),
-                    seq=frame.seq,
-                    preview_fps=meter.fps,
-                    inference_fps=self.inference_fps.fps,
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("frame publish failed")
+            if time.monotonic() - published_at >= publish_every:
+                published_at = time.monotonic()
+                try:
+                    writer.publish(
+                        encode_jpeg(frame.bgr, quality),
+                        seq=frame.seq,
+                        preview_fps=meter.fps,
+                        inference_fps=self.inference_fps.fps,
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("frame publish failed")
 
             self.latest[index].put(frame)
 
@@ -498,71 +607,82 @@ class Worker:
                 log.exception("telemetry sample failed")
                 time.sleep(interval)
                 continue
-
-            payload = sample.as_dict()
-            payload["hailo_temp_c"] = chip_temperature() if chip_temperature else None
-            payload["accelerator"] = self.accelerator.name
-            self._last_telemetry = payload
-
-            state = self.governor.update(sample.cpu_temp_c)
-            payload["thermal_level"] = state.level
-            payload["thermal_multiplier"] = state.multiplier
-            payload["backing_off"] = state.backing_off
-            self._record_system(sample, payload, state.level)
-            self._check_cameras()
-
-            self.bus.publish(Topics.TELEMETRY_SYSTEM, payload, qos=0)
-            active = self._active()
-            self.bus.publish(
-                Topics.TELEMETRY_PIPELINE,
-                {
-                    "preview_fps": round(self.preview_fps[0].fps, 2),
-                    # An off camera's meter keeps its last marks; report it as stopped.
-                    "camera_fps": [
-                        round(meter.fps, 2) if index in active else 0.0
-                        for index, meter in enumerate(self.preview_fps)
-                    ],
-                    "camera_on": list(self.camera_on),
-                    "camera_connected": list(self.camera_connected),
-                    # What the detector is using, so Settings can confirm a change.
-                    "conf_threshold": self.cfg.inference.conf_threshold,
-                    "iou_threshold": self.cfg.inference.iou_threshold,
-                    "inference_fps": round(self.inference_fps.fps, 2),
-                    "inference_ms": round(self._inference_ms, 2),
-                    "dropped": self._dropped(),
-                    "target_fps": self.cfg.inference.target_fps,
-                    "paused": self._paused.is_set(),
-                    "thermal_level": state.level,
-                },
-                qos=0,
-            )
-
-            # A thermal transition is a diagnostic event in its own right, and
-            # it explains an FPS dip that would otherwise look inexplicable in
-            # the Chapter IV series.
-            if state.level != self._last_thermal_level:
-                self.db.log_system(
-                    level="warn",
-                    event="thermal_backoff",
-                    source="worker",
-                    telemetry=payload,
-                    detail=f"level {self._last_thermal_level} -> {state.level}: {state.reason}",
-                )
-                self._last_thermal_level = state.level
-
-            now = time.monotonic()
-            if now - last_logged >= interval:
-                self.db.log_system(event="telemetry", source="worker", telemetry=payload)
-                last_logged = now
-
-            if self.recorder is not None and self.recorder.summary_due():
-                self.recorder.update_counters(**self._counters())
-                self.bus.publish(Topics.SESSION_SUMMARY, self.recorder.write_summary(), qos=0)
-
+            try:
+                last_logged = self._telemetry_tick(sample, chip_temperature, interval, last_logged)
+            except Exception:  # noqa: BLE001 — this thread is the dashboard's heartbeat: never let it die
+                self._report("telemetry_loop", "telemetry_error")
             self._stopping.wait(timeout=min(period, interval))
 
+    def _telemetry_tick(self, sample, chip_temperature, interval: float, last_logged: float) -> float:
+        """One telemetry round. Returns when telemetry was last logged."""
+        payload = sample.as_dict()
+        payload["hailo_temp_c"] = chip_temperature() if chip_temperature else None
+        payload["accelerator"] = self.accelerator.name
+        self._last_telemetry = payload
+
+        state = self.governor.update(sample.cpu_temp_c)
+        payload["thermal_level"] = state.level
+        payload["thermal_multiplier"] = state.multiplier
+        payload["backing_off"] = state.backing_off
+        self._record_system(sample, payload, state.level)
+        self._check_cameras()
+        if time.monotonic() - self._storage_checked_at >= 10.0:
+            self._check_storage()
+
+        self.bus.publish(Topics.TELEMETRY_SYSTEM, payload, qos=0)
+        active = self._active()
+        self.bus.publish(
+            Topics.TELEMETRY_PIPELINE,
+            {
+                "preview_fps": round(self.preview_fps[0].fps, 2),
+                # An off camera's meter keeps its last marks; report it as stopped.
+                "camera_fps": [
+                    round(meter.fps, 2) if index in active else 0.0
+                    for index, meter in enumerate(self.preview_fps)
+                ],
+                "camera_on": list(self.camera_on),
+                "camera_connected": list(self.camera_connected),
+                "camera_stalled": list(self.camera_stalled),
+                "storage": self.storage,
+                "disk_free_mb": self._disk_free_mb,
+                # What the detector is using, so Settings can confirm a change.
+                "conf_threshold": self.cfg.inference.conf_threshold,
+                "iou_threshold": self.cfg.inference.iou_threshold,
+                "inference_fps": round(self.inference_fps.fps, 2),
+                "inference_ms": round(self._inference_ms, 2),
+                "dropped": self._dropped(),
+                "target_fps": self.cfg.inference.target_fps,
+                "paused": self._paused.is_set(),
+                "thermal_level": state.level,
+            },
+            qos=0,
+        )
+
+        # A thermal transition is a diagnostic event in its own right, and
+        # it explains an FPS dip that would otherwise look inexplicable in
+        # the Chapter IV series.
+        if state.level != self._last_thermal_level:
+            self.db.log_system(
+                level="warn",
+                event="thermal_backoff",
+                source="worker",
+                telemetry=payload,
+                detail=f"level {self._last_thermal_level} -> {state.level}: {state.reason}",
+            )
+            self._last_thermal_level = state.level
+
+        now = time.monotonic()
+        if now - last_logged >= interval:
+            self.db.log_system(event="telemetry", source="worker", telemetry=payload)
+            last_logged = now
+
+        if self.recorder is not None and self.recorder.summary_due():
+            self.recorder.update_counters(**self._counters())
+            self.bus.publish(Topics.SESSION_SUMMARY, self.recorder.write_summary(), qos=0)
+        return last_logged
+
     def _record_system(self, sample, payload: dict[str, Any], thermal_level: int) -> None:
-        if self.recorder is None:
+        if self.recorder is None or self.storage == "full":
             return
         self.recorder.record_system(
             {
@@ -632,16 +752,23 @@ class Worker:
             try:
                 detections, non_plant = self._detect(frame.bgr)
             except Exception:  # noqa: BLE001
-                log.exception("inference failed")
-                self.db.log_system(level="error", event="inference_error", source="worker")
+                self._report("inference_error", "inference_error")
                 continue
             self._inference_ms = (time.perf_counter() - began) * 1000.0
             self.inference_fps.mark()
 
             severity, damaged_area = severity_from_config(detections, self.cfg)
-            self._record_inference(index, frame, detections, severity, damaged_area, non_plant)
+            # Recording and saving can fail (a full SD card, a locked database);
+            # the live detections must carry on regardless.
+            try:
+                self._record_inference(index, frame, detections, severity, damaged_area, non_plant)
+            except Exception:  # noqa: BLE001
+                self._report("session_record", "session_record_failed")
             self._publish_detections(index, frame, detections, severity, damaged_area)
-            self._maybe_persist(index, frame, detections, severity, info)
+            try:
+                self._maybe_persist(index, frame, detections, severity, info)
+            except Exception:  # noqa: BLE001
+                self._report("persist", "persist_failed")
 
             # The governor stretches this interval when hot. It does not touch
             # the capture loop, so the preview stays smooth while backing off.
@@ -669,7 +796,7 @@ class Worker:
         damaged_area: float,
         non_plant: int,
     ) -> None:
-        if self.recorder is None:
+        if self.recorder is None or self.storage == "full":
             return
         timings = self.detector.timings
         damaged = [d for d in detections if d.class_name != "healthy"]
@@ -802,7 +929,7 @@ class Worker:
         self, index: int, frame: Frame, detections: list[Detection], severity: str, info
     ) -> None:
         decision = self.policy[index].decide(severity)
-        if not decision.write:
+        if not decision.write or self.storage == "full":
             return
         self._write_event(
             index, frame, detections, severity, info, trigger=decision.trigger, note=decision.reason
@@ -835,6 +962,8 @@ class Worker:
         quality = self.cfg.camera.jpeg_quality
 
         try:
+            if self.storage != "ok":
+                raise _NoRoom()
             # On the disk before the row that points at them is committed.
             write_durably(self.media_root / image_rel, encode_jpeg(annotated, quality), scratch=self.incoming)
             write_durably(
@@ -842,8 +971,11 @@ class Worker:
                 encode_jpeg(make_thumbnail(annotated, self.cfg.persist.thumb_width), quality),
                 scratch=self.incoming,
             )
+        except _NoRoom:
+            image_rel = thumb_rel = None  # type: ignore[assignment]
+            note = f"{note}; storage low, no photo" if note else "storage low, no photo"
         except Exception:  # noqa: BLE001
-            log.exception("could not write media for frame %d", frame.seq)
+            self._report("media_write", "media_write_failed", f"frame {frame.seq}")
             image_rel = thumb_rel = None  # type: ignore[assignment]
 
         event_id = self.db.insert_event(
@@ -924,7 +1056,21 @@ class Worker:
             self.restart_requested = True
             self.request_stop()
 
-    def _apply_config(self, payload: dict[str, Any]) -> None:
+    def _restore_thresholds(self) -> None:
+        """Thresholds set from the dashboard outlast the session they were set in.
+
+        A camera plugged in or out starts a new session; without this, an
+        expert's tuning would silently fall back to the config file each time.
+        """
+        saved = {}
+        for key in ("conf_threshold", "iou_threshold"):
+            value = self.db.meta(key)
+            if value is not None:
+                saved[key] = float(value)
+        if saved:
+            self._apply_config(saved, persist=False)
+
+    def _apply_config(self, payload: dict[str, Any], *, persist: bool = True) -> None:
         conf = payload.get("conf_threshold")
         iou = payload.get("iou_threshold")
         if hasattr(self.detector, "set_thresholds") and (conf is not None or iou is not None):
@@ -936,7 +1082,12 @@ class Worker:
             self.cfg.inference._data["conf_threshold"] = float(conf)  # noqa: SLF001
         if iou is not None:
             self.cfg.inference._data["iou_threshold"] = float(iou)  # noqa: SLF001
-        log.info("thresholds updated: conf=%s iou=%s", conf, iou)
+        log.info("thresholds %s: conf=%s iou=%s", "updated" if persist else "restored", conf, iou)
+        if not persist:
+            return
+        for key, value in (("conf_threshold", conf), ("iou_threshold", iou)):
+            if value is not None:
+                self.db.set_meta(key, str(float(value)))
         self.db.log_system(
             event="config_change", source="web", detail=f"conf={conf} iou={iou}"
         )
@@ -986,14 +1137,57 @@ class Worker:
 
         self._usb_seen &= present  # one that went away is new again when it is back
         arrived = present - self._usb_seen
-        # On two checks in a row: udev needs a moment before a new camera opens.
-        ready = arrived & self._usb_arriving
-        self._usb_arriving = arrived
-        if ready and not self._stopping.is_set():
-            log.info("camera plugged in (%s); starting a new session to use it", ", ".join(sorted(ready)))
-            self.db.log_system(event="camera_connected", source="worker", detail=", ".join(sorted(ready)))
-            self.restart_requested = True
-            self.request_stop()
+        self._usb_arriving = {device: self._usb_arriving.get(device, 0) + 1 for device in arrived}
+        ready = {device for device, seen in self._usb_arriving.items() if seen >= ARRIVAL_CHECKS}
+        if not ready or self._stopping.is_set():
+            return
+        if time.monotonic() - Worker._camera_restart_at < CAMERA_RESTART_GAP_S:
+            return  # a camera restarted the session less than a minute ago; wait
+        Worker._camera_restart_at = time.monotonic()
+        request_next_label(self.cfg.sessions_root, "camera-plugged-in")
+        log.info("camera plugged in (%s); starting a new session to use it", ", ".join(sorted(ready)))
+        self.db.log_system(event="camera_connected", source="worker", detail=", ".join(sorted(ready)))
+        self.restart_requested = True
+        self.request_stop()
+
+    def _check_storage(self) -> None:
+        """Below [persist] min_free_mb stop saving photos; below critical_free_mb
+        stop saving anything. Live detection carries on, and nothing is deleted."""
+        self._storage_checked_at = time.monotonic()
+        try:
+            free_mb = shutil.disk_usage(self.media_root).free / 1e6
+        except OSError:
+            return
+        persist = self.cfg.persist
+        if free_mb < float(persist.critical_free_mb):
+            level = "full"
+        elif free_mb < float(persist.min_free_mb):
+            level = "low"
+        else:
+            level = "ok"
+        self._disk_free_mb = int(free_mb)
+        if level == self.storage:
+            return
+        self.storage = level
+        log.warning("storage %s: %d MB free", level, free_mb)
+        self._log_once(f"storage_{level}", f"{free_mb:.0f} MB free", level="info" if level == "ok" else "warn")
+
+    def _reopen(self, index: int) -> None:
+        """Stop and start a camera that went silent. Called from its capture thread."""
+        camera = self.cameras[index]
+        log.info("reopening camera %d", index)
+        try:
+            camera.stop()
+            camera.start()
+        except Exception:  # noqa: BLE001
+            self._report(f"reopen:{index}", "camera_reopen_failed", f"camera {index}")
+
+    def _log_once(self, event: str, detail: str, *, level: str = "warn") -> None:
+        """A state change for system_log; never raises (the disk may be full)."""
+        try:
+            self.db.log_system(level=level, event=event, source="worker", detail=detail)
+        except Exception:  # noqa: BLE001
+            log.warning("could not log %s (%s)", event, detail)
 
     def _drain_snapshots(self) -> None:
         with self._snapshot_lock:
@@ -1026,6 +1220,9 @@ class Worker:
     def _snapshot_one(
         self, index: int, frame: Frame, still: np.ndarray | None, request: dict[str, Any]
     ) -> None:
+        if self.storage == "full":
+            log.warning("snapshot from camera %d not saved: the SD card is full", index)
+            return
         subject = still if still is not None else frame.bgr
         detections, _ = self._detect(subject)
         severity, _ = severity_from_config(detections, self.cfg)
@@ -1090,6 +1287,15 @@ def wait_for_camera(cfg: Config, *, poll_s: float = 2.0, retry_s: float = 30.0) 
     bus.stop()  # no closing status: the next worker announces itself
 
 
+def wait_after_error(cfg: Config, *, seconds: float = 30.0) -> None:
+    """Tell the dashboard the worker hit a problem, then wait before trying again."""
+    bus = make_bus(cfg, "worker", with_will=True)
+    bus.start(timeout=3.0)
+    bus.publish_raw(Topics.STATUS_WORKER, STATUS_ERROR, qos=1, retain=True)
+    time.sleep(seconds)
+    bus.stop()
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -1104,6 +1310,8 @@ def main() -> int:
         "board: %s (%s, %s, %s MB) -> %s tier",
         board.model, board.family, board.cpu, board.mem_mb, board.tier,
     )
+    # Never exits on a problem it can recover from: systemd would restart it
+    # anyway, and the dashboard would only say "offline" without saying why.
     while True:
         cfg = load()
         try:
@@ -1112,10 +1320,26 @@ def main() -> int:
             log.error("%s", exc)
             wait_for_camera(cfg)
             continue
-        code = worker.run()
-        if code != 0 or not worker.restart_requested:
+        except Exception:  # noqa: BLE001 — a corrupt model, a full disk, a driver error
+            log.exception("the worker could not start; trying again in 30 s")
+            wait_after_error(cfg)
+            continue
+        try:
+            code = worker.run()
+        except Exception:  # noqa: BLE001
+            log.exception("the worker stopped on an error; starting again in 30 s")
+            code = None
+        # The session's handlers would otherwise swallow a stop request while waiting.
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        if code is None:
+            wait_after_error(cfg)
+        elif code == EXIT_NO_FRAMES:
+            wait_for_camera(cfg)
+        elif not worker.restart_requested:
             return code
-        log.info("starting a new session")
+        else:
+            log.info("starting a new session")
 
 
 if __name__ == "__main__":

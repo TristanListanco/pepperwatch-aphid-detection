@@ -14,12 +14,12 @@ from pepperwatch.hal.discovery import CameraCandidate, choose_camera, csi_camera
 
 
 def _node(root: Path, name: str, *, driver: str, index: str = "0", label: str = "cam",
-          usb: tuple[str, str] | None = None) -> None:
+          usb: tuple[str, str] | None = None, port: str | None = None) -> None:
     devices = root / "devices"
     drivers = root / "drivers"
     (drivers / driver).mkdir(parents=True, exist_ok=True)
 
-    parent = devices / f"dev_{name}"
+    parent = devices / (port or f"dev_{name}")
     interface = parent / "interface"
     interface.mkdir(parents=True)
     os.symlink(drivers / driver, interface / "driver")
@@ -46,6 +46,15 @@ def test_usb_scan_finds_only_uvc_capture_nodes(tmp_path: Path) -> None:
     assert found[0].kind == "usb"
     assert found[0].model == "HD Pro Webcam C920"
     assert found[0].detail["usb_id"] == "046d:082d"
+
+
+def test_usb_cameras_are_numbered_by_the_port_they_are_in(tmp_path: Path) -> None:
+    """Not by /dev/videoN, which follows plug order: a replug would swap them."""
+    _node(tmp_path, "video2", driver="uvcvideo", label="left", port="1-10")
+    _node(tmp_path, "video4", driver="uvcvideo", label="right", port="1-2")
+    found = usb_cameras(tmp_path / "video4linux")
+    assert [c.model for c in found] == ["right", "left"]  # port 1-2 before 1-10
+    assert [c.detail["port"] for c in found] == ["1-2", "1-10"]
 
 
 def test_usb_scan_tolerates_a_missing_sysfs(tmp_path: Path) -> None:

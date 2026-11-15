@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import os
 import struct
+import threading
 import tempfile
 import time
 from abc import ABC, abstractmethod
@@ -204,6 +205,9 @@ class ShmFrameReader(FrameReader):
         self._shm: shared_memory.SharedMemory | None = None
         self._warned = False
         self._checked_at = 0.0
+        # Every web thread shares this reader. Re-attaching after a session
+        # restart closes the old mapping, which must not happen mid-copy.
+        self._lock = threading.Lock()
 
     def _replaced(self) -> bool:
         """Has the worker recreated the segment since we attached?
@@ -266,6 +270,10 @@ class ShmFrameReader(FrameReader):
         return True
 
     def read(self) -> FramePacket | None:
+        with self._lock:
+            return self._read()
+
+    def _read(self) -> FramePacket | None:
         if not self._attach():
             return None
         assert self._shm is not None

@@ -107,6 +107,11 @@ min_write_interval_s = 8.0
 telemetry_interval_s = 15
 retention_days = 90          # system_log prune; detection_event is kept
 thumb_width = 320
+# Room on the SD card. Below min_free_mb photos are no longer saved (events
+# still are); below critical_free_mb nothing is saved. Detection carries on
+# and the dashboard says so. Nothing is ever deleted automatically.
+min_free_mb = 2048
+critical_free_mb = 512
 
 [db]
 path = "var/db/pepperwatch.db"
@@ -126,11 +131,14 @@ host = "0.0.0.0"
 port = 8000
 stream_fps = 10           # MJPEG is ~8 Mbit/s per client at 17 fps; throttle it
 stream_width = 640
-max_stream_clients = 4
+max_stream_clients = 4     # phones watching live video at once, each with every camera
 max_sse_clients = 12
 sse_queue_size = 10
 sse_keepalive_s = 15
 secret_key = "dev-only-change-me"
+# Clearing every detection and changing the thresholds ask for this PIN.
+# install.sh generates it; without the file (a development checkout) none is asked.
+admin_pin_file = "/etc/pepperwatch/admin.pin"
 
 [portal]
 address = "192.168.4.1"

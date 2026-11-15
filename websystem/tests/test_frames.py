@@ -297,3 +297,46 @@ def test_each_camera_has_its_own_frames(transport: str, tmp_path: Path) -> None:
     finally:
         for closable in (*readers, first, second):
             closable.close()
+
+
+def test_one_reader_shared_by_web_threads_survives_a_session_restart(monkeypatch) -> None:
+    """Every web thread reads through one reader. A session restart recreates
+    the segment, and re-attaching must never pull the mapping out from under
+    another thread's copy."""
+    import os
+    import threading
+
+    import pepperwatch.frames as frames
+
+    if not Path("/dev/shm").is_dir():  # the restart check stats /dev/shm (Linux)
+        pytest.skip("needs /dev/shm")
+    monkeypatch.setattr(frames.time, "monotonic", lambda: time.time() * 1000)  # re-check every read
+    name = f"pw_t_lock_{os.getpid()}"
+    writer = ShmFrameWriter(name, SLOT_BYTES)
+    writer.publish(payload_for(1, 50_000), seq=1, preview_fps=0.0, inference_fps=0.0)
+    reader = ShmFrameReader(name)
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def read() -> None:
+        while not stop.is_set():
+            try:
+                reader.read()
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
+
+    threads = [threading.Thread(target=read) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    try:
+        for seq in range(2, 30):  # the worker restarting, over and over
+            writer.close()
+            writer = ShmFrameWriter(name, SLOT_BYTES)
+            writer.publish(payload_for(seq, 50_000), seq=seq, preview_fps=0.0, inference_fps=0.0)
+            time.sleep(0.01)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join()
+        writer.close()
+    assert errors == []

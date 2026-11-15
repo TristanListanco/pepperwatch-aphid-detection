@@ -179,6 +179,14 @@ class Database:
             row = conn.execute("SELECT value FROM schema_meta WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else None
 
+    def set_meta(self, key: str, value: str) -> None:
+        with self.write() as conn:
+            conn.execute(
+                "INSERT INTO schema_meta (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                (key, value, utcnow()),
+            )
+
     # -- writes ------------------------------------------------------------
 
     def insert_event(
@@ -348,7 +356,7 @@ class Database:
             params.append(since)
         if until:
             where.append("captured_at <= ?")
-            params.append(until)
+            params.append(_through(until))
         if severity:
             where.append("severity = ?")
             params.append(severity)
@@ -394,6 +402,8 @@ class Database:
 
         Compares the trailing ``days`` window against the window before it so
         the tiles can show a delta and a trend, which is what Figure 3.4 draws.
+        Synthetic events (the stub detector's, with no model installed) are left
+        out: they are not measurements.
         """
         now = datetime.now(timezone.utc)
         current_from = (now - timedelta(days=days)).isoformat(timespec="milliseconds")
@@ -410,7 +420,7 @@ class Database:
                        AVG(max_confidence) AS avg_confidence,
                        AVG(damaged_area) AS avg_area
                 FROM detection_event
-                WHERE captured_at >= ?{site_clause}
+                WHERE captured_at >= ? AND synthetic = 0{site_clause}
                 """,
                 [current_from, *site_params],
             ).fetchone()
@@ -419,7 +429,7 @@ class Database:
                 SELECT COUNT(*) AS events,
                        COALESCE(SUM(detection_count), 0) AS detections
                 FROM detection_event
-                WHERE captured_at >= ? AND captured_at < ?{site_clause}
+                WHERE captured_at >= ? AND captured_at < ? AND synthetic = 0{site_clause}
                 """,
                 [previous_from, current_from, *site_params],
             ).fetchone()
@@ -428,7 +438,7 @@ class Database:
                 SELECT COUNT(*) AS n
                 FROM bounding_box b
                 JOIN detection_event e ON e.id = b.event_id
-                WHERE b.class_name = 'aphid_damage'
+                WHERE b.class_name = 'aphid_damage' AND e.synthetic = 0
                   AND e.captured_at >= ? AND e.captured_at < ?{(' AND e.site = ?' if site else '')}
                 """,
                 [previous_from, current_from, *site_params],
@@ -438,7 +448,7 @@ class Database:
                 SELECT b.class_name AS class_name, COUNT(*) AS n
                 FROM bounding_box b
                 JOIN detection_event e ON e.id = b.event_id
-                WHERE e.captured_at >= ?{(' AND e.site = ?' if site else '')}
+                WHERE e.captured_at >= ? AND e.synthetic = 0{(' AND e.site = ?' if site else '')}
                 GROUP BY b.class_name
                 """,
                 [current_from, *site_params],
@@ -447,7 +457,7 @@ class Database:
                 f"""
                 SELECT severity, COUNT(*) AS n
                 FROM detection_event
-                WHERE captured_at >= ?{site_clause}
+                WHERE captured_at >= ? AND synthetic = 0{site_clause}
                 GROUP BY severity
                 """,
                 [current_from, *site_params],
@@ -507,6 +517,44 @@ class Database:
             "distribution": distribution_now,
         }
 
+    def recent_status(self, *, hours: int = 24, fallback_days: int = 7, site: str | None = None) -> dict[str, Any]:
+        """The farmer's answer to "how are my plants": what recent photos show.
+
+        For each camera, the median severity of its real photos over the last
+        ``hours`` (ties go to the more severe band), so one false alarm cannot
+        set it; then the camera whose plants look worst, so damage in front of
+        one camera is not averaged away by a clean one. With no photos in that
+        window, the last ``fallback_days``.
+        """
+        from .models import SEVERITY_ORDER
+
+        now = datetime.now(timezone.utc)
+        site_clause = " AND site = ?" if site else ""
+        windows = (("24h", now - timedelta(hours=hours)), ("7d", now - timedelta(days=fallback_days)))
+        for basis, since in windows:
+            with self.read() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT camera, severity, COUNT(*) AS n
+                    FROM detection_event
+                    WHERE captured_at >= ? AND synthetic = 0{site_clause}
+                    GROUP BY camera, severity
+                    """,
+                    [since.isoformat(timespec="milliseconds"), *([site] if site else [])],
+                ).fetchall()
+            if not rows:
+                continue
+            cameras: dict[int, dict[str, int]] = {}
+            for row in rows:
+                cameras.setdefault(int(row["camera"] or 0), {})[row["severity"]] = int(row["n"])
+            typical = [_median_severity(counts, SEVERITY_ORDER) for counts in cameras.values()]
+            return {
+                "severity": max(typical, key=SEVERITY_ORDER.index),
+                "basis": basis,
+                "photos": sum(sum(counts.values()) for counts in cameras.values()),
+            }
+        return {"severity": "none", "basis": "7d", "photos": 0}
+
     def latest_telemetry(self) -> dict[str, Any] | None:
         with self.read() as conn:
             row = conn.execute(
@@ -531,7 +579,7 @@ class Database:
             params.append(since)
         if until:
             where.append("e.captured_at <= ?")
-            params.append(until)
+            params.append(_through(until))
         clause = f"WHERE {' AND '.join(where)}" if where else ""
 
         with self.read() as conn:
@@ -622,6 +670,21 @@ class Database:
             "wal_mb": round(wal.stat().st_size / 1e6, 3) if wal.exists() else 0.0,
             "counts": counts,
         }
+
+
+def _through(until: str) -> str:
+    """A date alone ("2026-11-15") means through the end of that day."""
+    return f"{until}T23:59:59.999999" if len(until) == 10 else until
+
+
+def _median_severity(counts: dict[str, int], order: Sequence[str]) -> str:
+    """The middle severity of a set of photos; with an even count, the upper one."""
+    position = sum(counts.values()) // 2
+    for band in order:
+        position -= counts.get(band, 0)
+        if position < 0:
+            return band
+    return order[-1]
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:

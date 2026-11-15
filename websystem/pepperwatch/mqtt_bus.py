@@ -89,6 +89,8 @@ STATUS_OFFLINE = "offline"
 # plugged in yet. The dashboard says so instead of "offline".
 STATUS_RESTARTING = "restarting"
 STATUS_NO_CAMERA = "no_camera"
+# Started, hit a problem (a corrupt model, a full disk), and will try again.
+STATUS_ERROR = "error"
 
 
 class MqttBus:
@@ -111,6 +113,7 @@ class MqttBus:
         self._connected = threading.Event()
         self._handlers: dict[str, list[Callable[[str, dict[str, Any]], None]]] = {}
         self._subscriptions: list[tuple[str, int]] = []
+        self._on_connected: list[Callable[[], None]] = []
         self._lock = threading.Lock()
         self._started = False
 
@@ -225,8 +228,23 @@ class MqttBus:
         log.info("mqtt connected to %s:%s as %s", self._host, self._port, self._client_id)
         with self._lock:
             subscriptions = list(self._subscriptions)
+            callbacks = list(self._on_connected)
         for topic, qos in subscriptions:
             client.subscribe(topic, qos=qos)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:  # noqa: BLE001 — never let a callback break the network thread
+                log.exception("on-connect callback failed")
+
+    def on_connected(self, callback: Callable[[], None]) -> None:
+        """Run ``callback`` on every connect, the first and each reconnect after.
+
+        For retained announcements: when a connection drops, the broker
+        publishes the Last Will, and only announcing again overwrites it.
+        """
+        with self._lock:
+            self._on_connected.append(callback)
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None) -> None:
         self._connected.clear()
