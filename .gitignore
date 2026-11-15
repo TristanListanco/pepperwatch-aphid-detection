@@ -1,0 +1,9 @@
+# macOS: Finder, Spotlight and AppleDouble files, anywhere in the repo
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems

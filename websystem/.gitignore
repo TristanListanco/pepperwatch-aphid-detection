@@ -17,7 +17,6 @@ models/*.pt
 benchmarks/*.csv
 
 # OS noise
-.DS_Store
 
 # Manuscript material: kept local, the repository is public
 *.pdf
@@ -27,3 +26,5 @@ MANUSCRIPT-NOTES.md
 .impeccable/
 # Ultralytics training runs: .pt weights, gigabytes
 models/detect/
+# The labelled training dataset (Roboflow export): private, hundreds of MB
+/Pepper Watch Thesis.v10-v10.yolov8/
