@@ -251,6 +251,10 @@ class ShmFrameReader(FrameReader):
             # worker. Not worth logging — it happens once per poll until the
             # worker comes up.
             return False
+        except ValueError:
+            # "cannot mmap an empty file": the worker is creating the segment
+            # this instant (a new session) and has not sized it yet.
+            return False
         except OSError as exc:
             # Anything else (permissions, a name the platform rejects) is a
             # real misconfiguration, but the dashboard must still serve history
