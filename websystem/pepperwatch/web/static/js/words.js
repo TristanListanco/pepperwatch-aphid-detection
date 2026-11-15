@@ -1,0 +1,151 @@
+// The simple view's own words, in English and Cebuano, following the
+// Language setting. The advice itself comes translated from the server
+// (config/recommendations.json).
+//
+// The Cebuano is a draft: have a native speaker check it before field use.
+
+const WORDS = {
+  en: {
+    'status.checking': 'Checking your plants…',
+    'status.todo': 'What to do',
+    'status.based': 'Based on {n} photos from the last 7 days',
+    'status.based_one': 'Based on 1 photo from the last 7 days',
+    'status.empty': 'No photos from the last 7 days yet',
+    'status.empty_note': 'The camera saves photos as it watches your plants. Check back later.',
+    'status.draft': 'Draft advice: ask your DA or ATI technician before you act on it.',
+    'urgency.routine': 'Healthy',
+    'urgency.monitor': 'Watch closely',
+    'urgency.act_soon': 'Act soon',
+    'urgency.urgent': 'Act now',
+    'urgency.unknown': 'No advice',
+    'week.title': 'This week',
+    'week.healthy': '{healthy} of {total} leaves healthy',
+    'week.healthy_one': '{healthy} of 1 leaf healthy',
+    'week.none': 'No leaves checked this week yet',
+    'trend.rising': 'Damage is getting worse than last week',
+    'trend.falling': 'Damage is going down since last week',
+    'trend.stable': 'About the same as last week',
+    'trend.early': 'Not enough photos yet to compare with last week',
+    'live.title': 'Live camera',
+    'live.photo': 'Take a photo',
+    'live.taking': 'Taking…',
+    'live.paused': 'Paused',
+    'live.stale': 'Not watching · picture from {time}',
+    'live.stale_plain': 'Not watching',
+    'view.damaged': 'In view: {damaged} with aphid damage, {healthy} healthy',
+    'view.healthy': 'In view: {healthy} healthy, no aphid damage',
+    'view.empty': 'No leaves in view',
+    'camera.n': 'Camera {n}',
+    'camera.waiting': 'Waiting for the camera',
+    'camera.waiting_note': 'The picture appears in a few seconds',
+    'camera.unplugged': 'Camera {n} is unplugged. Plug it back in to see it here.',
+    'camera.label_unplugged': 'Camera {n}: unplugged',
+    'toast.unplugged': 'Camera {n} was unplugged',
+    'toast.added': 'New camera added',
+    'toast.taking': 'Taking a photo…',
+    'toast.saved': 'Photo saved',
+    'toast.failed': 'Could not take a photo: {error}',
+    'photos.title': 'Recent photos',
+    'photos.empty': 'No photos yet',
+    'photos.at': 'Photo at {time}',
+    'sev.none': 'Healthy',
+    'sev.low': 'Light damage',
+    'sev.moderate': 'Moderate damage',
+    'sev.high': 'Heavy damage',
+    'pager.previous': 'Previous',
+    'pager.next': 'Next',
+    'pager.range': '{from}–{to} of {total}',
+    'chip.watching': 'Watching your plants',
+    'chip.not_watching': 'Not watching',
+    'banner.offline': 'The camera system is not running. It usually starts again by itself. If it stays off, turn the Pi off and on again.',
+    'banner.no_camera': 'No camera is connected. Plug a camera into the Pi and watching starts by itself.',
+    'banner.restarting': 'Starting again. This takes a few seconds.',
+    'dialog.close': 'Close',
+  },
+  ceb: {
+    'status.checking': 'Gisusi ang imong mga tanom…',
+    'status.todo': 'Unsay buhaton',
+    'status.based': 'Base sa {n} ka litrato sulod sa miaging 7 ka adlaw',
+    'status.based_one': 'Base sa 1 ka litrato sulod sa miaging 7 ka adlaw',
+    'status.empty': 'Wala pay litrato sulod sa miaging 7 ka adlaw',
+    'status.empty_note': 'Ang camera mokuha og litrato samtang nagbantay sa imong mga tanom. Balik-tan-awa unya.',
+    'status.draft': 'Draft pa kini nga tambag: pangutana una sa imong teknisyan sa DA o ATI sa dili pa molihok.',
+    'urgency.routine': 'Himsog',
+    'urgency.monitor': 'Bantayi pag-ayo',
+    'urgency.act_soon': 'Lihok sa dili madugay',
+    'urgency.urgent': 'Lihok karon',
+    'urgency.unknown': 'Walay tambag',
+    'week.title': 'Karong semanaha',
+    'week.healthy': '{healthy} sa {total} ka dahon ang himsog',
+    'week.healthy_one': '{healthy} sa 1 ka dahon ang himsog',
+    'week.none': 'Wala pay dahon nga nasusi karong semanaha',
+    'trend.rising': 'Nagkagrabe ang danyos kompara sa miaging semana',
+    'trend.falling': 'Nagkunhod ang danyos sukad sa miaging semana',
+    'trend.stable': 'Halos pareho sa miaging semana',
+    'trend.early': 'Kulang pa ang litrato aron ikumpara sa miaging semana',
+    'live.title': 'Live nga camera',
+    'live.photo': 'Pagkuha og litrato',
+    'live.taking': 'Nagkuha…',
+    'live.paused': 'Gihunong',
+    'live.stale': 'Wala nagbantay · hulagway gikan sa {time}',
+    'live.stale_plain': 'Wala nagbantay',
+    'view.damaged': 'Makita: {damaged} adunay danyos sa aphid, {healthy} himsog',
+    'view.healthy': 'Makita: {healthy} himsog, walay danyos sa aphid',
+    'view.empty': 'Walay dahon nga makita',
+    'camera.n': 'Camera {n}',
+    'camera.waiting': 'Naghulat sa camera',
+    'camera.waiting_note': 'Makita ang hulagway sulod sa pipila ka segundo',
+    'camera.unplugged': 'Natangtang ang Camera {n}. I-plug kini pag-usab aron makita dinhi.',
+    'camera.label_unplugged': 'Camera {n}: natangtang',
+    'toast.unplugged': 'Natangtang ang Camera {n}',
+    'toast.added': 'Nadugang ang bag-ong camera',
+    'toast.taking': 'Nagkuha og litrato…',
+    'toast.saved': 'Na-save ang litrato',
+    'toast.failed': 'Wala makakuha og litrato: {error}',
+    'photos.title': 'Bag-ong mga litrato',
+    'photos.empty': 'Wala pay litrato',
+    'photos.at': 'Litrato sa {time}',
+    'sev.none': 'Himsog',
+    'sev.low': 'Gaan nga danyos',
+    'sev.moderate': 'Kasarangan nga danyos',
+    'sev.high': 'Grabe nga danyos',
+    'pager.previous': 'Miaging',
+    'pager.next': 'Sunod',
+    'pager.range': '{from}–{to} sa {total}',
+    'chip.watching': 'Nagbantay sa imong mga tanom',
+    'chip.not_watching': 'Wala nagbantay',
+    'banner.offline': 'Wala nagdagan ang sistema sa camera. Kasagaran mosugod kini pag-usab sa iyang kaugalingon. Kung magpabilin nga patay, i-off ug i-on pag-usab ang Pi.',
+    'banner.no_camera': 'Walay camera nga nakakonektar. I-plug ang camera sa Pi ug mosugod kini og bantay sa iyang kaugalingon.',
+    'banner.restarting': 'Nagsugod pag-usab. Pipila lang ka segundo.',
+    'dialog.close': 'Sirado',
+  },
+};
+
+export function locale() {
+  try {
+    return localStorage.getItem('pw-locale') || 'en';
+  } catch (error) {
+    return 'en';
+  }
+}
+
+// The simple view, set before the first paint by theme.js.
+export function isSimple() {
+  return document.documentElement.dataset.view !== 'full';
+}
+
+// One phrase, with {name} filled from values. Falls back to English, then to
+// the key, so a missing translation shows something rather than nothing.
+export function word(key, values = {}) {
+  const table = WORDS[locale()] || WORDS.en;
+  const text = table[key] ?? WORDS.en[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ''));
+}
+
+// Fill every [data-word="key"] under root.
+export function applyWords(root = document) {
+  document.documentElement.lang = locale() === 'ceb' ? 'ceb' : 'en';
+  root.querySelectorAll('[data-word]').forEach((element) => {
+    element.textContent = word(element.dataset.word);
+  });
+}

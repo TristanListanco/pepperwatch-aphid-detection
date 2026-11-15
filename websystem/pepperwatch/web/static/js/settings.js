@@ -1,5 +1,5 @@
-// The Settings page: display preferences, detection thresholds, locale, and
-// clearing stored detections.
+// The Settings page: the simple or full view, display preferences, detection
+// thresholds, locale, and clearing stored detections.
 //
 // The confidence slider matters more than it looks. Figure 3.3 specifies a
 // fixed "Confidence Filter (80)", but 0.80 on small aphid clusters would
@@ -44,6 +44,15 @@ function bindDisplayPrefs(root) {
   if (themeSelect && window.pwTheme) {
     themeSelect.value = window.pwTheme.get();
     themeSelect.addEventListener('change', () => window.pwTheme.set(themeSelect.value));
+  }
+
+  // Simple or full view: applied at once, so the cards below show or hide.
+  const view = root.querySelector('[data-setting-view]');
+  if (view && window.pwView) {
+    view.querySelectorAll('input[name="view"]').forEach((input) => {
+      input.checked = input.value === window.pwView.get();
+      input.addEventListener('change', () => window.pwView.set(input.value));
+    });
   }
 
   const prefs = displayPrefs();

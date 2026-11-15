@@ -1,7 +1,8 @@
-// Light or dark, per device. A classic script in <head>, not a module, so the
-// theme is set before the first paint instead of flashing light first.
+// Light or dark, and the simple or full view, per device. A classic script in
+// <head>, not a module, so both are set before the first paint instead of
+// flashing the wrong one first.
 //
-// "system" follows the phone's own setting and keeps following it. Light is
+// Theme "system" follows the phone's own setting and keeps following it. Light is
 // still the better choice in direct sun; dark is for dusk and indoors.
 
 (function () {
@@ -23,7 +24,32 @@
   apply();
   media.addEventListener('change', apply);
 
+  // Simple (for farmers, the default) or full (for agricultural experts), per
+  // device. Set here so the page never shows the other view's parts first.
+  var view = 'simple';
+  try {
+    view = localStorage.getItem('pw-view') === 'full' ? 'full' : 'simple';
+  } catch (error) {
+    // Private mode or blocked storage: the simple view.
+  }
+  document.documentElement.dataset.view = view;
+
   // For the Settings page.
+  window.pwView = {
+    get: function () {
+      return view;
+    },
+    set: function (value) {
+      view = value === 'full' ? 'full' : 'simple';
+      try {
+        localStorage.setItem('pw-view', view);
+      } catch (error) {
+        // Not persisted; applies until the page reloads.
+      }
+      document.documentElement.dataset.view = view;
+    },
+  };
+
   window.pwTheme = {
     get: function () {
       return pref;

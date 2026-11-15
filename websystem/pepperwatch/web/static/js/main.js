@@ -3,6 +3,7 @@
 import { Bus, poll, fetchJson, postJson } from './bus.js';
 import { Controls, toast } from './controls.js';
 import { DeviceList } from './devices.js';
+import { renderFarm } from './farm.js';
 import { History } from './history.js';
 import { renderKpis } from './kpis.js';
 import { LiveView, displayPrefs } from './liveview.js';
@@ -10,15 +11,12 @@ import { renderPipeline, renderSummary, renderTelemetry } from './performance.js
 import { SessionPanel } from './session.js';
 import { initSettings } from './settings.js';
 import { relative } from './fmt.js';
+import { applyWords, isSimple, locale, word } from './words.js';
 
 // The weekly aggregate refreshes on a plain setInterval rather than over the
 // push channel: it summarises seven days, so a 30-second cadence is ample, and
 // §3.5.1 asks Selenium to track exactly this function.
 const STATS_INTERVAL_MS = 30000;
-
-function locale() {
-  return localStorage.getItem('pw-locale') || 'en';
-}
 
 function bootDashboard() {
   const bus = new Bus();
@@ -52,9 +50,13 @@ function bootDashboard() {
 
   // The session says how many cameras run; the first figure is in the page,
   // the rest are clones of it. Labels only appear when there is a choice.
+  let cameraCount = null;
   const showCameras = (cameras) => {
     if (!viewsRoot) return;
     const list = cameras && cameras.length ? cameras : [{}];
+    // More than last time: a camera was plugged in and the session restarted.
+    if (cameraCount !== null && cameras && cameras.length > cameraCount) toast(word('toast.added'));
+    if (cameras && cameras.length) cameraCount = cameras.length;
     while (views.length > list.length) {
       const view = views.pop();
       view.destroy();
@@ -67,12 +69,10 @@ function bootDashboard() {
       addView(index, element);
     }
     list.forEach((camera, index) => {
-      const name = `Camera ${index + 1}`;
+      const name = word('camera.n', { n: index + 1 });
+      views[index].name = camera.model && !isSimple() ? `${name} · ${camera.model}` : name;
       const label = views[index].root.querySelector('[data-camera-label]');
-      if (label) {
-        label.hidden = list.length < 2;
-        label.querySelector('[data-camera-name]').textContent = camera.model ? `${name} · ${camera.model}` : name;
-      }
+      if (label) label.hidden = list.length < 2;
       views[index].image.alt = list.length < 2
         ? 'Live camera feed of the bell pepper canopy'
         : `${name} live feed of the bell pepper canopy`;
@@ -80,19 +80,34 @@ function bootDashboard() {
     showCamerasOn();
   };
 
-  // Which cameras are on, from the worker's pipeline telemetry. An off camera
-  // keeps its label and a Turn on button, and fetches no frames.
+  // Which cameras are on and plugged in, from the worker's pipeline telemetry.
+  // An off camera keeps its label and a Turn on button; an unplugged one keeps
+  // its frame, saying so. Neither fetches frames.
   let camerasOn = [];
+  let camerasConnected = [];
   function showCamerasOn() {
     if (!viewsRoot) return;
-    const onCount = views.filter((view, index) => camerasOn[index] !== false).length;
-    viewsRoot.classList.toggle('is-multi', onCount > 1);
+    const unplugged = (index) => camerasConnected[index] === false;
+    const active = (index) => camerasOn[index] !== false && !unplugged(index);
+    const onCount = views.filter((view, index) => active(index)).length;
+    const framed = views.filter((view, index) => active(index) || unplugged(index)).length;
+    viewsRoot.classList.toggle('is-multi', framed > 1);
     views.forEach((view, index) => {
-      view.off = camerasOn[index] === false;
-      view.root.classList.toggle('is-off', view.off);
+      view.off = !active(index);
+      view.root.classList.toggle('is-off', !active(index) && !unplugged(index));
+      view.root.classList.toggle('is-unplugged', unplugged(index));
+      const name = view.root.querySelector('[data-camera-name]');
+      if (name) {
+        name.textContent = unplugged(index)
+          ? word('camera.label_unplugged', { n: index + 1 })
+          : view.name || word('camera.n', { n: index + 1 });
+      }
+      const note = view.root.querySelector('[data-camera-unplugged]');
+      if (note) note.textContent = word('camera.unplugged', { n: index + 1 });
       const button = view.root.querySelector('[data-camera-switch]');
       if (button) {
         const action = view.off ? 'Turn on' : 'Turn off';
+        button.hidden = unplugged(index);
         button.textContent = action;
         button.setAttribute('aria-label', `${action} camera ${index + 1}`);
         button.disabled = !view.off && onCount < 2; // the last camera on stays on
@@ -154,8 +169,15 @@ function bootDashboard() {
     paused = Boolean(payload.paused);
     showOverlay();
     camerasOn = payload.camera_on || [];
+    const connected = payload.camera_connected || [];
+    connected.forEach((plugged, index) => {
+      if (plugged === false && camerasConnected[index] === true) {
+        toast(word('toast.unplugged', { n: index + 1 }), 'error');
+      }
+    });
+    camerasConnected = connected;
     showCamerasOn();
-    if (devices) devices.setCamerasOn(payload.camera_on);
+    if (devices) devices.setCameras(payload.camera_on, payload.camera_connected);
   });
   bus.on('summary', (payload) => renderSummary(document, payload));
 
@@ -172,6 +194,7 @@ function bootDashboard() {
     // too, so the card fills even before the stream connects.
     fetchJson('/api/session').then((data) => {
       if (data && data.camera_on) camerasOn = data.camera_on;
+      if (data && data.camera_connected) camerasConnected = data.camera_connected;
       if (data && data.session) {
         showCameras(data.session.cameras);
         session.render(data.session);
@@ -200,21 +223,26 @@ function bootDashboard() {
 
   // A new persisted event means the gallery is stale.
   const history = document.querySelector('[data-history]')
-    ? new History(document.querySelector('[data-history]'), { pageSize: 8 })
+    ? new History(document.querySelector('[data-history]'), { pageSize: isSimple() ? 4 : 8 })
     : null;
   if (history) {
     history.load();
     bus.on('persisted', (event) => {
       history.load();
       // The worker saved it: confirmation that the snapshot really happened.
-      if (event.trigger === 'manual') toast('Snapshot saved to the detection log');
+      if (event.trigger === 'manual') toast(isSimple() ? word('toast.saved') : 'Snapshot saved to the detection log');
     });
   }
 
   bus.on('flag', (payload) => {
     if (payload.severity && payload.severity !== 'none') {
-      const where = views.length > 1 ? `Camera ${(payload.camera || 0) + 1}: s` : 'S';
-      toast(`${where}everity is now ${payload.severity} (${payload.count} clusters)`);
+      const camera = views.length > 1 ? `${word('camera.n', { n: (payload.camera || 0) + 1 })}: ` : '';
+      if (isSimple()) {
+        toast(`${camera}${word(`sev.${payload.severity}`)}`);
+      } else {
+        const where = views.length > 1 ? `Camera ${(payload.camera || 0) + 1}: s` : 'S';
+        toast(`${where}everity is now ${payload.severity} (${payload.count} clusters)`);
+      }
     }
   });
 
@@ -224,6 +252,7 @@ function bootDashboard() {
     const stats = await fetchJson(`/api/stats/weekly?locale=${locale()}`);
     if (!stats) return;
     renderKpis(document, stats);
+    renderFarm(document, stats);
 
     const stamp = document.querySelector('[data-updated]');
     if (stamp) stamp.textContent = `updated ${relative(new Date().toISOString())}`;
@@ -243,18 +272,32 @@ function bootDashboard() {
   });
 }
 
-// The status chip in the top bar, on every page.
+// The status chip in the top bar, and the banner under it, on every page.
+// Not running has three reasons: offline, no camera plugged in, or a restart
+// on purpose (a new session, or a camera plugged in), which is no alarm.
 function showWorker(state) {
+  const alive = state.alive === true;
   const chip = document.querySelector('[data-worker-chip]');
   if (chip) {
-    chip.classList.toggle('is-live', state.alive === true);
-    chip.classList.toggle('is-down', state.alive !== true);
+    chip.classList.toggle('is-live', alive);
+    chip.classList.toggle('is-down', !alive);
     const label = chip.querySelector('[data-worker-label]');
-    if (label) label.textContent = state.alive ? 'Detector online' : 'Detector offline';
+    if (label) {
+      if (isSimple()) label.textContent = word(alive ? 'chip.watching' : 'chip.not_watching');
+      else label.textContent = alive ? 'Detector online' : 'Detector offline';
+    }
   }
 
   const banner = document.querySelector('[data-worker-banner]');
-  if (banner) banner.hidden = state.alive === true;
+  if (banner) {
+    banner.hidden = alive;
+    const reason = ['no_camera', 'restarting'].includes(state.status) ? state.status : 'offline';
+    banner.classList.toggle('is-offline', reason !== 'restarting');
+    const text = banner.querySelector('[data-banner-text]');
+    if (text) text.textContent = word(`banner.${reason}`);
+    const ssh = banner.querySelector('[data-banner-ssh]');
+    if (ssh) ssh.hidden = reason !== 'offline';
+  }
 }
 
 // With the detector down the live tiles and the camera hold their last
@@ -278,7 +321,9 @@ function showStale(alive, readingAt, frameAt) {
   document.querySelectorAll('[data-viewport-stale]').forEach((chip) => {
     chip.hidden = alive;
     const label = chip.querySelector('[data-viewport-stale-label]');
-    if (label) label.textContent = frame ? `Detector offline · frame from ${frame}` : 'Detector offline';
+    if (!label) return;
+    if (isSimple()) label.textContent = frame ? word('live.stale', { time: frame }) : word('live.stale_plain');
+    else label.textContent = frame ? `Detector offline · frame from ${frame}` : 'Detector offline';
   });
 }
 
@@ -296,6 +341,7 @@ function bootSettings() {
   initSettings(document).catch((error) => console.error('[pw] settings failed', error));
 }
 
+applyWords(document);
 const page = document.body.dataset.page;
 if (page === 'dashboard') bootDashboard();
 else if (page === 'settings') bootSettings();

@@ -84,7 +84,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  435 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  446 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -175,15 +175,29 @@ dashboard), it checks the hardware before any frame is taken:
    applied: the HAT profile captures at up to 60 fps because inference keeps
    up; the CPU profile captures at 25 fps and gives ONNX Runtime 3 threads.
 3. **Cameras.** CSI cameras are listed through libcamera and USB webcams
-   through sysfs (`uvcvideo` driver). Up to `[camera] max_cameras` (default 2)
-   are started, CSI first; one that won't start is skipped. With two, the
-   dashboard shows them side by side (stacked on a phone), each with its own
-   boxes, and the one detector takes their frames in turn, so each gets half
-   the inference rate. **Turn off** on a camera's label stops it (no frames,
-   no inference) and gives the other the whole detector and stream rate,
-   until the next session; **Turn on** brings it back. Saved scans, the
-   detections CSV and `inference.csv` record which camera (`camera`, numbered
-   from 0). The `low` and `tiny` board profiles run one camera.
+   through sysfs (`uvcvideo` driver). Every camera found is started, CSI
+   first, up to `[camera] max_cameras` (default 4); one that won't start is
+   skipped. With several, the dashboard shows them side by side (stacked on a
+   phone), each with its own boxes, and the one detector takes their frames in
+   turn, so each camera is checked less often as more are added. **Turn off**
+   on a camera's label (full view) stops it (no frames, no inference) and
+   gives the others the whole detector, until the next session; **Turn on**
+   brings it back. Saved scans, the detections CSV and `inference.csv` record
+   which camera (`camera`, numbered from 0). The `low` and `tiny` board
+   profiles run one camera.
+
+   **USB cameras can be plugged in and out while it runs.** The worker checks
+   about once a second:
+   - **Unplugged:** the camera stops, its frame on the dashboard says
+     *Camera 2 is unplugged*, and the others carry on.
+   - **Plugged in** (a new one, or one coming back): a new session starts by
+     itself, which finds every camera again. It takes a few seconds; the
+     dashboard says *Starting again* rather than showing an error.
+   - **No camera at all:** the worker waits instead of exiting, and the
+     dashboard says *No camera is connected*. Plugging one in starts it.
+
+   `system_log` records `camera_unplugged` and `camera_connected`. CSI cameras
+   aren't watched: never plug a ribbon cable in or out with the power on.
 4. **Recording.** A session folder is created and every inference and a
    once-a-second system sample are written to CSV (see
    [Measurements](#measurements-session-csv-files)).
@@ -866,7 +880,7 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 | `site.name` | `Naawan` | Saved with every event |
 | `camera.kind` | `auto` | `auto` (CSI if attached, else USB), `csi` (Picamera2) or `usb` (OpenCV V4L2) |
 | `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`). Set, it means that camera alone |
-| `camera.max_cameras` | 2 | How many cameras to run side by side (1 on the `low` and `tiny` profiles) |
+| `camera.max_cameras` | 4 | How many cameras to run side by side (1 on the `low` and `tiny` profiles) |
 | `camera.preview_width/height` | 640×480 | Live preview and inference input |
 | `camera.preview_fps` | 25 | Overridden per session by `[profiles.*]` |
 | `camera.still_width/height` | 2304×1296 | Manual snapshot resolution |
@@ -1031,10 +1045,28 @@ that, then compares the two models before you swap:
 
 ## Using the dashboard
 
-| Page | Contents |
+The dashboard has two views, chosen per phone under **Settings → View**:
+
+- **Simple: for farmers** (the default). One plain answer, in English or
+  Cebuano (*Settings → Language*):
+  - **How the plants are:** a coloured card with the week's advice (*Healthy*,
+    *Watch closely*, *Act soon*, *Act now*), why, and **what to do**, step by
+    step. It says when the advice is still an unvalidated draft.
+  - **Live camera**, with *Take a photo*.
+  - **This week:** how many leaves were healthy, and whether damage is getting
+    worse or better than last week.
+  - **Recent photos.**
+
+  No frame rates, latency, power, hardware or settings jargon.
+- **Full: for agricultural experts.** Everything below.
+
+The farmer view's own words live in `static/js/words.js`; the Cebuano is a
+draft and should be checked by a native speaker before field use.
+
+| Page | Contents (full view) |
 |---|---|
 | `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; detections CSV) |
-| `/settings` | **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
+| `/settings` | **View** for this device (simple or full) · **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
 
 There's no login: anyone on the PepperWatch Wi-Fi can use every control.
 
@@ -1059,7 +1091,7 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/capture` | Request a high-res snapshot → `202` |
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
-| POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera on can't be turned off (`409`) |
+| POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
 | GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Lasts until the next session |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
@@ -1170,7 +1202,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 435 tests (~1 min)
+.venv/bin/python -m pytest               # 446 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1223,7 +1255,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 435 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 446 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1254,11 +1286,14 @@ has Ethernet, `update.sh` fetches whatever CI last approved.
 | Session runs on **CPU** with an AI HAT+ fitted | The Session card says why. See [AI HAT+ acceleration](#ai-hat-acceleration) |
 | Session card shows *heuristic stub* | No model for this accelerator: no `pepperwatch.onnx` (CPU) or HEF (HAT). Results are synthetic, not data |
 | Worker exits "no camera matching …" | It lists what it found. Check the ribbon cable or USB, `rpicam-hello --list-cameras`, `ls /dev/video*`, and `[camera] kind` / `device` |
-| Wrong camera used with two attached | `auto` prefers CSI and runs up to two. To run one, set `[camera] device` (or `max_cameras = 1`) in `local.toml` |
+| Wrong camera used with several attached | `auto` prefers CSI and runs up to four. To run one, set `[camera] device` (or `max_cameras = 1`) in `local.toml` |
+| *No camera is connected* | The worker found no camera and is waiting. Plug a USB camera in (it starts within seconds), or check the CSI ribbon with the power off |
+| *Camera 2 is unplugged* | Its USB cable came out. Plug it back in; a new session starts with it |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
 | No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |
 | `PepperWatch` network not visible | `journalctl -u pepperwatch-ap -b` says what it chose: "joined saved network" means the hotspot is off by design (see above). Otherwise check `/etc/pepperwatch/ap.psk` exists (≥ 8 chars) and the Wi-Fi country is set (`sudo raspi-config`, Localisation Options) |
+| `PepperWatch` keeps dropping and coming back, with no camera plugged in | Fixed by `update.sh` (it reinstalls the units). The worker used to exit with no camera; systemd restarted it every 5 s, and through the target restarted the hotspot each time. It now waits for a camera, and the dashboard says *No camera is connected* |
 | QR code or password won't join | A hotspot set up before this fix still has NetworkManager's security defaults. After `update.sh`, reboot (or `sudo systemctl restart pepperwatch-ap`) to rebuild it, then forget `PepperWatch` on the phone and join again |
 | Lost SSH when the system started | The AP took over `wlan0`. Use Ethernet, or join `PepperWatch` and SSH to `192.168.4.1` |
 | fps drops after a while | Check the Performance & Power card for thermal back-off or throttling. Improve cooling or ventilation |

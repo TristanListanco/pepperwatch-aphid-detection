@@ -1,6 +1,7 @@
 // Capture & Export Controls (Table 3.4): manual snapshot, pause/resume, CSV.
 
 import { postJson } from './bus.js';
+import { isSimple, word } from './words.js';
 
 export class Controls {
   constructor(root, { onToast } = {}) {
@@ -16,19 +17,22 @@ export class Controls {
   bind() {
     const snapshot = this.root.querySelector('[data-action-snapshot]');
     if (snapshot) {
+      // Its labels, one per view; swapped for "Taking…" while it works.
+      const labels = [...snapshot.childNodes];
       snapshot.addEventListener('click', async () => {
+        const simple = isSimple();
         snapshot.disabled = true;
-        snapshot.textContent = 'Capturing…';
+        snapshot.textContent = simple ? word('live.taking') : 'Capturing…';
         try {
           await postJson('/api/capture', { hi_res: true });
           // 202, not 200: the worker takes the still asynchronously, so the
           // gallery entry appears a moment later rather than immediately.
-          this.onToast('Taking a snapshot…');
+          this.onToast(simple ? word('toast.taking') : 'Taking a snapshot…');
         } catch (error) {
-          this.onToast(`Snapshot failed: ${error.message}`, 'error');
+          this.onToast(simple ? word('toast.failed', { error: error.message }) : `Snapshot failed: ${error.message}`, 'error');
         } finally {
           snapshot.disabled = !this.available;
-          snapshot.textContent = 'Snapshot';
+          snapshot.replaceChildren(...labels);
         }
       });
     }

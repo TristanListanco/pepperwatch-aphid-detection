@@ -50,15 +50,14 @@
       </header>
 
       <div class="content">
+        {# The message follows the worker's status (main.js showWorker): offline,
+           no camera plugged in, or restarting on purpose. #}
         <div class="banner is-offline" data-worker-banner {% if worker_alive %}hidden{% endif %}>
           <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
           <div>
-            <strong>The detector is not running.</strong>
-            Nothing new is being recorded; the camera and live figures show their last
-            readings, and saved scans are still below. It normally restarts within
-            seconds. If it stays off, check the camera cable is firmly seated, then
-            restart the Pi.
-            <details class="banner-more">
+            <span data-banner-text data-word="banner.offline">The camera system is not running. It usually
+              starts again by itself. If it stays off, turn the Pi off and on again.</span>
+            <details class="banner-more" data-expert data-banner-ssh>
               <summary>Restart only the detector over SSH</summary>
               <code class="mono">sudo systemctl restart pepperwatch-worker</code>
             </details>

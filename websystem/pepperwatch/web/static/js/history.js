@@ -6,6 +6,10 @@
 
 import { fetchJson } from './bus.js';
 import { dateTime, num, pct, relative, severityLabel } from './fmt.js';
+import { isSimple, locale, word } from './words.js';
+
+// The simple view names a severity in plain words, in the chosen language.
+const severityText = (severity) => (isSimple() ? word(`sev.${severity}`) : severityLabel(severity));
 
 export class History {
   constructor(root, { pageSize = 12 } = {}) {
@@ -88,7 +92,8 @@ export class History {
 
   render(items) {
     if (!items.length) {
-      this.gallery.innerHTML = '<p class="empty">No scans match these filters.</p>';
+      const message = isSimple() ? word('photos.empty') : 'No scans match these filters.';
+      this.gallery.innerHTML = `<p class="empty">${escapeHtml(message)}</p>`;
       return;
     }
 
@@ -109,7 +114,9 @@ export class History {
     button.dataset.eventId = String(item.id);
     button.setAttribute(
       'aria-label',
-      `Scan at ${dateTime(item.captured_at)}, severity ${severityLabel(item.severity)}`,
+      isSimple()
+        ? `${word('photos.at', { time: dateTime(item.captured_at) })}, ${severityText(item.severity)}`
+        : `Scan at ${dateTime(item.captured_at)}, severity ${severityLabel(item.severity)}`,
     );
 
     const thumb = document.createElement('img');
@@ -131,14 +138,19 @@ export class History {
     detail.className = 'scan-detail';
     const severity = document.createElement('span');
     severity.className = `sev-${item.severity}`;
-    severity.textContent = severityLabel(item.severity);
+    severity.textContent = severityText(item.severity);
     detail.appendChild(severity);
-    detail.appendChild(
-      document.createTextNode(
-        `${item.detection_count} box${item.detection_count === 1 ? '' : 'es'}`,
-      ),
-    );
-    if (this.multiCamera) detail.appendChild(document.createTextNode(`Cam ${(item.camera || 0) + 1}`));
+    if (!isSimple()) {
+      detail.appendChild(
+        document.createTextNode(
+          `${item.detection_count} box${item.detection_count === 1 ? '' : 'es'}`,
+        ),
+      );
+    }
+    if (this.multiCamera) {
+      const camera = (item.camera || 0) + 1;
+      detail.appendChild(document.createTextNode(isSimple() ? word('camera.n', { n: camera }) : `Cam ${camera}`));
+    }
     if (item.synthetic) {
       const flag = document.createElement('span');
       flag.className = 'sev-moderate';
@@ -161,13 +173,13 @@ export class History {
     const to = Math.min(this.offset + this.pageSize, this.total);
 
     this.pager.innerHTML = '';
-    const previous = pagerButton('Previous', this.offset === 0, () => {
+    const previous = pagerButton(word('pager.previous'), this.offset === 0, () => {
       this.offset = Math.max(0, this.offset - this.pageSize);
       this.load();
     });
     const label = document.createElement('span');
-    label.textContent = `${from}–${to} of ${this.total}`;
-    const next = pagerButton('Next', to >= this.total, () => {
+    label.textContent = word('pager.range', { from, to, total: this.total });
+    const next = pagerButton(word('pager.next'), to >= this.total, () => {
       this.offset += this.pageSize;
       this.load();
     });
@@ -180,7 +192,8 @@ export class History {
   async open(eventId) {
     if (!this.dialog) return;
     try {
-      const event = await fetchJson(`/api/events/${eventId}`);
+      // The advice headline comes back in the chosen language.
+      const event = await fetchJson(`/api/events/${eventId}?locale=${locale()}`);
       if (!event) return;
 
       const image = this.dialog.querySelector('[data-dialog-image]');
@@ -193,7 +206,15 @@ export class History {
       }
 
       const meta = this.dialog.querySelector('[data-dialog-meta]');
-      if (meta) {
+      if (meta && isSimple()) {
+        meta.innerHTML = `
+          <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
+            <span class="muted">${escapeHtml(relative(event.captured_at))}${
+              this.multiCamera ? ` · ${escapeHtml(word('camera.n', { n: (event.camera || 0) + 1 }))}` : ''
+            }</span></div>
+          <div class="sev-${escapeHtml(event.severity)}">${escapeHtml(severityText(event.severity))}</div>
+          ${event.advice ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
+      } else if (meta) {
         meta.innerHTML = `
           <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
             <span class="muted">${escapeHtml(relative(event.captured_at))}${

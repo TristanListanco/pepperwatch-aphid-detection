@@ -235,6 +235,42 @@ def test_the_typeface_and_icons_ship_with_the_app(client) -> None:
     assert client.get("/static/LICENSES.md").status_code == 200
 
 
+def test_settings_offers_the_simple_and_full_views(client) -> None:
+    html = client.get("/settings").get_data(as_text=True)
+    assert "data-setting-view" in html
+    for value in ("simple", "full"):
+        assert f'name="view" value="{value}"' in html
+    # Thresholds and clearing data are for experts only.
+    assert re.search(r'<section class="card" data-expert>\s*<div class="card-head">\s*<h2>Detection Thresholds', html)
+
+
+def test_the_simple_view_hides_the_technical_parts(client) -> None:
+    """theme.js picks the view before the first paint; CSS hides the other's parts."""
+    html = client.get("/").get_data(as_text=True)
+    for simple in ("data-farm-status", "data-farm-week"):
+        assert re.search(rf"<section [^>]*data-simple[^>]*{simple}", html), simple
+    for expert in ("dash-tiles", "dash-devices", "dash-session", "dash-alerts"):
+        assert re.search(rf'class="[^"]*{expert}[^"]*"[^>]*data-expert', html), expert
+    assert re.search(r"data-action-pause data-expert", html)
+    css = client.get("/static/css/app.css").get_data(as_text=True)
+    assert ':root[data-view="simple"] [data-expert]' in css
+    assert ':root[data-view="full"] [data-simple]' in css
+    theme = client.get("/static/js/theme.js").get_data(as_text=True)
+    assert "pw-view" in theme and "dataset.view" in theme
+
+
+def test_every_phrase_of_the_simple_view_is_in_cebuano_too(client) -> None:
+    words = client.get("/static/js/words.js").get_data(as_text=True)
+    english, cebuano = words.split("\n  ceb: {", 1)
+    key = re.compile(r"^\s+'([a-z_.]+)':", re.MULTILINE)
+    assert key.findall(english) and set(key.findall(english)) == set(key.findall(cebuano))
+    # And every data-word the pages use exists.
+    used = set()
+    for path in PAGES:
+        used |= set(re.findall(r'data-word="([a-z_.]+)"', client.get(path).get_data(as_text=True)))
+    assert used <= set(key.findall(english)), used - set(key.findall(english))
+
+
 def test_display_switches_live_on_the_settings_page(client) -> None:
     html = client.get("/settings").get_data(as_text=True)
     for pref in ("live", "mirror"):

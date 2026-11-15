@@ -2,6 +2,28 @@
 {% block title %}Settings{% endblock %}
 
 {% block content %}
+<section class="card" id="view">
+  <div class="card-head">
+    <h2>View</h2>
+    <span class="card-sub">This device only</span>
+  </div>
+  <div class="card-body">
+    <fieldset class="view-choice" data-setting-view>
+      <legend class="sr-only">How much the dashboard shows</legend>
+      <label class="choice">
+        <input type="radio" name="view" value="simple">
+        <span><strong>Simple: for farmers</strong>
+          <span class="note">How the plants are and what to do, in plain words. Live camera and recent photos.</span></span>
+      </label>
+      <label class="choice">
+        <input type="radio" name="view" value="full">
+        <span><strong>Full: for agricultural experts</strong>
+          <span class="note">Everything: frame rates, latency, power, temperature, hardware, detection thresholds and session records.</span></span>
+      </label>
+    </fieldset>
+  </div>
+</section>
+
 <section class="card" id="display">
   <div class="card-head">
     <h2>Display</h2>
@@ -37,7 +59,7 @@
   </div>
 </section>
 
-<section class="card">
+<section class="card" data-expert>
   <div class="card-head">
     <h2>Detection Thresholds</h2>
     <span class="card-sub">Applied live</span>
@@ -92,7 +114,7 @@
   </div>
 </section>
 
-<section class="card">
+<section class="card" data-expert>
   <div class="card-head"><h2>Data</h2></div>
   <div class="card-body">
     <div class="settings-grid">

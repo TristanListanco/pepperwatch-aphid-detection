@@ -854,7 +854,8 @@ button {
 /* The one saturated tile: field health. Green while the crop is clean,
  * shifting with severity so the colour itself carries the reading. Literal
  * colours, not tokens: it looks the same in the dark theme, white on it 5:1. */
-.tile.is-hero {
+.tile.is-hero,
+.farm-status {
   color: #fff;
   background: linear-gradient(150deg, #15803d 0%, #116632 100%);
   box-shadow: 0 16px 30px -18px rgba(17, 102, 50, 0.85);
@@ -866,7 +867,8 @@ button {
   color: rgba(255, 255, 255, 0.92);
 }
 
-.tile.is-hero.is-low {
+.tile.is-hero.is-low,
+.farm-status.is-low {
   background: linear-gradient(150deg, #4d7c0f 0%, #3b5f0b 100%);
   box-shadow: 0 16px 30px -18px rgba(59, 95, 11, 0.85);
 }
@@ -875,7 +877,8 @@ button {
   color: #4d7c0f;
 }
 
-.tile.is-hero.is-moderate {
+.tile.is-hero.is-moderate,
+.farm-status.is-moderate {
   background: linear-gradient(150deg, #a16207 0%, #8a5300 100%);
   box-shadow: 0 16px 30px -18px rgba(138, 83, 0, 0.85);
 }
@@ -884,7 +887,8 @@ button {
   color: #8a5300;
 }
 
-.tile.is-hero.is-high {
+.tile.is-hero.is-high,
+.farm-status.is-high {
   background: linear-gradient(150deg, #b42318 0%, #8f1b12 100%);
   box-shadow: 0 16px 30px -18px rgba(143, 27, 18, 0.85);
 }
@@ -1041,7 +1045,7 @@ button {
 
 @media (min-width: 900px) {
   .viewports.is-multi {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     align-items: start;
   }
 }
@@ -1060,6 +1064,42 @@ button {
   font-size: var(--type-label);
   font-weight: 500;
   color: var(--ink-2);
+}
+
+/* An unplugged camera keeps its frame, empty, saying so. */
+.viewport-unplugged {
+  display: none;
+}
+
+.camera-view.is-unplugged .viewport-idle,
+.camera-view.is-unplugged .live-summary {
+  display: none;
+}
+
+.camera-view.is-unplugged .viewport-unplugged {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 20px;
+  text-align: center;
+  color: var(--ink);
+  background: repeating-linear-gradient(135deg, var(--inset) 0 14px, var(--inset-2) 14px 28px);
+}
+
+.viewport-unplugged .icon {
+  width: 40px;
+  height: 40px;
+  color: var(--red);
+}
+
+.viewport-unplugged p {
+  margin: 0;
+  max-width: 30ch;
+  font-size: var(--type-body);
+  font-weight: 500;
 }
 
 /* A camera turned off keeps only its label and the Turn on button. */
@@ -1533,4 +1573,220 @@ dialog img {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* -- simple view (farmers, the default) and full view (experts) -------------
+ * theme.js sets data-view on <html> before the first paint. One page serves
+ * both: [data-expert] parts show in the full view only, [data-simple] parts
+ * in the simple view only. */
+
+:root[data-view="simple"] [data-expert],
+:root[data-view="full"] [data-simple] {
+  display: none;
+}
+
+/* Read at arm's length in a pepper row, often in sun: larger text, larger
+ * targets. */
+:root[data-view="simple"] {
+  --type-note: 15px;
+  --type-control: 16px;
+  --type-body: 17px;
+  --type-title: 22px;
+}
+
+:root[data-view="simple"] .btn {
+  min-height: 48px;
+}
+
+:root[data-view="simple"] .dash {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "status"
+    "live"
+    "week"
+    "history";
+}
+
+@media (min-width: 1240px) {
+  :root[data-view="simple"] .dash {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    grid-template-areas:
+      "status live"
+      "week live"
+      "history history";
+  }
+}
+
+/* How the plants are, and what to do. Colours shared with the hero tile. */
+.farm-status {
+  grid-area: status;
+  margin: 0;
+  padding: 22px 22px 20px;
+  border-radius: var(--radius-lg);
+}
+
+.farm-status.is-empty {
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.farm-status-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.farm-status-head .icon {
+  width: 28px;
+  height: 28px;
+}
+
+.farm-urgency {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: var(--type-control);
+  font-weight: 600;
+}
+
+.farm-urgency:empty {
+  display: none;
+}
+
+.farm-headline {
+  margin: 14px 0 8px;
+  font-size: clamp(24px, 6.5vw, 30px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.farm-body,
+.farm-todo ol {
+  margin: 0;
+  font-size: var(--type-body);
+  line-height: 1.5;
+}
+
+.farm-todo h3 {
+  margin: 18px 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.farm-todo ol {
+  display: grid;
+  gap: 8px;
+  padding-left: 1.4em;
+}
+
+.farm-note {
+  margin: 14px 0 0;
+  font-size: var(--type-note);
+  opacity: 0.92;
+}
+
+.farm-note:empty {
+  display: none;
+}
+
+.farm-draft {
+  font-weight: 600;
+}
+
+.farm-status.is-empty .farm-body,
+.farm-status.is-empty .farm-note {
+  color: var(--ink-2);
+}
+
+/* This week, in words. */
+.farm-week {
+  grid-area: week;
+}
+
+.farm-big {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.farm-trend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: var(--type-body);
+  color: var(--ink-2);
+}
+
+/* Rising damage is bad news: amber, not the green a finance chart would use. */
+.farm-trend.is-up {
+  color: var(--amber-ink);
+}
+
+.farm-trend.is-down {
+  color: var(--green-deep);
+}
+
+/* Settings: the view choice, as two large cards. */
+.view-choice {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+@media (min-width: 700px) {
+  .view-choice {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 48px;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--inset);
+  cursor: pointer;
+}
+
+.choice input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  accent-color: var(--green);
+}
+
+.choice strong {
+  display: block;
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+
+.choice .note {
+  display: block;
+  margin-top: 4px;
+}
+
+.choice:has(input:checked) {
+  background: var(--green-soft);
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+
+.choice:has(input:focus-visible) {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+/* A restart on purpose (new session, camera plugged in) is not an alarm. */
+.banner[data-worker-banner]:not(.is-offline) {
+  background: var(--inset);
+  color: var(--ink);
 }

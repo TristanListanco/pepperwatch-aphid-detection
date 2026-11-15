@@ -16,6 +16,7 @@
 // snapshots are annotated server-side instead -- see render.py.
 
 import { classColour, classLabel } from './fmt.js';
+import { isSimple, word } from './words.js';
 
 const POLL_MS = 1000;
 // The "in view" line is a live region; at most one change per this long, so a
@@ -178,6 +179,10 @@ export class LiveView {
     if (!this.showOverlay) return '';
     const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
     const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
+    if (isSimple()) {
+      if (damaged) return word('view.damaged', { damaged, healthy });
+      return healthy ? word('view.healthy', { healthy }) : word('view.empty');
+    }
     const leaves = (n) => `${n} ${n === 1 ? 'leaf' : 'leaves'}`;
     if (damaged) {
       return `In view: ${leaves(damaged)} with aphid damage${healthy ? `, ${healthy} healthy` : ''}`;

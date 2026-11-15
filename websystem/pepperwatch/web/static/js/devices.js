@@ -16,6 +16,7 @@ export class DeviceList {
     this.telemetry = null;
     this.worker = null;
     this.camerasOn = [];
+    this.camerasConnected = [];
     this.signature = '';
   }
 
@@ -29,9 +30,11 @@ export class DeviceList {
     this.render();
   }
 
-  // From the pipeline telemetry: a camera turned off on the live card.
-  setCamerasOn(on) {
+  // From the pipeline telemetry: a camera turned off on the live card, or
+  // unplugged.
+  setCameras(on, connected) {
     this.camerasOn = on || [];
+    this.camerasConnected = connected || [];
     this.render();
   }
 
@@ -108,13 +111,17 @@ export class DeviceList {
       );
       const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : candidate.device;
       const off = position >= 0 && this.camerasOn[position] === false;
+      const unplugged = position >= 0 && this.camerasConnected[position] === false;
       let role = 'standby';
       if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
-      if (off) role += ', turned off';
+      if (off && !unplugged) role += ', turned off';
+      let status = position >= 0 && !off ? 'ok' : 'idle';
+      if (unplugged) status = 'off';
       out.push({
-        status: position >= 0 && !off ? 'ok' : 'idle',
+        status,
         name: candidate.model || 'Camera',
         meta: [where, role].filter(Boolean).join(' · '),
+        pill: unplugged ? { kind: 'off', text: 'Unplugged: plug it back in' } : null,
       });
     });
 

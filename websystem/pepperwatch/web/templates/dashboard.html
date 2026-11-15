@@ -4,12 +4,28 @@
 {% block content %}
 <div class="dash">
 
+  {# -- Simple view: how the plants are, and what to do (static/js/farm.js) -- #}
+  <section class="farm-status is-empty" data-simple data-farm-status aria-live="polite">
+    <div class="farm-status-head">
+      <svg class="icon" aria-hidden="true"><use href="#i-sprout" data-farm-icon/></svg>
+      <span class="farm-urgency" data-farm-urgency></span>
+    </div>
+    <h2 class="farm-headline" data-farm-headline data-word="status.checking">Checking your plants…</h2>
+    <p class="farm-body" data-farm-body></p>
+    <div class="farm-todo" data-farm-todo hidden>
+      <h3 data-word="status.todo">What to do</h3>
+      <ol data-farm-actions></ol>
+    </div>
+    <p class="farm-note" data-farm-based></p>
+    <p class="farm-note farm-draft" data-farm-draft hidden></p>
+  </section>
+
   {# -- Live Inference View (Table 3.4) ---------------------------------- #}
   <section class="card dash-live" data-live>
     <div class="card-head">
       <svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg>
-      <h2>Live camera</h2>
-      <a class="btn is-quiet card-head-actions" href="{{ url_for('pages.settings') }}#display">Display settings</a>
+      <h2 data-word="live.title">Live camera</h2>
+      <a class="btn is-quiet card-head-actions" href="{{ url_for('pages.settings') }}#display" data-expert>Display settings</a>
     </div>
     <div class="card-body">
       {# One figure per camera: this first one is cloned for each further
@@ -18,19 +34,23 @@
       <figure class="camera-view" data-camera-view>
       <figcaption class="camera-label" data-camera-label hidden>
         <span data-camera-name></span>
-        <button class="btn is-quiet" type="button" data-camera-switch>Turn off</button>
+        <button class="btn is-quiet" type="button" data-camera-switch data-expert>Turn off</button>
       </figcaption>
       <div class="viewport" data-viewport>
         <img data-live-image alt="Live camera feed of the bell pepper canopy">
         <canvas data-live-canvas aria-hidden="true"></canvas>
         <div class="viewport-idle">
           <svg class="icon" aria-hidden="true"><use href="#i-aperture"/></svg>
-          <p>Waiting for the camera</p>
-          <p class="muted">The feed appears as soon as the detector sends a frame</p>
+          <p data-word="camera.waiting">Waiting for the camera</p>
+          <p class="muted" data-word="camera.waiting_note">The picture appears in a few seconds</p>
+        </div>
+        <div class="viewport-unplugged" role="status">
+          <svg class="icon" aria-hidden="true"><use href="#i-plug"/></svg>
+          <p data-camera-unplugged></p>
         </div>
         <div class="viewport-meta">
           <span class="chip" data-pipeline-paused hidden>
-            <span class="dot"></span>paused
+            <span class="dot"></span><span data-word="live.paused">Paused</span>
           </span>
           <span class="chip is-down" data-viewport-stale hidden>
             <span class="dot"></span><span data-viewport-stale-label>Detector offline</span>
@@ -43,14 +63,30 @@
       </div>
 
       <div class="live-controls">
-        <button class="btn" type="button" data-action-snapshot>Snapshot</button>
-        <button class="btn" type="button" data-action-pause>Pause inference</button>
+        <button class="btn" type="button" data-action-snapshot>
+          <span data-expert>Snapshot</span><span data-simple data-word="live.photo">Take a photo</span></button>
+        <button class="btn" type="button" data-action-pause data-expert>Pause inference</button>
       </div>
     </div>
   </section>
 
+  {# -- Simple view: this week, in words ----------------------------------- #}
+  <section class="card farm-week" data-simple data-farm-week>
+    <div class="card-head">
+      <svg class="icon" aria-hidden="true"><use href="#i-sprout"/></svg>
+      <h2 data-word="week.title">This week</h2>
+    </div>
+    <div class="card-body">
+      <p class="farm-big" data-farm-healthy>—</p>
+      <p class="farm-trend" data-farm-trend>
+        <svg class="icon" aria-hidden="true"><use href="#i-minus" data-farm-trend-icon/></svg>
+        <span data-farm-trend-text></span>
+      </p>
+    </div>
+  </section>
+
   {# -- Hardware: what this session runs on ------------------------------ #}
-  <aside class="dash-devices" aria-labelledby="devices-title">
+  <aside class="dash-devices" aria-labelledby="devices-title" data-expert>
     <h2 class="section-title" id="devices-title">Hardware</h2>
     <ul class="device-list" data-device-list>
       <li class="device">
@@ -65,7 +101,7 @@
 
   {# -- Figures: field health, the weekly KPIs (Figure 3.4), and the
         System Health Monitor (Table 3.4) cut to what Chapter IV reports -- #}
-  <section class="dash-tiles tiles" aria-label="Field and system figures" data-performance>
+  <section class="dash-tiles tiles" aria-label="Field and system figures" data-performance data-expert>
 
     <article class="tile is-hero is-none" data-health-tile>
       <div class="tile-head">
@@ -168,7 +204,7 @@
     </article>
   </section>
 
-  <div class="dash-alerts">
+  <div class="dash-alerts" data-expert>
     <div class="banner is-caution" data-health-backoff hidden></div>
     <div class="banner is-offline" data-health-throttled hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
@@ -181,7 +217,7 @@
   </div>
 
   {# -- Session: what this run is recorded on, and its CSV files -------- #}
-  <section class="card dash-session" data-session>
+  <section class="card dash-session" data-session data-expert>
     <div class="card-head">
       <svg class="icon" aria-hidden="true"><use href="#i-activity"/></svg>
       <h2>Session</h2>
@@ -237,13 +273,13 @@
   <section class="card dash-history" data-history>
     <div class="card-head">
       <svg class="icon" aria-hidden="true"><use href="#i-image"/></svg>
-      <h2>Historical Detection Log</h2>
-      <div class="card-head-actions">
+      <h2><span data-expert>Historical Detection Log</span><span data-simple data-word="photos.title">Recent photos</span></h2>
+      <div class="card-head-actions" data-expert>
         <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
       </div>
     </div>
     <div class="card-body">
-      {% include "_partials/filters.html" %}
+      <div data-expert>{% include "_partials/filters.html" %}</div>
       <div class="gallery" data-gallery></div>
       <div class="pager" data-pager></div>
     </div>
