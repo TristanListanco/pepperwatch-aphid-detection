@@ -4,7 +4,10 @@ Documentation=https://github.com/pepperwatch
 # The broker is required: telemetry and the control commands both ride MQTT.
 # The worker tolerates it being down (publishes are dropped, not raised), but
 # ordering the start correctly avoids a pointless reconnect storm at boot.
-After=network.target mosquitto.service
+# After the Wi-Fi decision: loading the model and streaming the webcams over
+# USB slowed the boot-time join to a saved network until the hotspot won, so
+# a USB camera had to be unplugged for the Pi to join another network.
+After=network.target mosquitto.service pepperwatch-ap.service
 Wants=mosquitto.service
 PartOf=pepperwatch.target
 # Never give up. The worker itself waits out a missing camera or a startup
@@ -13,6 +16,9 @@ PartOf=pepperwatch.target
 StartLimitIntervalSec=0
 
 [Service]
+# Inference takes every core it is given; the network, the broker and the
+# dashboard come first.
+Nice=10
 Type=simple
 User=pepperwatch
 Group=pepperwatch

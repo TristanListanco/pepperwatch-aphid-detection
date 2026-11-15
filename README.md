@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  483 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  487 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -1218,7 +1218,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 483 tests (~1 min)
+.venv/bin/python -m pytest               # 487 tests (~1 min)
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1271,7 +1271,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 483 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 487 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1358,6 +1358,7 @@ the manuscript assumes) with `scripts/finetune_model.py`'s training settings.
 | No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |
 | `PepperWatch` network not visible | `journalctl -u pepperwatch-ap -b` says what it chose: "joined saved network" means the hotspot is off by design (see above). Otherwise check `/etc/pepperwatch/ap.psk` exists (≥ 8 chars) and the Wi-Fi country is set (`sudo raspi-config`, Localisation Options) |
+| The Pi joins another Wi-Fi network only with the USB camera unplugged | Update (`update.sh`). The detector now starts after the Wi-Fi decision, at lower CPU priority; at boot the hotspot script lets NetworkManager finish its own join before scanning, and scans up to three times for a saved network; the two-minute check leaves a connection being made alone. If it still happens, it's radio or power: plug webcams into the black USB 2 ports, or move them away from the Pi on a short extension (USB 3 traffic jams 2.4 GHz Wi-Fi), prefer a 5 GHz network, and check `vcgencmd get_throttled` (`0x0` = power is fine). `journalctl -u pepperwatch-ap -u NetworkManager -b` shows what happened |
 | `PepperWatch` keeps dropping and coming back, with no camera plugged in | Fixed by `update.sh` (it reinstalls the units). The worker used to exit with no camera; systemd restarted it every 5 s, and through the target restarted the hotspot each time. It now waits for a camera, and the dashboard says *No camera is connected* |
 | QR code or password won't join | A hotspot set up before this fix still has NetworkManager's security defaults. After `update.sh`, reboot (or `sudo systemctl restart pepperwatch-ap`) to rebuild it, then forget `PepperWatch` on the phone and join again |
 | Lost SSH when the system started | The AP took over `wlan0`. Use Ethernet, or join `PepperWatch` and SSH to `192.168.4.1` |

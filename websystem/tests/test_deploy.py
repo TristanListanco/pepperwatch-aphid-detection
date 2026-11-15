@@ -217,7 +217,11 @@ case "$*" in
   "-g 802-11-wireless.mode connection show $FAKE_SAVED") echo infrastructure ;;
   "-g connection.autoconnect connection show $FAKE_SAVED") echo yes ;;
   "-g 802-11-wireless.ssid connection show $FAKE_SAVED") echo "$FAKE_SAVED" ;;
-  "-t -f SSID device wifi list ifname wlan0 --rescan yes") printf '%s\n' $FAKE_VISIBLE ;;
+  "-t -f SSID device wifi list ifname wlan0 --rescan yes")
+    scans=$(( $(cat "$FAKE_LOG.scans" 2>/dev/null || echo 0) + 1 ))
+    echo "$scans" > "$FAKE_LOG.scans"
+    eval "seen=\${FAKE_VISIBLE_$scans-\$FAKE_VISIBLE}"  # FAKE_VISIBLE_2: what the 2nd scan sees
+    printf '%s\n' $seen ;;
   "-g NAME connection show") echo "${FAKE_NAMES-pepperwatch-ap}" ;;
   "--wait 20 connection up pepperwatch-ap")
     tries=$(( $(cat "$FAKE_LOG.tries" 2>/dev/null || echo 0) + 1 ))
@@ -244,6 +248,8 @@ def run_setup_ap(
     (bin_dir / "nmcli").chmod(0o755)
     (bin_dir / "sleep").write_text("#!/bin/sh\n")  # the retries need not wait here
     (bin_dir / "sleep").chmod(0o755)
+    (bin_dir / "nm-online").write_text('#!/bin/sh\necho "nm-online $*" >> "$FAKE_LOG"\n')
+    (bin_dir / "nm-online").chmod(0o755)
     log = tmp_path / "calls.log"
     env = {
         **os.environ,
@@ -487,3 +493,32 @@ def test_install_sets_a_wifi_country_when_none_is_set() -> None:
     script = (DEPLOY / "install.sh").read_text()
     assert "raspi-config nonint get_wifi_country" in script
     assert 'raspi-config nonint do_wifi_country "${PW_WIFI_COUNTRY:-PH}"' in script
+
+
+def test_at_boot_networkmanager_finishes_its_own_join_before_any_scan(tmp_path) -> None:
+    """A scan while NetworkManager is still joining can abort the join; a busy
+    boot (a USB camera and the model loading) made the hotspot win that race."""
+    calls = run_setup_ap(tmp_path, saved="FarmWiFi", visible="FarmWiFi")
+    assert calls.index("nm-online -s") < calls.index("device wifi list")
+    (tmp_path / "check").mkdir()
+    assert "nm-online" not in run_setup_ap(tmp_path / "check", args=("--if-offline",), state="100 (connected)")
+
+
+def test_a_saved_network_missed_by_the_first_scan_is_still_joined(tmp_path) -> None:
+    calls = run_setup_ap(tmp_path, saved="FarmWiFi", visible_1="Neighbour", visible="Neighbour FarmWiFi")
+    assert calls.count("device wifi list") == 2
+    assert "connection up FarmWiFi ifname wlan0" in calls
+    assert "connection up pepperwatch-ap" not in calls
+
+
+def test_the_periodic_check_leaves_a_connection_being_made_alone(tmp_path) -> None:
+    """Someone picking a network from the desktop's Wi-Fi menu: no hotspot over it."""
+    calls = run_setup_ap(tmp_path, args=("--if-offline",), saved="FarmWiFi",
+                         state="70 (connecting (getting IP configuration))")
+    assert "connection up" not in calls and "connection down" not in calls
+
+
+def test_the_detector_starts_after_the_wifi_decision_and_yields_the_cpu() -> None:
+    section = unit("pepperwatch-worker.service")
+    assert "pepperwatch-ap.service" in section["Unit"]["After"]
+    assert int(section["Service"]["Nice"]) > 0

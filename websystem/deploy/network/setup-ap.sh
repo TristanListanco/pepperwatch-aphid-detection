@@ -65,6 +65,11 @@ fi
 if [ "${1:-}" = "--if-offline" ]; then
   state="$(nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null || true)"
   current="$(nmcli -g GENERAL.CONNECTION device show "$IFACE" 2>/dev/null || true)"
+  case "${state%% *}" in
+    # Joining a network right now (40 preparing .. 90 secondaries), perhaps
+    # one picked from the desktop's Wi-Fi menu: let it finish.
+    40|50|60|70|80|90) exit 0 ;;
+  esac
   if [ "${state%% *}" = "100" ] && { [ ! -e "$ALWAYS_FLAG" ] || [ "$current" = "$CON_NAME" ]; }; then
     exit 0
   fi
@@ -72,6 +77,13 @@ if [ "${1:-}" = "--if-offline" ]; then
 fi
 
 # -- a saved network, or the hotspot -------------------------------------------
+# At boot, let NetworkManager finish starting first. It joins a saved network
+# by itself, and a scan started while it is still joining can abort the join;
+# a busy boot (the camera worker loading its model, a webcam streaming) makes
+# the join slower, and the hotspot used to win that race.
+if [ "${1:-}" != "--if-offline" ] && command -v nm-online >/dev/null 2>&1; then
+  nm-online -s -q -t "${PW_AP_SETTLE_S:-60}" >/dev/null 2>&1 || true
+fi
 # One radio, one job. If a saved Wi-Fi network is in range (added from the
 # desktop Wi-Fi menu, `nmcli device wifi connect`, or Raspberry Pi Imager), join
 # it and leave the hotspot off: the dashboard is then on that network. If none
@@ -112,10 +124,21 @@ if [ "${#saved[@]}" -gt 0 ]; then
 fi
 
 if [ -z "$joined" ] && [ "${#saved[@]}" -gt 0 ]; then
+  wanted=()
+  for name in "${saved[@]}"; do
+    wanted+=("$(nmcli -g 802-11-wireless.ssid connection show "$name")")
+  done
+  # Up to three scans until a saved network shows up: right after boot the
+  # radio is still settling, and one scan can miss a weak network, more so
+  # with USB traffic nearby.
   visible=""
-  for _ in 1 2 3; do  # the radio can still be settling right after boot
+  for _ in 1 2 3; do
     visible="$(nmcli -t -f SSID device wifi list ifname "$IFACE" --rescan yes 2>/dev/null || true)"
-    if [ -n "$visible" ]; then break; fi
+    seen=""
+    for ssid in "${wanted[@]}"; do
+      if printf '%s\n' "$visible" | grep -Fx -- "$ssid" >/dev/null; then seen=1; fi
+    done
+    if [ -n "$seen" ]; then break; fi
     sleep 3
   done
   for name in "${saved[@]}"; do
