@@ -433,11 +433,14 @@ class Database:
                 """,
                 [previous_from, current_from, *site_params],
             ).fetchone()
+            # CROSS JOIN keeps the events outer: only the weeks' boxes are read.
+            # As a plain JOIN SQLite starts from idx_box_class instead, every
+            # aphid box of the season (~470 ms at 1.7M boxes, every 30 s per phone).
             damaged_before = conn.execute(
                 f"""
                 SELECT COUNT(*) AS n
-                FROM bounding_box b
-                JOIN detection_event e ON e.id = b.event_id
+                FROM detection_event e
+                CROSS JOIN bounding_box b ON b.event_id = e.id
                 WHERE b.class_name = 'aphid_damage' AND e.synthetic = 0
                   AND e.captured_at >= ? AND e.captured_at < ?{(' AND e.site = ?' if site else '')}
                 """,
@@ -446,8 +449,8 @@ class Database:
             distribution = conn.execute(
                 f"""
                 SELECT b.class_name AS class_name, COUNT(*) AS n
-                FROM bounding_box b
-                JOIN detection_event e ON e.id = b.event_id
+                FROM detection_event e
+                CROSS JOIN bounding_box b ON b.event_id = e.id
                 WHERE e.captured_at >= ? AND e.synthetic = 0{(' AND e.site = ?' if site else '')}
                 GROUP BY b.class_name
                 """,

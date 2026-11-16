@@ -182,13 +182,41 @@ def test_expected_indices_exist(db: Database) -> None:
             )
         }
     assert {
-        "idx_event_captured_at",
+        "idx_event_recent",
         "idx_event_archived",
         "idx_event_severity",
         "idx_box_event",
         "idx_box_class",
         "idx_log_logged_at",
     } <= names
+
+
+def test_dashboard_queries_read_only_what_they_show(db: Database) -> None:
+    """At a season's size a scan costs the Pi about a second, per phone, per refresh.
+
+    The gallery's newest-first page must walk an index, not sort the table, and
+    the weekly box counts must start from the week's events, not every box.
+    """
+    with db.read() as conn:
+        def plan(sql: str) -> str:
+            nulls = [None] * sql.count("?")  # Python 3.10 traces SQL unexpanded
+            return " / ".join(row[3] for row in conn.execute("EXPLAIN QUERY PLAN " + sql, nulls))
+
+        newest = plan("SELECT * FROM detection_event ORDER BY captured_at DESC, id DESC LIMIT 1")
+        assert "idx_event_recent" in newest and "TEMP B-TREE" not in newest, newest
+
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        try:
+            db.weekly_stats()
+        finally:
+            conn.set_trace_callback(None)
+    joins = [sql for sql in statements if "bounding_box" in sql]
+    assert len(joins) == 2
+    with db.read() as conn:
+        for sql in joins:
+            first = plan(sql).split(" / ")[0]
+            assert first.startswith("SEARCH e USING INDEX idx_event_recent"), first
 
 
 def test_writer_completes_without_unhandled_lock_errors(concurrent_results) -> None:

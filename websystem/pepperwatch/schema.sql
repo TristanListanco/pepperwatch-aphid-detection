@@ -70,8 +70,12 @@ CREATE TABLE IF NOT EXISTS detection_event (
     CHECK (max_confidence IS NULL OR (max_confidence >= 0.0 AND max_confidence <= 1.0))
 );
 
--- The gallery and the KPI tiles both read newest-first over a date range.
-CREATE INDEX IF NOT EXISTS idx_event_captured_at ON detection_event (captured_at DESC);
+-- The gallery and the KPI tiles both read newest-first over a date range. id
+-- is in the index because the gallery breaks ties by it: without it SQLite
+-- sorts the whole table for each page (400 ms at a season's 350k events, for
+-- every phone, on every new photo). Replaces the old captured_at-only index.
+DROP INDEX IF EXISTS idx_event_captured_at;
+CREATE INDEX IF NOT EXISTS idx_event_recent ON detection_event (captured_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_event_archived    ON detection_event (archived, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_severity    ON detection_event (severity, captured_at DESC);
 -- Makes the worker's idempotent upsert a lookup rather than a scan.
