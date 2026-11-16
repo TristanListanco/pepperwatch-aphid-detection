@@ -64,10 +64,10 @@ pepperwatch/
   hal/           discovery.py (CSI + USB cameras), pi.py (drivers, telemetry),
                  power.py (Pi 5 PMIC, throttle flags, fan)
   detect/        postprocess.py, hailo_detector.py, onnx_detector.py, stub_detector.py
-  web/           Flask app, ES6 modules, Jinja templates
+  web/           Flask app, Jinja templates, TypeScript (ts/) compiled to ES modules (static/js/)
 deploy/          install.sh, update.sh, systemd units, mosquitto conf, NetworkManager AP
 scripts/         bench_fps.py (--accelerator cpu|hailo), finetune_model.py (teach the model what isn't a leaf), check_js.sh
-tests/           487 hardware-free unit and API tests, plus a worker integration test
+tests/           488 hardware-free unit and API tests, plus a worker integration test
 ```
 
 ## Configuration
@@ -88,8 +88,9 @@ The suite needs no camera, HAT or Pi, so it runs on any machine with Python
 3.11+, and CI runs it on x64 and arm64 for every push:
 
 ```bash
-.venv/bin/python -m pytest              # 487 tests, ~1 min
-./scripts/check_js.sh                   # ES module syntax (there is no build step)
+.venv/bin/python -m pytest              # 488 tests, ~1 min
+npx --yes -p typescript@7.0.2 tsc      # type-check web/ts, compile to static/js (commit both)
+./scripts/check_js.sh                   # the compiled modules parse as ES modules
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
 # With a broker running (mosquitto -d -p 18830), the worker end to end:

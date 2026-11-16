@@ -1,0 +1,221 @@
+// The Hardware list: what this session is running on, and whether each part
+// is healthy.
+//
+// Built from three feeds: the session record (board, AI HAT+, every camera
+// found), live telemetry (throttling, the power source), and the worker's
+// liveness. Each device gets a status dot and, when something needs
+// attention, a pill saying what. Names come from the hardware itself, so they
+// are only ever set as text.
+
+import type { SessionMeta, Telemetry, WorkerState } from './api.js';
+
+const ICON_WARN = 'i-triangle-alert';
+
+type Status = 'ok' | 'warn' | 'off' | 'idle';
+
+interface Device {
+  status: Status;
+  name: string;
+  meta: string;
+  pill?: { kind: 'warn' | 'off'; text: string } | null;
+}
+
+export class DeviceList {
+  private readonly list: HTMLElement;
+  private session: SessionMeta | null = null;
+  private telemetry: Telemetry | null = null;
+  private worker: WorkerState | null = null;
+  private camerasOn: boolean[] = [];
+  private camerasConnected: boolean[] = [];
+  private camerasStalled: boolean[] = [];
+  private signature = '';
+
+  constructor(list: HTMLElement) {
+    this.list = list;
+  }
+
+  setSession(meta: SessionMeta | null | undefined): void {
+    if (meta && meta.session_id) this.session = meta;
+    this.render();
+  }
+
+  setTelemetry(telemetry: Telemetry): void {
+    this.telemetry = telemetry;
+    this.render();
+  }
+
+  // From the pipeline telemetry: a camera turned off on the live card, or
+  // unplugged.
+  setCameras(on?: boolean[], connected?: boolean[], stalled?: boolean[]): void {
+    this.camerasOn = on || [];
+    this.camerasConnected = connected || [];
+    this.camerasStalled = stalled || [];
+    this.render();
+  }
+
+  setWorker(state: WorkerState): void {
+    this.worker = state;
+    this.render();
+  }
+
+  private render(): void {
+    const devices = this.devices();
+    // Telemetry arrives every second; rebuild only when something shown
+    // has changed, so the list does not flicker.
+    const signature = JSON.stringify(devices);
+    if (signature === this.signature) return;
+    this.signature = signature;
+    this.list.replaceChildren(...devices.map(deviceItem));
+  }
+
+  private devices(): Device[] {
+    const meta = this.session;
+    const telemetry: Telemetry = this.telemetry || {};
+    const alive = this.worker ? this.worker.alive === true : null;
+
+    if (!meta) {
+      return [{
+        status: alive === false ? 'off' : 'idle',
+        name: alive === false ? 'Detector offline' : 'Waiting for the detector',
+        meta: 'Listed when a session starts',
+      }];
+    }
+
+    const accel = meta.accelerator || {};
+    const hailo = accel.hailo || {};
+    const host = meta.host || {};
+    const camera = meta.camera || {};
+    const out: Device[] = [];
+
+    // The board. Throttling is the thing worth flagging here.
+    const board: Device = {
+      status: alive === false ? 'off' : telemetry.throttled ? 'warn' : 'ok',
+      name: shortBoard(host.board) || 'Single-board computer',
+      meta: [
+        host.cpu,
+        ram(host.ram_mb),
+        host.board_tier ? `${host.board_tier} tier` : null,
+        accel.kind === 'cpu' ? 'runs inference' : null,
+      ].filter(Boolean).join(' · '),
+    };
+    if (alive === false) board.pill = { kind: 'off', text: 'Detector offline' };
+    else if (telemetry.throttled) {
+      board.pill = { kind: 'warn', text: `Throttled: ${telemetry.throttle_detail || 'check cooling'}` };
+    }
+    out.push(board);
+
+    // The AI HAT+, if one is on the bus; why it is idle, if it is.
+    if (hailo.present) {
+      const used = accel.kind === 'hailo';
+      out.push({
+        status: used ? 'ok' : 'warn',
+        name: `AI HAT+ ${hailo.name || ''}`.trim(),
+        meta: [hailo.pcie_link ? `PCIe ${hailo.pcie_link}` : null, used ? 'runs inference' : 'idle']
+          .filter(Boolean).join(' · '),
+        pill: used ? null : { kind: 'warn', text: `Not used: ${accel.reason}` },
+      });
+    }
+
+    // Every camera found; those in use are green, numbered as on the live
+    // card when there are several.
+    const found = camera.found && camera.found.length ? camera.found : [camera];
+    const inUse = meta.cameras && meta.cameras.length ? meta.cameras : [camera];
+    found.forEach((candidate) => {
+      const position = inUse.findIndex(
+        (used) => used.kind === candidate.kind && String(used.device) === String(candidate.device),
+      );
+      const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : String(candidate.device ?? '');
+      const off = position >= 0 && this.camerasOn[position] === false;
+      const unplugged = position >= 0 && this.camerasConnected[position] === false;
+      let role = 'standby';
+      if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
+      if (off && !unplugged) role += ', turned off';
+      let status: Status = position >= 0 && !off ? 'ok' : 'idle';
+      const stalled = position >= 0 && !unplugged && (this.camerasStalled || [])[position] === true;
+      if (unplugged) status = 'off';
+      else if (stalled) status = 'warn';
+      let pill: Device['pill'] = null;
+      if (unplugged) pill = { kind: 'off', text: 'Unplugged: plug it back in' };
+      else if (stalled) pill = { kind: 'warn', text: 'No picture: check the cable' };
+      const model = candidate.model || 'Camera';
+      const twins = found.filter((other) => (other.model || 'Camera') === model).length > 1;
+      const port = candidate.kind === 'csi' ? `CSI ${candidate.device}` : String(candidate.device).replace('/dev/', '');
+      out.push({
+        status,
+        name: twins ? `${model} (${port})` : model,
+        meta: [where, role].filter(Boolean).join(' · '),
+        pill,
+      });
+    });
+
+    // Where the power figure comes from.
+    if (telemetry.power_source === 'ina219') {
+      out.push({ status: 'ok', name: 'INA219 power monitor', meta: 'Whole-device power · I²C' });
+    } else if (telemetry.power_source === 'pmic') {
+      out.push({
+        status: 'ok',
+        name: 'Pi 5 PMIC',
+        meta: 'Power from board rails only',
+        pill: { kind: 'warn', text: 'Fit an INA219 for whole-device power' },
+      });
+    }
+
+    return out;
+  }
+}
+
+function deviceItem(device: Device): HTMLLIElement {
+  const item = document.createElement('li');
+  item.className = 'device';
+
+  const dot = document.createElement('span');
+  dot.className = `dot is-${device.status}`;
+  dot.setAttribute('aria-hidden', 'true');
+
+  const body = document.createElement('div');
+  const name = document.createElement('div');
+  name.className = 'device-name';
+  name.textContent = device.name;
+  const meta = document.createElement('div');
+  meta.className = 'device-meta';
+  meta.textContent = device.meta;
+  body.append(name, meta);
+
+  if (device.pill) {
+    const pill = document.createElement('div');
+    pill.className = `pill is-${device.pill.kind}`;
+    pill.append(icon(ICON_WARN), document.createTextNode(device.pill.text));
+    body.append(pill);
+  }
+
+  // Status as words too, so it does not rest on the dot's colour alone.
+  const status = document.createElement('span');
+  status.className = 'sr-only';
+  const words: Record<Status, string> = { ok: 'working', warn: 'needs attention', off: 'offline', idle: 'not in use' };
+  status.textContent = words[device.status];
+  body.append(status);
+
+  item.append(dot, body);
+  return item;
+}
+
+function icon(id: string): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'icon');
+  svg.setAttribute('aria-hidden', 'true');
+  const use = document.createElementNS(ns, 'use');
+  use.setAttribute('href', `#${id}`);
+  svg.append(use);
+  return svg;
+}
+
+function ram(mb: number | undefined): string | null {
+  if (!mb) return null;
+  return mb < 1024 ? `${Math.round(mb)} MB RAM` : `${Math.round(mb / 1024)} GB RAM`;
+}
+
+// "Raspberry Pi 5 Model B Rev 1.1" -> "Raspberry Pi 5 Model B".
+function shortBoard(model: string | undefined): string {
+  return model ? model.replace(/\s+Rev\s+[\d.]+$/i, '') : '';
+}

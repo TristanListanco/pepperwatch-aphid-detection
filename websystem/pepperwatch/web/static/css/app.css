@@ -853,12 +853,36 @@ button {
 
 /* The one saturated tile: field health. Green while the crop is clean,
  * shifting with severity so the colour itself carries the reading. Literal
- * colours, not tokens: it looks the same in the dark theme, white on it 5:1. */
+ * colours, not tokens: it looks the same in the dark theme, white on it 5:1.
+ *
+ * The colours are registered properties so a new reading fades from the old
+ * colour to the new one, and the change is seen rather than missed. Browsers
+ * without @property switch at once. farm.js and kpis.js land the first reading
+ * without the fade, so the page's placeholder green never shows first. */
+@property --health-from {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #15803d;
+}
+
+@property --health-to {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #116632;
+}
+
+@property --health-glow {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: rgba(17, 102, 50, 0.85);
+}
+
 .tile.is-hero,
 .farm-status {
   color: #fff;
-  background: linear-gradient(150deg, #15803d 0%, #116632 100%);
-  box-shadow: 0 16px 30px -18px rgba(17, 102, 50, 0.85);
+  background: linear-gradient(150deg, var(--health-from) 0%, var(--health-to) 100%);
+  box-shadow: 0 16px 30px -18px var(--health-glow);
+  transition: --health-from 0.6s ease, --health-to 0.6s ease, --health-glow 0.6s ease;
 }
 
 .tile.is-hero .icon,
@@ -869,8 +893,9 @@ button {
 
 .tile.is-hero.is-low,
 .farm-status.is-low {
-  background: linear-gradient(150deg, #4d7c0f 0%, #3b5f0b 100%);
-  box-shadow: 0 16px 30px -18px rgba(59, 95, 11, 0.85);
+  --health-from: #4d7c0f;
+  --health-to: #3b5f0b;
+  --health-glow: rgba(59, 95, 11, 0.85);
 }
 
 .tile.is-hero.is-low .badge {
@@ -879,8 +904,9 @@ button {
 
 .tile.is-hero.is-moderate,
 .farm-status.is-moderate {
-  background: linear-gradient(150deg, #a16207 0%, #8a5300 100%);
-  box-shadow: 0 16px 30px -18px rgba(138, 83, 0, 0.85);
+  --health-from: #a16207;
+  --health-to: #8a5300;
+  --health-glow: rgba(138, 83, 0, 0.85);
 }
 
 .tile.is-hero.is-moderate .badge {
@@ -889,8 +915,9 @@ button {
 
 .tile.is-hero.is-high,
 .farm-status.is-high {
-  background: linear-gradient(150deg, #b42318 0%, #8f1b12 100%);
-  box-shadow: 0 16px 30px -18px rgba(143, 27, 18, 0.85);
+  --health-from: #b42318;
+  --health-to: #8f1b12;
+  --health-glow: rgba(143, 27, 18, 0.85);
 }
 
 .tile.is-hero.is-high .badge {
@@ -1665,12 +1692,159 @@ dialog img {
 [data-kpi-delta].is-up { color: var(--amber-ink); }
 [data-kpi-delta].is-down { color: var(--green-deep); }
 
+/* -- motion -----------------------------------------------------------------
+ * Quiet: one thing moves on its own, the live dot's pulse. Everything else
+ * moves only to show a change: a message arriving, a camera expanding, a
+ * reading going stale. */
+
+/* The watchman's pulse: while the detector runs, its dot sends out a soft
+ * ring, so "Watching" reads as alive and not as a printed label. It stops,
+ * and the dot turns red, the moment the detector does. */
+[data-worker-chip] .dot {
+  position: relative;
+}
+
+[data-worker-chip].is-live .dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--dot-ok);
+  animation: watch-pulse 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@keyframes watch-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+
+  70%,
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+/* A message settles into place instead of popping in: banners drop in from
+ * above, toasts rise from the tab bar. `translate`, not `transform`, so the
+ * toast keeps its own centring transform. */
+.banner:not([hidden]) {
+  animation: arrive 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-toast] {
+  --arrive-from: 10px;
+}
+
+/* Faster out than in: the message is already read. */
+[data-toast].is-leaving {
+  animation: leave 0.16s ease-in forwards;
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    translate: 0 var(--arrive-from, -6px);
+  }
+}
+
+@keyframes leave {
+  to {
+    opacity: 0;
+    translate: 0 6px;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A scan opens from where the eye already is; closing is instant. */
+dialog[open] {
+  animation: dialog-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+dialog[open]::backdrop {
+  animation: fade-in 0.3s ease-out;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    scale: 0.97;
+    translate: 0 8px;
+  }
+}
+
+/* A reading going stale fades rather than blinking grey, so the eye catches
+ * that it changed. */
+.tile-figure,
+.tile .meter {
+  transition: opacity 0.4s ease;
+}
+
+.viewport img {
+  transition: filter 0.6s ease;
+}
+
+/* Expanding a camera (main.js focusCamera): it grows from its place in the
+ * grid to the whole card and shrinks back, so it is clear which one it was.
+ * Each camera carries its own view-transition-name. Anything in both states
+ * (the moving camera, and the page around it) is drawn from its new picture
+ * alone, so a label never shows twice mid-move and the page changes at once.
+ * Only a camera appearing or leaving (:only-child) fades. Chrome 157 matches
+ * :only-child here but not :not(:only-child), hence the override order. */
+::view-transition-group(*) {
+  animation-duration: 0.36s;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+::view-transition-old(*) {
+  animation: none;
+  opacity: 0;
+}
+
+::view-transition-new(*) {
+  animation: none;
+}
+
+::view-transition-old(*):only-child {
+  opacity: 1;
+  animation: fade-out 0.2s ease-in both;
+}
+
+::view-transition-new(*):only-child {
+  animation: fade-in 0.36s ease-out both;
+}
+
+@keyframes fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     transition: none !important;
     animation: none !important;
+  }
+
+  /* Without the movement, a message, the dialog and the health colour still
+   * fade in place: the fade is what says something changed. */
+  .banner:not([hidden]),
+  dialog[open],
+  dialog[open]::backdrop {
+    animation: fade-in 0.2s ease-out !important;
+  }
+
+  .tile.is-hero,
+  .farm-status {
+    transition: --health-from 0.6s ease, --health-to 0.6s ease, --health-glow 0.6s ease !important;
   }
 }
 

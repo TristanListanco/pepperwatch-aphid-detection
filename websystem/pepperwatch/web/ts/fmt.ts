@@ -1,0 +1,109 @@
+// Formatting helpers. Locale-aware where it matters, deliberately plain where
+// it does not: this is read on a phone in a pepper row, not in an office.
+
+export const SEVERITY_LABELS: Record<string, string> = {
+  none: 'None',
+  low: 'Low',
+  moderate: 'Moderate',
+  high: 'High',
+};
+
+export const CLASS_LABELS: Record<string, string> = {
+  healthy: 'Healthy',
+  aphid_damage: 'Aphid Damage',
+};
+
+// Matches render.py's COLOUR_* constants, so a box drawn over the live feed is
+// the same colour as one baked into an archived JPEG. Tuned to stand out on a
+// camera image.
+export const CLASS_COLOURS: Record<string, string> = {
+  healthy: '#5cbe6e',
+  aphid_damage: '#eb8228',
+};
+
+export function classLabel(name: string): string {
+  return CLASS_LABELS[name] || name;
+}
+
+export function severityLabel(name: string | null | undefined): string {
+  return (name && SEVERITY_LABELS[name]) || name || '—';
+}
+
+export function classColour(name: string): string {
+  return CLASS_COLOURS[name] || '#9aa8a4';
+}
+
+type Figure = number | null | undefined;
+
+export function pct(value: Figure, digits = 0): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return `${(value * 100).toFixed(digits)}%`;
+}
+
+export function num(value: Figure, digits = 0): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return Number(value).toFixed(digits);
+}
+
+export function signedPct(value: Figure, digits = 0): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  const fixed = Math.abs(value).toFixed(digits);
+  // A true minus, and no sign at all on a value that rounds to zero.
+  const sign = Number(fixed) === 0 ? '' : value > 0 ? '+' : '\u2212';
+  return `${sign}${fixed}%`;
+}
+
+export function temp(celsius: Figure): string {
+  return celsius === null || celsius === undefined ? '—' : `${Number(celsius).toFixed(1)}°C`;
+}
+
+// Short local time. The Pi may have no RTC battery, in which case this shows a
+// nonsense date -- which is itself useful information to see on screen.
+export function clockTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+export function dateTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function relative(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '—';
+  const seconds = Math.max(0, (Date.now() - then) / 1000);
+  if (seconds < 60) return `${Math.round(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h ago`;
+  return `${Math.round(seconds / 86400)}d ago`;
+}
+
+export function bytes(value: Figure): string {
+  if (!value) return '—';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+// What went wrong, for a toast or a status line: a caught value is not
+// always an Error.
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

@@ -1,0 +1,27 @@
+{
+  // The dashboard is written in TypeScript (pepperwatch/web/ts) and compiled,
+  // file for file with no bundler, into the ES modules the Pi serves
+  // (pepperwatch/web/static/js). The compiled files are committed, so the Pi
+  // needs no Node and no build step; CI fails if they are out of date.
+  //
+  //   npx --yes -p typescript@7.0.2 tsc
+  "compilerOptions": {
+    // ES2020 (`??`, `?.`) was already the newest the hand-written modules
+    // used, so phones that ran them run this too: Chrome 80, Safari 13.1.
+    "target": "ES2020",
+    "module": "ES2020",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": [],
+    "rootDir": "pepperwatch/web/ts",
+    "outDir": "pepperwatch/web/static/js",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "verbatimModuleSyntax": true,
+    "noEmitOnError": true,
+    "newLine": "lf"
+  },
+  "include": ["pepperwatch/web/ts"]
+}

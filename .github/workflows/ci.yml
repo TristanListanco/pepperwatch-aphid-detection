@@ -114,6 +114,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Dashboard TypeScript type-checks, and static/js is its output
+        # The Pi serves the committed static/js (no Node on the Pi), so a .ts
+        # change that was never recompiled would never reach a phone.
+        run: |
+          npx --yes -p typescript@7.0.2 tsc
+          if [ -n "$(git status --porcelain -- pepperwatch/web/static/js)" ]; then
+            git status --short -- pepperwatch/web/static/js
+            git diff -- pepperwatch/web/static/js | head -60
+            echo "::error::static/js is out of date: run tsc in websystem/ and commit the output"
+            exit 1
+          fi
+
       - name: Dashboard modules parse as ES modules
         run: bash scripts/check_js.sh
 

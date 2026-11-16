@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  487 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  488 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -327,15 +327,19 @@ Shared memory uses two slots behind a seqlock: the writer fills the idle slot
 and then flips the header, and readers retry if it changed while they copied. No
 lock is involved, so a slow reader can never block the inference loop.
 
-#### 7. The dashboard (`web/static/js/`)
+#### 7. The dashboard (`web/ts/`, served from `web/static/js/`)
 
-The page is plain ES modules with no build step and no CDN; everything is served
-from the Pi.
+The page is written in TypeScript (`web/ts/`, strict) and compiled file for file,
+with no bundler, into the plain ES modules in `web/static/js/` that the Pi serves.
+The compiled files are committed, so the Pi needs no Node and no build step, and
+nothing loads from a CDN. After editing a `.ts` file, run
+`npx --yes -p typescript@7.0.2 tsc` in `websystem/` and commit both; CI fails if
+they differ. The API's payloads are typed in `web/ts/api.d.ts`.
 
-- **`bus.js`** opens the SSE connection. If it drops (a phone walking out of
+- **`bus.ts`** opens the SSE connection. If it drops (a phone walking out of
   range), it falls back to polling `/api/telemetry`, `/api/pipeline` and
   `/api/detections/latest` every 2 s and reconnects when it can.
-- **`liveview.js`** shows the clean frame and draws the latest boxes on a
+- **`liveview.ts`** shows the clean frame and draws the latest boxes on a
   `<canvas>` overlay, scaled to the phone's screen. Boxes are stored normalised
   (0–1), so they line up at any resolution.
 - Panels update from the same event stream: KPI tiles, history gallery,
@@ -1070,8 +1074,9 @@ The dashboard has two views, chosen per phone under **Settings → View**:
   No frame rates, latency, power, hardware or settings jargon.
 - **Full: for agricultural experts.** Everything below.
 
-The farmer view's own words live in `static/js/words.js`; the Cebuano is a
-draft and should be checked by a native speaker before field use.
+The farmer view's own words live in `web/ts/words.ts`; the compiler refuses an
+English phrase with no Cebuano one. The Cebuano is a draft and should be checked
+by a native speaker before field use.
 
 | Page | Contents (full view) |
 |---|---|
@@ -1218,7 +1223,8 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 487 tests (~1 min)
+.venv/bin/python -m pytest               # 488 tests (~1 min)
+npx --yes -p typescript@7.0.2 tsc       # type-check web/ts and compile it into static/js
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
 .venv/bin/ruff check pepperwatch tests scripts # Python: unused imports, undefined names
@@ -1271,9 +1277,9 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 487 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 488 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
-| **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
+| **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; the dashboard's TypeScript type-checks (`tsconfig.json`, strict) and the committed `static/js` is exactly its output; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
 
 CI checks out only `websystem/` (a sparse, blob-less checkout), so the 4 GB

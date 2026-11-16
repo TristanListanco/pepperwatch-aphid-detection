@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Syntax-check the ES6 modules.
+# Syntax-check the ES modules the Pi serves.
 #
-# There is no build step (§3.3.2.2 rules out a bundler), so nothing would
-# otherwise catch a syntax error before a browser hit it. Note the .mjs copy:
+# They are compiled from pepperwatch/web/ts by tsc (tsconfig.json), file for
+# file with no bundler, and committed; this checks the committed output parses
+# as modules, as a browser will load it. Note the .mjs copy:
 # `node --check` on a .js file parses it as a CommonJS script and silently
 # accepts things that are invalid in a module, so checking the files in place
 # gives a false pass.

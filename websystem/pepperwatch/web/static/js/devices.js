@@ -6,201 +6,188 @@
 // liveness. Each device gets a status dot and, when something needs
 // attention, a pill saying what. Names come from the hardware itself, so they
 // are only ever set as text.
-
 const ICON_WARN = 'i-triangle-alert';
-
 export class DeviceList {
-  constructor(list) {
-    this.list = list;
-    this.session = null;
-    this.telemetry = null;
-    this.worker = null;
-    this.camerasOn = [];
-    this.camerasConnected = [];
-    this.signature = '';
-  }
-
-  setSession(meta) {
-    if (meta && meta.session_id) this.session = meta;
-    this.render();
-  }
-
-  setTelemetry(telemetry) {
-    this.telemetry = telemetry;
-    this.render();
-  }
-
-  // From the pipeline telemetry: a camera turned off on the live card, or
-  // unplugged.
-  setCameras(on, connected, stalled) {
-    this.camerasOn = on || [];
-    this.camerasConnected = connected || [];
-    this.camerasStalled = stalled || [];
-    this.render();
-  }
-
-  setWorker(state) {
-    this.worker = state;
-    this.render();
-  }
-
-  render() {
-    const devices = this.devices();
-    // Telemetry arrives every second; rebuild only when something shown
-    // has changed, so the list does not flicker.
-    const signature = JSON.stringify(devices);
-    if (signature === this.signature) return;
-    this.signature = signature;
-    this.list.replaceChildren(...devices.map(deviceItem));
-  }
-
-  devices() {
-    const meta = this.session;
-    const telemetry = this.telemetry || {};
-    const alive = this.worker ? this.worker.alive === true : null;
-
-    if (!meta) {
-      return [{
-        status: alive === false ? 'off' : 'idle',
-        name: alive === false ? 'Detector offline' : 'Waiting for the detector',
-        meta: 'Listed when a session starts',
-      }];
+    constructor(list) {
+        this.session = null;
+        this.telemetry = null;
+        this.worker = null;
+        this.camerasOn = [];
+        this.camerasConnected = [];
+        this.camerasStalled = [];
+        this.signature = '';
+        this.list = list;
     }
-
-    const accel = meta.accelerator || {};
-    const hailo = accel.hailo || {};
-    const host = meta.host || {};
-    const camera = meta.camera || {};
-    const out = [];
-
-    // The board. Throttling is the thing worth flagging here.
-    const board = {
-      status: alive === false ? 'off' : telemetry.throttled ? 'warn' : 'ok',
-      name: shortBoard(host.board) || 'Single-board computer',
-      meta: [
-        host.cpu,
-        ram(host.ram_mb),
-        host.board_tier ? `${host.board_tier} tier` : null,
-        accel.kind === 'cpu' ? 'runs inference' : null,
-      ].filter(Boolean).join(' · '),
-    };
-    if (alive === false) board.pill = { kind: 'off', text: 'Detector offline' };
-    else if (telemetry.throttled) {
-      board.pill = { kind: 'warn', text: `Throttled: ${telemetry.throttle_detail || 'check cooling'}` };
+    setSession(meta) {
+        if (meta && meta.session_id)
+            this.session = meta;
+        this.render();
     }
-    out.push(board);
-
-    // The AI HAT+, if one is on the bus; why it is idle, if it is.
-    if (hailo.present) {
-      const used = accel.kind === 'hailo';
-      out.push({
-        status: used ? 'ok' : 'warn',
-        name: `AI HAT+ ${hailo.name || ''}`.trim(),
-        meta: [hailo.pcie_link ? `PCIe ${hailo.pcie_link}` : null, used ? 'runs inference' : 'idle']
-          .filter(Boolean).join(' · '),
-        pill: used ? null : { kind: 'warn', text: `Not used: ${accel.reason}` },
-      });
+    setTelemetry(telemetry) {
+        this.telemetry = telemetry;
+        this.render();
     }
-
-    // Every camera found; those in use are green, numbered as on the live
-    // card when there are several.
-    const found = camera.found && camera.found.length ? camera.found : [camera];
-    const inUse = meta.cameras && meta.cameras.length ? meta.cameras : [camera];
-    found.forEach((candidate) => {
-      const position = inUse.findIndex(
-        (used) => used.kind === candidate.kind && String(used.device) === String(candidate.device),
-      );
-      const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : candidate.device;
-      const off = position >= 0 && this.camerasOn[position] === false;
-      const unplugged = position >= 0 && this.camerasConnected[position] === false;
-      let role = 'standby';
-      if (position >= 0) role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
-      if (off && !unplugged) role += ', turned off';
-      let status = position >= 0 && !off ? 'ok' : 'idle';
-      const stalled = position >= 0 && !unplugged && (this.camerasStalled || [])[position] === true;
-      if (unplugged) status = 'off';
-      else if (stalled) status = 'warn';
-      let pill = null;
-      if (unplugged) pill = { kind: 'off', text: 'Unplugged: plug it back in' };
-      else if (stalled) pill = { kind: 'warn', text: 'No picture: check the cable' };
-      const model = candidate.model || 'Camera';
-      const twins = found.filter((other) => (other.model || 'Camera') === model).length > 1;
-      const port = candidate.kind === 'csi' ? `CSI ${candidate.device}` : String(candidate.device).replace('/dev/', '');
-      out.push({
-        status,
-        name: twins ? `${model} (${port})` : model,
-        meta: [where, role].filter(Boolean).join(' · '),
-        pill,
-      });
-    });
-
-    // Where the power figure comes from.
-    if (telemetry.power_source === 'ina219') {
-      out.push({ status: 'ok', name: 'INA219 power monitor', meta: 'Whole-device power · I²C' });
-    } else if (telemetry.power_source === 'pmic') {
-      out.push({
-        status: 'ok',
-        name: 'Pi 5 PMIC',
-        meta: 'Power from board rails only',
-        pill: { kind: 'warn', text: 'Fit an INA219 for whole-device power' },
-      });
+    // From the pipeline telemetry: a camera turned off on the live card, or
+    // unplugged.
+    setCameras(on, connected, stalled) {
+        this.camerasOn = on || [];
+        this.camerasConnected = connected || [];
+        this.camerasStalled = stalled || [];
+        this.render();
     }
-
-    return out;
-  }
+    setWorker(state) {
+        this.worker = state;
+        this.render();
+    }
+    render() {
+        const devices = this.devices();
+        // Telemetry arrives every second; rebuild only when something shown
+        // has changed, so the list does not flicker.
+        const signature = JSON.stringify(devices);
+        if (signature === this.signature)
+            return;
+        this.signature = signature;
+        this.list.replaceChildren(...devices.map(deviceItem));
+    }
+    devices() {
+        const meta = this.session;
+        const telemetry = this.telemetry || {};
+        const alive = this.worker ? this.worker.alive === true : null;
+        if (!meta) {
+            return [{
+                    status: alive === false ? 'off' : 'idle',
+                    name: alive === false ? 'Detector offline' : 'Waiting for the detector',
+                    meta: 'Listed when a session starts',
+                }];
+        }
+        const accel = meta.accelerator || {};
+        const hailo = accel.hailo || {};
+        const host = meta.host || {};
+        const camera = meta.camera || {};
+        const out = [];
+        // The board. Throttling is the thing worth flagging here.
+        const board = {
+            status: alive === false ? 'off' : telemetry.throttled ? 'warn' : 'ok',
+            name: shortBoard(host.board) || 'Single-board computer',
+            meta: [
+                host.cpu,
+                ram(host.ram_mb),
+                host.board_tier ? `${host.board_tier} tier` : null,
+                accel.kind === 'cpu' ? 'runs inference' : null,
+            ].filter(Boolean).join(' · '),
+        };
+        if (alive === false)
+            board.pill = { kind: 'off', text: 'Detector offline' };
+        else if (telemetry.throttled) {
+            board.pill = { kind: 'warn', text: `Throttled: ${telemetry.throttle_detail || 'check cooling'}` };
+        }
+        out.push(board);
+        // The AI HAT+, if one is on the bus; why it is idle, if it is.
+        if (hailo.present) {
+            const used = accel.kind === 'hailo';
+            out.push({
+                status: used ? 'ok' : 'warn',
+                name: `AI HAT+ ${hailo.name || ''}`.trim(),
+                meta: [hailo.pcie_link ? `PCIe ${hailo.pcie_link}` : null, used ? 'runs inference' : 'idle']
+                    .filter(Boolean).join(' · '),
+                pill: used ? null : { kind: 'warn', text: `Not used: ${accel.reason}` },
+            });
+        }
+        // Every camera found; those in use are green, numbered as on the live
+        // card when there are several.
+        const found = camera.found && camera.found.length ? camera.found : [camera];
+        const inUse = meta.cameras && meta.cameras.length ? meta.cameras : [camera];
+        found.forEach((candidate) => {
+            const position = inUse.findIndex((used) => used.kind === candidate.kind && String(used.device) === String(candidate.device));
+            const where = candidate.kind === 'csi' ? `CSI camera ${candidate.device}` : String(candidate.device ?? '');
+            const off = position >= 0 && this.camerasOn[position] === false;
+            const unplugged = position >= 0 && this.camerasConnected[position] === false;
+            let role = 'standby';
+            if (position >= 0)
+                role = inUse.length > 1 ? `camera ${position + 1}` : 'in use';
+            if (off && !unplugged)
+                role += ', turned off';
+            let status = position >= 0 && !off ? 'ok' : 'idle';
+            const stalled = position >= 0 && !unplugged && (this.camerasStalled || [])[position] === true;
+            if (unplugged)
+                status = 'off';
+            else if (stalled)
+                status = 'warn';
+            let pill = null;
+            if (unplugged)
+                pill = { kind: 'off', text: 'Unplugged: plug it back in' };
+            else if (stalled)
+                pill = { kind: 'warn', text: 'No picture: check the cable' };
+            const model = candidate.model || 'Camera';
+            const twins = found.filter((other) => (other.model || 'Camera') === model).length > 1;
+            const port = candidate.kind === 'csi' ? `CSI ${candidate.device}` : String(candidate.device).replace('/dev/', '');
+            out.push({
+                status,
+                name: twins ? `${model} (${port})` : model,
+                meta: [where, role].filter(Boolean).join(' · '),
+                pill,
+            });
+        });
+        // Where the power figure comes from.
+        if (telemetry.power_source === 'ina219') {
+            out.push({ status: 'ok', name: 'INA219 power monitor', meta: 'Whole-device power · I²C' });
+        }
+        else if (telemetry.power_source === 'pmic') {
+            out.push({
+                status: 'ok',
+                name: 'Pi 5 PMIC',
+                meta: 'Power from board rails only',
+                pill: { kind: 'warn', text: 'Fit an INA219 for whole-device power' },
+            });
+        }
+        return out;
+    }
 }
-
 function deviceItem(device) {
-  const item = document.createElement('li');
-  item.className = 'device';
-
-  const dot = document.createElement('span');
-  dot.className = `dot is-${device.status}`;
-  dot.setAttribute('aria-hidden', 'true');
-
-  const body = document.createElement('div');
-  const name = document.createElement('div');
-  name.className = 'device-name';
-  name.textContent = device.name;
-  const meta = document.createElement('div');
-  meta.className = 'device-meta';
-  meta.textContent = device.meta;
-  body.append(name, meta);
-
-  if (device.pill) {
-    const pill = document.createElement('div');
-    pill.className = `pill is-${device.pill.kind}`;
-    pill.append(icon(ICON_WARN), document.createTextNode(device.pill.text));
-    body.append(pill);
-  }
-
-  // Status as words too, so it does not rest on the dot's colour alone.
-  const status = document.createElement('span');
-  status.className = 'sr-only';
-  status.textContent = { ok: 'working', warn: 'needs attention', off: 'offline', idle: 'not in use' }[device.status];
-  body.append(status);
-
-  item.append(dot, body);
-  return item;
+    const item = document.createElement('li');
+    item.className = 'device';
+    const dot = document.createElement('span');
+    dot.className = `dot is-${device.status}`;
+    dot.setAttribute('aria-hidden', 'true');
+    const body = document.createElement('div');
+    const name = document.createElement('div');
+    name.className = 'device-name';
+    name.textContent = device.name;
+    const meta = document.createElement('div');
+    meta.className = 'device-meta';
+    meta.textContent = device.meta;
+    body.append(name, meta);
+    if (device.pill) {
+        const pill = document.createElement('div');
+        pill.className = `pill is-${device.pill.kind}`;
+        pill.append(icon(ICON_WARN), document.createTextNode(device.pill.text));
+        body.append(pill);
+    }
+    // Status as words too, so it does not rest on the dot's colour alone.
+    const status = document.createElement('span');
+    status.className = 'sr-only';
+    const words = { ok: 'working', warn: 'needs attention', off: 'offline', idle: 'not in use' };
+    status.textContent = words[device.status];
+    body.append(status);
+    item.append(dot, body);
+    return item;
 }
-
 function icon(id) {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('class', 'icon');
-  svg.setAttribute('aria-hidden', 'true');
-  const use = document.createElementNS(ns, 'use');
-  use.setAttribute('href', `#${id}`);
-  svg.append(use);
-  return svg;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'icon');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(ns, 'use');
+    use.setAttribute('href', `#${id}`);
+    svg.append(use);
+    return svg;
 }
-
 function ram(mb) {
-  if (!mb) return null;
-  return mb < 1024 ? `${Math.round(mb)} MB RAM` : `${Math.round(mb / 1024)} GB RAM`;
+    if (!mb)
+        return null;
+    return mb < 1024 ? `${Math.round(mb)} MB RAM` : `${Math.round(mb / 1024)} GB RAM`;
 }
-
 // "Raspberry Pi 5 Model B Rev 1.1" -> "Raspberry Pi 5 Model B".
 function shortBoard(model) {
-  return model ? model.replace(/\s+Rev\s+[\d.]+$/i, '') : '';
+    return model ? model.replace(/\s+Rev\s+[\d.]+$/i, '') : '';
 }

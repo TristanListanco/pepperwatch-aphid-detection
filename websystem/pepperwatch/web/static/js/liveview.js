@@ -14,281 +14,264 @@
 // by the worker. That keeps the Pi's CPU on inference, gives crisp labels at
 // any device pixel ratio, and lets the overlay be toggled off. Archived
 // snapshots are annotated server-side instead -- see render.py.
-
 import { classColour, classLabel } from './fmt.js';
 import { isSimple, word } from './words.js';
-
 const POLL_MS = 1000;
 // The "in view" line is a live region; at most one change per this long, so a
 // screen reader is not read a new count for every frame.
 const SUMMARY_MS = 3000;
-
 // Display preferences for this device, set on the Settings page. Live video
 // is on by default; turning it off drops to one frame a second, which spares
 // the access point's bandwidth when several phones are watching.
 const DISPLAY_DEFAULTS = { live: true, mirror: false };
-
 export function displayPrefs() {
-  const prefs = {};
-  for (const [key, fallback] of Object.entries(DISPLAY_DEFAULTS)) {
-    let stored = null;
-    try {
-      stored = localStorage.getItem(`pw-${key}`);
-    } catch (error) {
-      // Private mode or blocked storage: fall back to the defaults.
+    const prefs = { ...DISPLAY_DEFAULTS };
+    for (const [key, fallback] of Object.entries(DISPLAY_DEFAULTS)) {
+        let stored = null;
+        try {
+            stored = localStorage.getItem(`pw-${key}`);
+        }
+        catch (error) {
+            // Private mode or blocked storage: fall back to the defaults.
+        }
+        prefs[key] = stored === null ? fallback : stored === '1';
     }
-    prefs[key] = stored === null ? fallback : stored === '1';
-  }
-  return prefs;
+    return prefs;
 }
-
 export function setDisplayPref(key, on) {
-  try {
-    localStorage.setItem(`pw-${key}`, on ? '1' : '0');
-  } catch (error) {
-    // Not persisted; applies until the page reloads.
-  }
+    try {
+        localStorage.setItem(`pw-${key}`, on ? '1' : '0');
+    }
+    catch (error) {
+        // Not persisted; applies until the page reloads.
+    }
 }
-
 export class LiveView {
-  // root is one camera's figure; camera is its index in the session.
-  constructor(root, camera = 0) {
-    this.root = root;
-    this.camera = camera;
-    this.image = root.querySelector('[data-live-image]');
-    this.canvas = root.querySelector('[data-live-canvas]');
-    this.viewport = root.querySelector('[data-viewport]');
-    this.summary = root.querySelector('[data-live-summary]');
-    this.ctx = this.canvas.getContext('2d');
-    // A cloned figure carries the original's live src and state; start clean.
-    this.image.removeAttribute('src');
-    this.viewport.classList.remove('is-active');
-    if (this.summary) this.summary.textContent = '';
-    this.summaryAt = 0;
-    this.summaryTimer = null;
-
-    this.mode = 'idle';
-    this.pollTimer = null;
-    this.detections = [];
-    this.frameSeq = null;
-    this.showOverlay = true;
-    this.mirror = false;
-
-    // Redraw on resize: the canvas backing store is sized in device pixels, so
-    // a rotated phone or a resized window needs new dimensions or the overlay
-    // stretches away from the image beneath it.
-    this.observer = new ResizeObserver(() => this.resize());
-    this.observer.observe(this.viewport);
-
-    this.image.addEventListener('load', () => {
-      this.viewport.classList.add('is-active');
-      // Take the camera's own shape, so the picture fills the frame with no
-      // bars at the sides.
-      const { naturalWidth: w, naturalHeight: h } = this.image;
-      if (w && h) this.viewport.style.setProperty('--aspect', `${w} / ${h}`);
-      this.resize();
-    });
-    this.image.addEventListener('error', () => {
-      if (this.mode === 'mjpeg') this.setMode('poll');
-    });
-  }
-
-  // -- modes -------------------------------------------------------------
-
-  setMode(mode) {
-    if (this.mode === mode) return;
-    this.stop();
-    this.mode = mode;
-
-    if (mode === 'poll') {
-      this.startPolling();
-    } else if (mode === 'mjpeg') {
-      // Cache-bust so a reconnect is not served the previous stream.
-      this.image.src = `/stream.mjpg?camera=${this.camera}&t=${Date.now()}`;
-    } else {
-      this.image.removeAttribute('src');
-      this.viewport.classList.remove('is-active');
-      this.clearOverlay();
+    // root is one camera's figure; camera is its index in the session.
+    constructor(root, camera = 0) {
+        this.summaryAt = 0;
+        this.mode = 'idle';
+        this.pollTimer = null;
+        this.detections = [];
+        this.frameSeq = null;
+        this.showOverlay = true;
+        this.mirror = false;
+        // Set by main.js: the label, whether it is turned off, and whether it fetches no frames.
+        this.name = '';
+        this.off = false;
+        this.idle = false;
+        this.root = root;
+        this.camera = camera;
+        // The figure's parts are in the page template; a figure without them is a bug, so fail here.
+        this.image = root.querySelector('[data-live-image]');
+        this.canvas = root.querySelector('[data-live-canvas]');
+        this.viewport = root.querySelector('[data-viewport]');
+        this.summary = root.querySelector('[data-live-summary]');
+        this.ctx = this.canvas.getContext('2d');
+        // A cloned figure carries the original's live src and state; start clean.
+        this.image.removeAttribute('src');
+        this.viewport.classList.remove('is-active');
+        if (this.summary)
+            this.summary.textContent = '';
+        // Redraw on resize: the canvas backing store is sized in device pixels, so
+        // a rotated phone or a resized window needs new dimensions or the overlay
+        // stretches away from the image beneath it.
+        this.observer = new ResizeObserver(() => this.resize());
+        this.observer.observe(this.viewport);
+        this.image.addEventListener('load', () => {
+            this.viewport.classList.add('is-active');
+            // Take the camera's own shape, so the picture fills the frame with no
+            // bars at the sides.
+            const { naturalWidth: w, naturalHeight: h } = this.image;
+            if (w && h)
+                this.viewport.style.setProperty('--aspect', `${w} / ${h}`);
+            this.resize();
+        });
+        this.image.addEventListener('error', () => {
+            if (this.mode === 'mjpeg')
+                this.setMode('poll');
+        });
     }
-
-    this.root.dispatchEvent(new CustomEvent('pw:live-mode', { detail: mode, bubbles: true }));
-  }
-
-  startPolling() {
-    const tick = () => {
-      // The URL has to change or the browser serves its cache; the server also
-      // answers 304 on an unchanged frame, so this stays cheap either way.
-      this.image.src = `/frame.jpg?camera=${this.camera}&t=${Date.now()}`;
-    };
-    tick();
-    this.pollTimer = setInterval(tick, POLL_MS);
-  }
-
-  stop() {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
+    // -- modes -------------------------------------------------------------
+    setMode(mode) {
+        if (this.mode === mode)
+            return;
+        this.stop();
+        this.mode = mode;
+        if (mode === 'poll') {
+            this.startPolling();
+        }
+        else if (mode === 'mjpeg') {
+            // Cache-bust so a reconnect is not served the previous stream.
+            this.image.src = `/stream.mjpg?camera=${this.camera}&t=${Date.now()}`;
+        }
+        else {
+            this.image.removeAttribute('src');
+            this.viewport.classList.remove('is-active');
+            this.clearOverlay();
+        }
+        this.root.dispatchEvent(new CustomEvent('pw:live-mode', { detail: mode, bubbles: true }));
     }
-    if (this.mode === 'mjpeg') {
-      // Dropping the src is what actually closes the connection and frees the
-      // server's viewer slot; without it the slot leaks until the tab closes.
-      this.image.removeAttribute('src');
+    startPolling() {
+        const tick = () => {
+            // The URL has to change or the browser serves its cache; the server also
+            // answers 304 on an unchanged frame, so this stays cheap either way.
+            this.image.src = `/frame.jpg?camera=${this.camera}&t=${Date.now()}`;
+        };
+        tick();
+        this.pollTimer = setInterval(tick, POLL_MS);
     }
-  }
-
-  destroy() {
-    this.stop();
-    this.observer.disconnect();
-    clearTimeout(this.summaryTimer);
-  }
-
-  toggleOverlay(show) {
-    this.showOverlay = show;
-    this.draw();
-    this.updateSummary();
-  }
-
-  // Flips the picture; boxes are drawn at mirrored positions instead of being
-  // flipped with it, so their labels stay readable.
-  setMirror(on) {
-    this.mirror = on;
-    this.viewport.classList.toggle('is-mirrored', on);
-    this.draw();
-  }
-
-  // -- drawing -----------------------------------------------------------
-
-  resize() {
-    const rect = this.viewport.getBoundingClientRect();
-    const ratio = window.devicePixelRatio || 1;
-    this.canvas.width = Math.max(1, Math.round(rect.width * ratio));
-    this.canvas.height = Math.max(1, Math.round(rect.height * ratio));
-    this.draw();
-  }
-
-  update(payload) {
-    this.detections = payload.boxes || [];
-    this.frameSeq = payload.frame_seq;
-    this.draw();
-    this.updateSummary();
-  }
-
-  // What is in view, in words: the boxes alone are colour on a moving
-  // picture, which neither a screen reader nor a colour-blind eye can read.
-  summaryText() {
-    if (!this.showOverlay) return '';
-    const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
-    const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
-    if (isSimple()) {
-      if (damaged) return word('view.damaged', { damaged, healthy });
-      return healthy ? word('view.healthy', { healthy }) : word('view.empty');
+    stop() {
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+            this.pollTimer = null;
+        }
+        if (this.mode === 'mjpeg') {
+            // Dropping the src is what actually closes the connection and frees the
+            // server's viewer slot; without it the slot leaks until the tab closes.
+            this.image.removeAttribute('src');
+        }
     }
-    const leaves = (n) => `${n} ${n === 1 ? 'leaf' : 'leaves'}`;
-    if (damaged) {
-      return `In view: ${leaves(damaged)} with aphid damage${healthy ? `, ${healthy} healthy` : ''}`;
+    destroy() {
+        this.stop();
+        this.observer.disconnect();
+        clearTimeout(this.summaryTimer);
     }
-    return healthy ? `In view: ${leaves(healthy)}, no aphid damage` : 'No leaves in view';
-  }
-
-  updateSummary() {
-    if (!this.summary) return;
-    const text = this.summaryText();
-    if (text === this.summary.textContent) return;
-    clearTimeout(this.summaryTimer);
-    const wait = this.summaryAt + SUMMARY_MS - Date.now();
-    if (wait > 0 && text) {
-      // Trailing update: the latest count lands once the interval is up.
-      this.summaryTimer = setTimeout(() => this.updateSummary(), wait);
-      return;
+    toggleOverlay(show) {
+        this.showOverlay = show;
+        this.draw();
+        this.updateSummary();
     }
-    this.summary.textContent = text;
-    this.summaryAt = Date.now();
-  }
-
-  clearOverlay() {
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-  }
-
-  // The image uses object-fit: contain, so it is letterboxed inside the
-  // viewport whenever their aspect ratios differ. Boxes are normalised to the
-  // *image*, so the drawn rect has to be mapped into the contained box --
-  // skipping this is the classic overlay-misalignment bug.
-  contentBox() {
-    const width = this.canvas.width;
-    const height = this.canvas.height;
-    const natural = this.image.naturalWidth / this.image.naturalHeight;
-
-    if (!Number.isFinite(natural) || natural <= 0) {
-      return { x: 0, y: 0, width, height };
+    // Flips the picture; boxes are drawn at mirrored positions instead of being
+    // flipped with it, so their labels stay readable.
+    setMirror(on) {
+        this.mirror = on;
+        this.viewport.classList.toggle('is-mirrored', on);
+        this.draw();
     }
-
-    const viewport = width / height;
-    if (viewport > natural) {
-      const drawn = height * natural;
-      return { x: (width - drawn) / 2, y: 0, width: drawn, height };
+    // -- drawing -----------------------------------------------------------
+    resize() {
+        const rect = this.viewport.getBoundingClientRect();
+        const ratio = window.devicePixelRatio || 1;
+        this.canvas.width = Math.max(1, Math.round(rect.width * ratio));
+        this.canvas.height = Math.max(1, Math.round(rect.height * ratio));
+        this.draw();
     }
-    const drawn = width / natural;
-    return { x: 0, y: (height - drawn) / 2, width, height: drawn };
-  }
-
-  draw() {
-    this.clearOverlay();
-    if (!this.showOverlay || !this.detections.length) return;
-    if (!this.image.naturalWidth) return;
-
-    const box = this.contentBox();
-    const ratio = window.devicePixelRatio || 1;
-    const lineWidth = Math.max(1.5, 2 * ratio);
-
-    // Label size follows the card's CSS width, not just device pixel ratio.
-    // A fixed 11px reads fine across a 650px desktop card but swamps a 320px
-    // phone, where the same text covers a third of the frame.
-    const cssWidth = this.canvas.width / ratio;
-    const fontSize = Math.max(9, Math.min(11, cssWidth / 38)) * ratio;
-    // Below this width healthy boxes lose their class name to save room. The
-    // line style still tells the classes apart without colour: healthy is
-    // thin and dashed, aphid damage thick and solid and always named.
-    const compact = cssWidth < 420;
-
-    this.ctx.font = `600 ${fontSize}px ui-monospace, Menlo, monospace`;
-    this.ctx.textBaseline = 'top';
-
-    this.detections.forEach((detection) => {
-      const colour = classColour(detection.class_name);
-      const left = this.mirror ? 1 - detection.x - detection.w : detection.x;
-      const x = box.x + left * box.width;
-      const y = box.y + detection.y * box.height;
-      const w = detection.w * box.width;
-      const h = detection.h * box.height;
-
-      const healthy = detection.class_name === 'healthy';
-      this.ctx.strokeStyle = colour;
-      this.ctx.lineWidth = healthy ? lineWidth * 0.75 : lineWidth * 1.5;
-      this.ctx.setLineDash(healthy ? [4 * ratio, 3 * ratio] : []);
-      this.ctx.strokeRect(x, y, w, h);
-      this.ctx.setLineDash([]);
-
-      const percent = Math.round(detection.confidence * 100);
-      const name = compact && !healthy ? 'Aphid' : classLabel(detection.class_name);
-      const text = compact && healthy ? `${percent}%` : `${name} ${percent}%`;
-      const metrics = this.ctx.measureText(text);
-      const padding = 3 * ratio;
-      const labelW = metrics.width + padding * 2;
-      const labelH = fontSize + padding * 2;
-
-      // Keep the label on-frame: above the box normally, inside it at the top
-      // edge, shifted left at the right edge. Same rules as render.py.
-      let labelY = y - labelH;
-      if (labelY < box.y) labelY = y + padding;
-      let labelX = x;
-      if (labelX + labelW > box.x + box.width) {
-        labelX = Math.max(box.x, box.x + box.width - labelW);
-      }
-
-      this.ctx.fillStyle = colour;
-      this.ctx.fillRect(labelX, labelY, labelW, labelH);
-      this.ctx.fillStyle = '#0b0f0e';
-      this.ctx.fillText(text, labelX + padding, labelY + padding);
-    });
-  }
+    update(payload) {
+        this.detections = payload.boxes || [];
+        this.frameSeq = payload.frame_seq ?? null;
+        this.draw();
+        this.updateSummary();
+    }
+    // What is in view, in words: the boxes alone are colour on a moving
+    // picture, which neither a screen reader nor a colour-blind eye can read.
+    summaryText() {
+        if (!this.showOverlay)
+            return '';
+        const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
+        const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
+        if (isSimple()) {
+            if (damaged)
+                return word('view.damaged', { damaged, healthy });
+            return healthy ? word('view.healthy', { healthy }) : word('view.empty');
+        }
+        const leaves = (n) => `${n} ${n === 1 ? 'leaf' : 'leaves'}`;
+        if (damaged) {
+            return `In view: ${leaves(damaged)} with aphid damage${healthy ? `, ${healthy} healthy` : ''}`;
+        }
+        return healthy ? `In view: ${leaves(healthy)}, no aphid damage` : 'No leaves in view';
+    }
+    updateSummary() {
+        if (!this.summary)
+            return;
+        const text = this.summaryText();
+        if (text === this.summary.textContent)
+            return;
+        clearTimeout(this.summaryTimer);
+        const wait = this.summaryAt + SUMMARY_MS - Date.now();
+        if (wait > 0 && text) {
+            // Trailing update: the latest count lands once the interval is up.
+            this.summaryTimer = setTimeout(() => this.updateSummary(), wait);
+            return;
+        }
+        this.summary.textContent = text;
+        this.summaryAt = Date.now();
+    }
+    clearOverlay() {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+    // The image uses object-fit: contain, so it is letterboxed inside the
+    // viewport whenever their aspect ratios differ. Boxes are normalised to the
+    // *image*, so the drawn rect has to be mapped into the contained box --
+    // skipping this is the classic overlay-misalignment bug.
+    contentBox() {
+        const width = this.canvas.width;
+        const height = this.canvas.height;
+        const natural = this.image.naturalWidth / this.image.naturalHeight;
+        if (!Number.isFinite(natural) || natural <= 0) {
+            return { x: 0, y: 0, width, height };
+        }
+        const viewport = width / height;
+        if (viewport > natural) {
+            const drawn = height * natural;
+            return { x: (width - drawn) / 2, y: 0, width: drawn, height };
+        }
+        const drawn = width / natural;
+        return { x: 0, y: (height - drawn) / 2, width, height: drawn };
+    }
+    draw() {
+        this.clearOverlay();
+        if (!this.showOverlay || !this.detections.length)
+            return;
+        if (!this.image.naturalWidth)
+            return;
+        const box = this.contentBox();
+        const ratio = window.devicePixelRatio || 1;
+        const lineWidth = Math.max(1.5, 2 * ratio);
+        // Label size follows the card's CSS width, not just device pixel ratio.
+        // A fixed 11px reads fine across a 650px desktop card but swamps a 320px
+        // phone, where the same text covers a third of the frame.
+        const cssWidth = this.canvas.width / ratio;
+        const fontSize = Math.max(9, Math.min(11, cssWidth / 38)) * ratio;
+        // Below this width healthy boxes lose their class name to save room. The
+        // line style still tells the classes apart without colour: healthy is
+        // thin and dashed, aphid damage thick and solid and always named.
+        const compact = cssWidth < 420;
+        this.ctx.font = `600 ${fontSize}px ui-monospace, Menlo, monospace`;
+        this.ctx.textBaseline = 'top';
+        this.detections.forEach((detection) => {
+            const colour = classColour(detection.class_name);
+            const left = this.mirror ? 1 - detection.x - detection.w : detection.x;
+            const x = box.x + left * box.width;
+            const y = box.y + detection.y * box.height;
+            const w = detection.w * box.width;
+            const h = detection.h * box.height;
+            const healthy = detection.class_name === 'healthy';
+            this.ctx.strokeStyle = colour;
+            this.ctx.lineWidth = healthy ? lineWidth * 0.75 : lineWidth * 1.5;
+            this.ctx.setLineDash(healthy ? [4 * ratio, 3 * ratio] : []);
+            this.ctx.strokeRect(x, y, w, h);
+            this.ctx.setLineDash([]);
+            const percent = Math.round(detection.confidence * 100);
+            const name = compact && !healthy ? 'Aphid' : classLabel(detection.class_name);
+            const text = compact && healthy ? `${percent}%` : `${name} ${percent}%`;
+            const metrics = this.ctx.measureText(text);
+            const padding = 3 * ratio;
+            const labelW = metrics.width + padding * 2;
+            const labelH = fontSize + padding * 2;
+            // Keep the label on-frame: above the box normally, inside it at the top
+            // edge, shifted left at the right edge. Same rules as render.py.
+            let labelY = y - labelH;
+            if (labelY < box.y)
+                labelY = y + padding;
+            let labelX = x;
+            if (labelX + labelW > box.x + box.width) {
+                labelX = Math.max(box.x, box.x + box.width - labelW);
+            }
+            this.ctx.fillStyle = colour;
+            this.ctx.fillRect(labelX, labelY, labelW, labelH);
+            this.ctx.fillStyle = '#0b0f0e';
+            this.ctx.fillText(text, labelX + padding, labelY + padding);
+        });
+    }
 }

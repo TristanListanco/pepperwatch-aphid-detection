@@ -11,6 +11,7 @@ by failing every off-host request and checking the page still renders.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -270,7 +271,9 @@ def test_cameras_can_be_expanded_and_the_log_exported_with_photos(client) -> Non
 
 
 def test_every_phrase_of_the_simple_view_is_in_cebuano_too(client) -> None:
-    words = client.get("/static/js/words.js").get_data(as_text=True)
+    # The TypeScript source: the compiled words.js is reformatted by tsc, which
+    # also checks the two tables have the same keys (words.ts, CebuanoIsComplete).
+    words = (Path(__file__).resolve().parents[1] / "pepperwatch/web/ts/words.ts").read_text()
     english, cebuano = words.split("\n  ceb: {", 1)
     key = re.compile(r"^\s+'([a-z_.]+)':", re.MULTILINE)
     assert key.findall(english) and set(key.findall(english)) == set(key.findall(cebuano))
