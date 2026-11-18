@@ -50,8 +50,12 @@ export async function initSettings(root) {
     const config = await fetchJson('/api/config');
     if (!config)
         return;
-    bindSlider(root, 'conf', config.inference.conf_threshold);
-    bindSlider(root, 'iou', config.inference.iou_threshold);
+    const showConf = bindSlider(root, 'conf', config.inference.conf_threshold);
+    const showIou = bindSlider(root, 'iou', config.inference.iou_threshold);
+    bindReset(root, config.inference.defaults, () => {
+        showConf(config.inference.defaults.conf_threshold);
+        showIou(config.inference.defaults.iou_threshold);
+    });
     bindIntervals(root, config.persist);
     bindSite(root, config.site.name);
     const localeSelect = root.querySelector('[data-setting-locale]');
@@ -159,16 +163,21 @@ function bindClear(root) {
         }
     });
 }
+// Returns how to show a value the detector has taken, set from elsewhere.
 function bindSlider(root, key, initial) {
     const slider = root.querySelector(`[data-slider-${key}]`);
     const readout = root.querySelector(`[data-slider-${key}-value]`);
     const status = root.querySelector('[data-settings-status]');
     if (!slider)
-        return;
+        return () => { };
     let applied = initial;
-    slider.value = String(initial);
-    if (readout)
-        readout.textContent = num(initial, 2);
+    const show = (value) => {
+        applied = value;
+        slider.value = String(value);
+        if (readout)
+            readout.textContent = num(value, 2);
+    };
+    show(initial);
     slider.addEventListener('input', () => {
         if (readout)
             readout.textContent = num(Number(slider.value), 2);
@@ -178,15 +187,29 @@ function bindSlider(root, key, initial) {
     // worker over MQTT.
     slider.addEventListener('change', async () => {
         const field = key === 'conf' ? 'conf_threshold' : 'iou_threshold';
-        if (await applySetting(field, Number(slider.value), status)) {
+        if (await applySetting({ [field]: Number(slider.value) }, status)) {
             applied = Number(slider.value);
         }
         else {
-            // Show what the detector is really using, not the value that failed.
-            slider.value = String(applied);
-            if (readout)
-                readout.textContent = num(applied, 2);
+            show(applied); // what the detector is really using, not the value that failed
         }
+    });
+    return show;
+}
+// Both thresholds back to the values in the Pi's config files, in one change.
+function bindReset(root, defaults, onApplied) {
+    const button = root.querySelector('[data-thresholds-reset]');
+    const note = root.querySelector('[data-thresholds-defaults]');
+    if (!button)
+        return;
+    if (note) {
+        note.textContent = `Confidence ${num(defaults.conf_threshold, 2)} and NMS IoU ${num(defaults.iou_threshold, 2)}, as set in the Pi's config files.`;
+    }
+    button.addEventListener('click', async () => {
+        button.disabled = true;
+        if (await applySetting(defaults, root.querySelector('[data-settings-status]')))
+            onApplied();
+        button.disabled = false;
     });
 }
 function bindIntervals(root, initial) {
@@ -201,7 +224,7 @@ function bindIntervals(root, initial) {
         }
         select.value = String(applied);
         select.addEventListener('change', async () => {
-            if (await applySetting(field, Number(select.value), status))
+            if (await applySetting({ [field]: Number(select.value) }, status))
                 applied = Number(select.value);
             else
                 select.value = String(applied);
@@ -209,14 +232,14 @@ function bindIntervals(root, initial) {
     });
 }
 // Sends one change and says whether the worker took it.
-async function applySetting(field, value, status) {
+async function applySetting(changes, status) {
     if (status) {
         status.textContent = 'Applying…';
         status.className = 'note';
     }
     try {
         // Answers only once the worker reports the new value, a second or two.
-        await patchJson('/api/config', { [field]: value }, adminHeaders());
+        await patchJson('/api/config', changes, adminHeaders());
         if (status)
             status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
         return true;

@@ -606,6 +606,20 @@ def test_patch_config_rejects_out_of_range_thresholds(client, value) -> None:
     assert client.patch("/api/config", json={"conf_threshold": value}).status_code == 400
 
 
+def test_thresholds_reset_to_the_config_files_values(app, client, monkeypatch) -> None:
+    sent = _worker_that_applies(app, monkeypatch)
+    assert client.patch("/api/config", json={"conf_threshold": 0.6, "iou_threshold": 0.3}).status_code == 200
+    inference = client.get("/api/config").get_json()["inference"]
+    # A change from Settings must not move the defaults the reset goes back to.
+    assert inference["defaults"] == {"conf_threshold": 0.25, "iou_threshold": 0.45}
+
+    response = client.patch("/api/config", json=inference["defaults"])  # what the button sends
+    assert response.status_code == 200 and response.get_json()["applied"] is True
+    assert sent[-1] == ("pepperwatch/cmd/config", {"conf_threshold": 0.25, "iou_threshold": 0.45})
+    inference = client.get("/api/config").get_json()["inference"]
+    assert (inference["conf_threshold"], inference["iou_threshold"]) == (0.25, 0.45)
+
+
 def test_photo_interval_is_applied_once_the_worker_reports_it(app, client, monkeypatch) -> None:
     sent = _worker_that_applies(app, monkeypatch)
     response = client.patch("/api/config", json={"heartbeat_detected_s": 60})

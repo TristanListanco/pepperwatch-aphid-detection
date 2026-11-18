@@ -58,6 +58,10 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     app.config["PW_FRAMES"] = [make_reader(cfg, i) for i in range(max(1, int(cfg.camera.max_cameras)))]
     app.config["PW_ADVISORY"] = load_advisory(cfg)
     app.config["PW_ADMIN_PIN"] = _admin_pin(cfg)
+    # Taken before any change from Settings, which overwrites them in cfg.
+    app.config["PW_THRESHOLD_DEFAULTS"] = {
+        key: float(cfg.inference.get(key)) for key in ("conf_threshold", "iou_threshold")
+    }
 
     hub = EventHub(cfg)
     app.config["PW_HUB"] = hub

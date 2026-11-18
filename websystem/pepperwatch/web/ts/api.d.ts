@@ -188,7 +188,12 @@ export interface WeeklyStats {
 
 // /api/config
 export interface Config {
-  inference: { conf_threshold: number; iou_threshold: number };
+  inference: {
+    conf_threshold: number;
+    iou_threshold: number;
+    // What the Pi's config files say, for "Reset to defaults".
+    defaults: { conf_threshold: number; iou_threshold: number };
+  };
   // Seconds between saved photos, while damage is in view and while none is.
   persist: { heartbeat_detected_s: number; heartbeat_clean_s: number };
   site: { name: string };

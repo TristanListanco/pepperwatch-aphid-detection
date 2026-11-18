@@ -462,6 +462,7 @@ def get_config():
                 # session starts again from the config files.
                 "conf_threshold": live.get("conf_threshold", cfg.inference.conf_threshold),
                 "iou_threshold": live.get("iou_threshold", cfg.inference.iou_threshold),
+                "defaults": current_app.config["PW_THRESHOLD_DEFAULTS"],
                 "input_size": cfg.inference.input_size,
                 "target_fps": cfg.inference.target_fps,
                 "class_names": list(cfg.inference.class_names),
