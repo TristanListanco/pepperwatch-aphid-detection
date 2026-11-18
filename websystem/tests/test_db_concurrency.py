@@ -185,6 +185,8 @@ def test_expected_indices_exist(db: Database) -> None:
         "idx_event_recent",
         "idx_event_archived",
         "idx_event_severity",
+        "idx_event_frame_camera",
+        "idx_event_capture",
         "idx_box_event",
         "idx_box_class",
         "idx_log_logged_at",

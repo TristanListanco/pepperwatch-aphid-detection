@@ -1611,8 +1611,14 @@ button {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
-  object-fit: cover;
+  /* Whole, not cropped, whatever the camera's shape. */
+  object-fit: contain;
   background: var(--inset-2);
+}
+
+/* Two cameras side by side: the tile takes the photo's own shape. */
+.scan-thumb.is-pair {
+  aspect-ratio: 8 / 3;
 }
 
 .scan-meta {

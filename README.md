@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  509 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  516 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -303,6 +303,15 @@ Each saved event stores:
   single transaction;
 - provenance: model version, both thresholds, inference time and fps, so every
   result can be traced to the exact settings that produced it.
+
+**With several cameras, one save photographs them all.** When any camera's
+photo is due (or *Take a photo* is pressed), every camera that is on goes into
+one photo: two side by side, three or four in a 2×2 grid, each named in its
+corner ("Camera 2 - HD Webcam C270") with its own boxes. Each camera still gets
+its own row, so per-camera figures stay as they were; the rows share a
+`capture_id` and the photo, Recent photos lists the photo once, as bad as its
+worst camera, and the other cameras' next periodic photos count from it. A row
+saved in another camera's photo says so in its note.
 
 #### 6. Bridge to the browser (`web/hub.py`, `web/routes_stream.py`)
 
@@ -1113,7 +1122,7 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/events/<id>/archive` | Archive / unarchive |
 | GET | `/api/stats/weekly` | KPI aggregates |
 | GET | `/api/recommendations[/<severity>]` | Advisory text (`?locale=en\|ceb`) |
-| GET | `/api/export.csv` | One row per box, with provenance columns. Query: `from`, `to` |
+| GET | `/api/export.csv` | One row per box, with provenance columns. `capture_id` links the rows of one multi-camera photo and `camera_name` says which camera, as labelled in it; each box's x, y, w, h are relative to its own camera's part of the photo. Query: `from`, `to` |
 | GET | `/api/export.zip` | The same CSV plus every scan's saved JPEG (as stored, with its boxes drawn) under `images/`; the CSV's `image_path` points at each one. Streamed, so its size is only limited by the photos. Query: `from`, `to` |
 | POST | `/api/capture` | Request a high-res snapshot → `202` |
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
@@ -1231,7 +1240,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 509 tests (~1 min)
+.venv/bin/python -m pytest               # 516 tests (~1 min)
 npx --yes -p typescript@7.0.2 tsc       # type-check web/ts and compile it into static/js
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
@@ -1285,7 +1294,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 509 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 516 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; the dashboard's TypeScript type-checks (`tsconfig.json`, strict) and the committed `static/js` is exactly its output; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |

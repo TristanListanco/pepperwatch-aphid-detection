@@ -67,7 +67,7 @@ pepperwatch/
   web/           Flask app, Jinja templates, TypeScript (ts/) compiled to ES modules (static/js/)
 deploy/          install.sh, update.sh, systemd units, mosquitto conf, NetworkManager AP
 scripts/         bench_fps.py (--accelerator cpu|hailo), finetune_model.py (teach the model what isn't a leaf), check_js.sh
-tests/           509 hardware-free unit and API tests, plus a worker integration test
+tests/           516 hardware-free unit and API tests, plus a worker integration test
 ```
 
 ## Configuration
@@ -88,7 +88,7 @@ The suite needs no camera, HAT or Pi, so it runs on any machine with Python
 3.11+, and CI runs it on x64 and arm64 for every push:
 
 ```bash
-.venv/bin/python -m pytest              # 509 tests, ~1 min
+.venv/bin/python -m pytest              # 516 tests, ~1 min
 npx --yes -p typescript@7.0.2 tsc      # type-check web/ts, compile to static/js (commit both)
 ./scripts/check_js.sh                   # the compiled modules parse as ES modules
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs

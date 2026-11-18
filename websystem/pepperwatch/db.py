@@ -209,6 +209,9 @@ class Database:
         synthetic: bool = False,
         note: str | None = None,
         camera: int = 0,
+        capture_id: str | None = None,
+        capture_lead: bool = True,
+        camera_name: str | None = None,
     ) -> int:
         """Write one detection event and its boxes in a single transaction.
 
@@ -239,8 +242,9 @@ class Database:
                     model_version, conf_threshold, iou_threshold,
                     inference_ms, preview_fps, inference_fps,
                     detection_count, max_confidence, damaged_area,
-                    severity, trigger, synthetic, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    severity, trigger, synthetic, note,
+                    capture_id, capture_lead, camera_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     captured_at, site, camera, image_path, thumb_path, frame_seq,
@@ -248,6 +252,7 @@ class Database:
                     inference_ms, preview_fps, inference_fps,
                     len(detections), max_conf, union_area(damaged),
                     severity, trigger, int(synthetic), note,
+                    capture_id, int(capture_lead), camera_name,
                 ),
             )
             event_id = int(cursor.lastrowid or 0)
@@ -303,10 +308,12 @@ class Database:
             return int(cursor.lastrowid or 0)
 
     def set_archived(self, event_id: int, archived: bool) -> bool:
+        """Archive a scan, and the other cameras' rows of its photo with it."""
         with self.write() as conn:
             cursor = conn.execute(
-                "UPDATE detection_event SET archived = ? WHERE id = ?",
-                (int(archived), event_id),
+                "UPDATE detection_event SET archived = ? WHERE id = ? OR capture_id = "
+                "(SELECT capture_id FROM detection_event WHERE id = ?)",
+                (int(archived), event_id, event_id),
             )
             return cursor.rowcount > 0
 
@@ -325,8 +332,10 @@ class Database:
                 "FROM bounding_box WHERE event_id = ? ORDER BY confidence DESC",
                 (event_id,),
             ).fetchall()
+            cameras = _capture_cameras(conn, [row["capture_id"]]).get(row["capture_id"], [])
         event = dict(row)
         event["boxes"] = [dict(b) for b in boxes]
+        event["cameras"] = cameras
         return event
 
     def list_events(
@@ -347,9 +356,15 @@ class Database:
         Returns ``{"total": int, "items": [...], "limit": int, "offset": int}``.
         The total is a separate COUNT over the same predicate so the UI can show
         "showing 1-50 of 412" without fetching everything.
+
+        One item per photo: of a multi-camera capture's rows only the lead is
+        listed, with every camera's result in ``cameras``. A filter on what was
+        found matches when any camera in the photo matches it.
         """
-        where: list[str] = []
+        where: list[str] = ["capture_lead = 1"]
         params: list[Any] = []
+        found: list[str] = []  # tested against every camera's row of the photo
+        found_params: list[Any] = []
 
         if since:
             where.append("captured_at >= ?")
@@ -358,23 +373,26 @@ class Database:
             where.append("captured_at <= ?")
             params.append(_through(until))
         if severity:
-            where.append("severity = ?")
-            params.append(severity)
+            found.append("x.severity = ?")
+            found_params.append(severity)
         if min_confidence is not None:
-            where.append("max_confidence >= ?")
-            params.append(min_confidence)
+            found.append("x.max_confidence >= ?")
+            found_params.append(min_confidence)
         if archived is not None:
-            where.append("archived = ?")
+            where.append("archived = ?")  # a photo's rows are archived together
             params.append(int(archived))
         if query:
-            where.append("(note LIKE ? OR site LIKE ? OR severity LIKE ?)")
-            params.extend([f"%{query}%"] * 3)
+            found.append("(x.note LIKE ? OR x.site LIKE ? OR x.severity LIKE ? OR x.camera_name LIKE ?)")
+            found_params.extend([f"%{query}%"] * 4)
         if class_name:
+            found.append("EXISTS (SELECT 1 FROM bounding_box b WHERE b.event_id = x.id AND b.class_name = ?)")
+            found_params.append(class_name)
+        if found:
             where.append(
-                "EXISTS (SELECT 1 FROM bounding_box b "
-                "WHERE b.event_id = detection_event.id AND b.class_name = ?)"
+                "EXISTS (SELECT 1 FROM detection_event x WHERE (x.id = detection_event.id OR "
+                f"x.capture_id = detection_event.capture_id) AND {' AND '.join(found)})"
             )
-            params.append(class_name)
+            params.extend(found_params)
 
         clause = f"WHERE {' AND '.join(where)}" if where else ""
         limit = max(1, min(int(limit), 500))
@@ -389,12 +407,16 @@ class Database:
                 "ORDER BY captured_at DESC, id DESC LIMIT ? OFFSET ?",
                 [*params, limit, offset],
             ).fetchall()
+            cameras = _capture_cameras(conn, [r["capture_id"] for r in rows])
 
+        items = [dict(r) for r in rows]
+        for item in items:
+            item["cameras"] = cameras.get(item["capture_id"], [])
         return {
             "total": int(total),
             "limit": limit,
             "offset": offset,
-            "items": [dict(r) for r in rows],
+            "items": items,
         }
 
     def weekly_stats(self, *, days: int = 7, site: str | None = None) -> dict[str, Any]:
@@ -539,8 +561,17 @@ class Database:
         now = datetime.now(timezone.utc)
         site_clause = " AND site = ?" if site else ""
         windows = (("24h", now - timedelta(hours=hours)), ("7d", now - timedelta(days=fallback_days)))
+        # Photos, not rows: one photo of several cameras has a row for each.
+        photos_since = (
+            "SELECT COUNT(DISTINCT COALESCE(capture_id, id)) FROM detection_event "
+            f"WHERE captured_at >= ? AND synthetic = 0{site_clause}"
+        )
         for basis, since in windows:
             with self.read() as conn:
+                photos = conn.execute(
+                    f"{photos_since} AND detection_count > 0",
+                    [since.isoformat(timespec="milliseconds"), *([site] if site else [])],
+                ).fetchone()[0]
                 rows = conn.execute(
                     f"""
                     SELECT camera, severity, COUNT(*) AS n
@@ -559,12 +590,11 @@ class Database:
             return {
                 "severity": max(typical, key=SEVERITY_ORDER.index),
                 "basis": basis,
-                "photos": sum(sum(counts.values()) for counts in cameras.values()),
+                "photos": int(photos),
             }
         with self.read() as conn:
             no_leaves = conn.execute(
-                f"SELECT COUNT(*) FROM detection_event WHERE captured_at >= ? AND synthetic = 0{site_clause}",
-                [windows[-1][1].isoformat(timespec="milliseconds"), *([site] if site else [])],
+                photos_since, [windows[-1][1].isoformat(timespec="milliseconds"), *([site] if site else [])]
             ).fetchone()[0]
         return {"severity": "none", "basis": "7d", "photos": 0, "no_leaves": int(no_leaves)}
 
@@ -602,7 +632,7 @@ class Database:
                        e.detection_count, e.max_confidence, e.damaged_area,
                        e.model_version, e.conf_threshold, e.iou_threshold,
                        e.inference_ms, e.preview_fps, e.inference_fps,
-                       e.trigger, e.synthetic, e.image_path,
+                       e.trigger, e.synthetic, e.image_path, e.capture_id, e.camera_name,
                        b.class_name, b.confidence, b.x, b.y, b.w, b.h
                 FROM detection_event e
                 LEFT JOIN bounding_box b ON b.event_id = e.id
@@ -700,6 +730,28 @@ def _median_severity(counts: dict[str, int], order: Sequence[str]) -> str:
     return order[-1]
 
 
+def _capture_cameras(conn: sqlite3.Connection, capture_ids: Sequence[str | None]) -> dict[str, list[dict]]:
+    """Every camera's result in each of these photos, by capture, in camera order.
+
+    Only for photos of more than one camera: a single camera's row already says
+    everything about its photo.
+    """
+    wanted = sorted({c for c in capture_ids if c})
+    if not wanted:
+        return {}
+    rows = conn.execute(
+        "SELECT id, capture_id, camera, camera_name, severity, detection_count, max_confidence "
+        f"FROM detection_event WHERE capture_id IN ({','.join('?' * len(wanted))}) ORDER BY camera",
+        wanted,
+    ).fetchall()
+    found: dict[str, list[dict]] = {}
+    for row in rows:
+        found.setdefault(row["capture_id"], []).append(
+            {key: row[key] for key in ("id", "camera", "camera_name", "severity", "detection_count", "max_confidence")}
+        )
+    return {capture: cameras for capture, cameras in found.items() if len(cameras) > 1}
+
+
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
     """Bring a database created by an older version up to the current schema.
 
@@ -709,10 +761,26 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     column", which means the column is there, which is all that matters.
     """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(detection_event)")}
-    if "camera" in columns:
-        return
-    try:
-        conn.execute("ALTER TABLE detection_event ADD COLUMN camera INTEGER NOT NULL DEFAULT 0")
-    except sqlite3.OperationalError as exc:
-        if "duplicate column" not in str(exc):
-            raise
+    for name, definition in (
+        ("camera", "INTEGER NOT NULL DEFAULT 0"),
+        ("capture_id", "TEXT"),
+        ("capture_lead", "INTEGER NOT NULL DEFAULT 1"),
+        ("camera_name", "TEXT"),
+    ):
+        if name in columns:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE detection_event ADD COLUMN {name} {definition}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc):
+                raise
+    # Here rather than in schema.sql, which runs before an older table has
+    # these columns.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_event_frame_camera "
+        "ON detection_event (site, camera, frame_seq, captured_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_event_capture ON detection_event (capture_id) "
+        "WHERE capture_id IS NOT NULL"
+    )

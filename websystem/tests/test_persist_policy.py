@@ -159,3 +159,17 @@ def test_daily_write_volume_stays_manageable_at_any_frame_rate(fps: int) -> None
 
     # An 8-hour cycle floored at 8 s between writes cannot exceed 3,600.
     assert writes <= 3600, f"{fps} fps produced {writes} writes in 8 h"
+
+
+def test_a_photo_another_camera_asked_for_restarts_this_ones_timer() -> None:
+    p = policy()
+    p.decide("none", now=0.0)  # first observation, written
+    p.saved(now=200.0)  # in camera 2's photo
+    assert not p.decide("none", now=310.0).write  # 110 s since that photo, not 310
+    assert p.decide("none", now=501.0).write
+
+
+def test_a_camera_not_yet_seen_keeps_its_first_photo() -> None:
+    p = policy()
+    p.saved(now=5.0)
+    assert p.decide("none", now=6.0).write  # its first observation still saves

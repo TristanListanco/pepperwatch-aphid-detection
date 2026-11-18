@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS detection_event (
     -- Which camera, as numbered on the dashboard from 0. Databases from before
     -- multi-camera support gain it at startup (Database.initialise).
     camera          INTEGER NOT NULL DEFAULT 0,
+    -- With several cameras one save photographs them all: a row per camera,
+    -- sharing capture_id and the side-by-side photo. capture_lead marks the
+    -- one row the gallery shows for the photo; camera_name is as labelled in
+    -- it. Older databases gain these at startup too.
+    capture_id      TEXT,
+    capture_lead    INTEGER NOT NULL DEFAULT 1,
+    camera_name     TEXT,
 
     -- Relative to config [media].root, never absolute: the database is copied off
     -- the device for analysis and absolute Pi paths would not resolve.
@@ -79,7 +86,9 @@ CREATE INDEX IF NOT EXISTS idx_event_recent ON detection_event (captured_at DESC
 CREATE INDEX IF NOT EXISTS idx_event_archived    ON detection_event (archived, captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_event_severity    ON detection_event (severity, captured_at DESC);
 -- Makes the worker's idempotent upsert a lookup rather than a scan.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_event_frame ON detection_event (site, frame_seq, captured_at);
+-- Replaced by idx_event_frame_camera (Database.initialise): the cameras of
+-- one capture share its time, and can share a frame number.
+DROP INDEX IF EXISTS idx_event_frame;
 
 
 CREATE TABLE IF NOT EXISTS bounding_box (

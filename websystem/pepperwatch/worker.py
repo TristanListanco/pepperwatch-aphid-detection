@@ -43,7 +43,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -55,7 +55,7 @@ from .detect.postprocess import drop_non_plant
 from .frames import make_writer
 from .hal import CameraError, CameraSource, Frame, discover_cameras, get_telemetry, open_cameras
 from .hal.discovery import SYSFS_VIDEO, usb_cameras
-from .models import Detection
+from .models import SEVERITY_ORDER, Detection
 from .mqtt_bus import (
     STATUS_ERROR,
     STATUS_NO_CAMERA,
@@ -66,7 +66,7 @@ from .mqtt_bus import (
     Topics,
     make_bus,
 )
-from .render import draw_detections, encode_jpeg, make_thumbnail
+from .render import compose_cameras, draw_detections, encode_jpeg, make_thumbnail
 from .session import SessionRecorder, recover_interrupted, request_next_label, write_durably
 from .thermal import ThermalGovernor
 
@@ -168,6 +168,16 @@ class PersistDecision:
     reason: str
 
 
+class Shot(NamedTuple):
+    """One camera's part of a saved photo."""
+
+    camera: int
+    frame: Frame
+    detections: list[Detection]
+    severity: str
+    image: np.ndarray  # what is saved: the frame, or a high-resolution still
+
+
 @dataclass
 class PersistPolicy:
     """Decides which frames become database rows.
@@ -262,6 +272,13 @@ class PersistPolicy:
     def confirmed_severity(self) -> str:
         return self._confirmed
 
+    def saved(self, now: float | None = None) -> None:
+        """This camera went into a photo another camera asked for: its own
+        next periodic photo is counted from now. A change in what it sees
+        still saves as soon as it has held."""
+        if self._started:
+            self._last_write = now if now is not None else time.monotonic()
+
 
 def start_session_hardware(base: Config) -> tuple[Config, AcceleratorChoice, Detector]:
     """Pick the accelerator, apply its profile, and build the detector.
@@ -351,6 +368,8 @@ class Worker:
         self._last_telemetry: dict[str, Any] = {}
         self._last_thermal_level = 0
         self._last_severity = ["none"] * count
+        # Each camera's newest result, for the other cameras' saves to include.
+        self._last_result: list[tuple[Frame, list[Detection], str] | None] = [None] * count
         self._inference_ms = 0.0
         self._events_written = 0
         self._frames_captured = 0
@@ -760,6 +779,7 @@ class Worker:
             self.inference_fps.mark()
 
             severity, damaged_area = severity_from_config(detections, self.cfg)
+            self._last_result[index] = (frame, detections, severity)
             # Recording and saving can fail (a full SD card, a locked database);
             # the live detections must carry on regardless.
             try:
@@ -935,8 +955,18 @@ class Worker:
         decision = self.policy[index].decide(severity)
         if not decision.write or self.storage == "full":
             return
-        self._write_event(
-            index, frame, detections, severity, info, trigger=decision.trigger, note=decision.reason
+        # Every camera goes into the photo, so each one's next periodic photo
+        # counts from this one.
+        now = time.monotonic()
+        shots = [Shot(index, frame, detections, severity, frame.bgr)]
+        for other in self._active():
+            last = self._last_result[other]
+            if other != index and last is not None:
+                self.policy[other].saved(now)
+                shots.append(Shot(other, last[0], last[1], last[2], last[0].bgr))
+        self._write_capture(
+            sorted(shots, key=lambda shot: shot.camera), info,
+            trigger=decision.trigger, note=decision.reason, lead=index,
         )
 
     def _write_event(
@@ -951,73 +981,117 @@ class Worker:
         note: str | None = None,
         still: np.ndarray | None = None,
     ) -> int:
+        """One camera's photo and row."""
         image = still if still is not None else frame.bgr
+        return self._write_capture([Shot(index, frame, detections, severity, image)], info, trigger=trigger, note=note)[0]
+
+    def _write_capture(
+        self, shots: list[Shot], info, *, trigger: str, note: str | None = None, lead: int | None = None
+    ) -> list[int]:
+        """Save one photo of these cameras, and a row for each. Returns the rows' ids.
+
+        One camera: its annotated frame, as always. Several: side by side (a
+        2x2 grid for three or four), each named in its corner, and the rows
+        share a capture_id. ``lead`` is the camera whose save it is: its row
+        carries the trigger and is the one the gallery lists.
+        """
+        lead = shots[0].camera if lead is None else lead
+        names = {shot.camera: self._camera_name(shot.camera) for shot in shots}
         # Annotated at save time so an archived scan stands on its own — see
         # the module docstring in render.py.
-        annotated = draw_detections(image, detections)
+        panels = [draw_detections(shot.image, shot.detections) for shot in shots]
+        photo = panels[0] if len(shots) == 1 else compose_cameras(
+            [(panel, names[shot.camera]) for panel, shot in zip(panels, shots)]
+        )
+        seq = next(shot.frame.seq for shot in shots if shot.camera == lead)
 
         captured_at = datetime.now(timezone.utc)
         relative_dir = Path(captured_at.strftime("%Y/%m/%d"))
         (self.media_root / relative_dir).mkdir(parents=True, exist_ok=True)
-        stem = f"{captured_at.strftime('%H%M%S%f')[:-3]}_c{index}_{frame.seq}"
+        cameras = "-".join(str(shot.camera) for shot in shots)
+        stem = f"{captured_at.strftime('%H%M%S%f')[:-3]}_c{cameras}_{seq}"
+        capture_id = f"{captured_at.strftime('%Y%m%dT%H%M%S%f')[:-3]}-c{lead}-{seq}"
 
         image_rel = relative_dir / f"{stem}.jpg"
         thumb_rel = relative_dir / f"{stem}_thumb.jpg"
         quality = self.cfg.camera.jpeg_quality
+        # Two cameras across, so each keeps the width a single camera's thumbnail has.
+        thumb_width = self.cfg.persist.thumb_width * min(2, len(shots))
+        stored = ""
 
         try:
             if self.storage != "ok":
                 raise _NoRoom()
-            # On the disk before the row that points at them is committed.
-            write_durably(self.media_root / image_rel, encode_jpeg(annotated, quality), scratch=self.incoming)
+            # On the disk before the rows that point at them are committed.
+            write_durably(self.media_root / image_rel, encode_jpeg(photo, quality), scratch=self.incoming)
             write_durably(
                 self.media_root / thumb_rel,
-                encode_jpeg(make_thumbnail(annotated, self.cfg.persist.thumb_width), quality),
+                encode_jpeg(make_thumbnail(photo, thumb_width), quality),
                 scratch=self.incoming,
             )
         except _NoRoom:
             image_rel = thumb_rel = None  # type: ignore[assignment]
-            note = f"{note}; storage low, no photo" if note else "storage low, no photo"
+            stored = "storage low, no photo"
         except Exception:  # noqa: BLE001
-            self._report("media_write", "media_write_failed", f"frame {frame.seq}")
+            self._report("media_write", "media_write_failed", f"frame {seq}")
             image_rel = thumb_rel = None  # type: ignore[assignment]
 
-        event_id = self.db.insert_event(
-            site=self.site,
-            camera=index,
-            frame_seq=frame.seq,
-            detections=detections,
-            model_version=info.model_version,
-            conf_threshold=self.cfg.inference.conf_threshold,
-            iou_threshold=self.cfg.inference.iou_threshold,
-            severity=severity,
-            trigger=trigger,
-            captured_at=captured_at.isoformat(timespec="milliseconds"),
-            image_path=str(image_rel) if image_rel else None,
-            thumb_path=str(thumb_rel) if thumb_rel else None,
-            inference_ms=round(self._inference_ms, 2),
-            preview_fps=round(self.preview_fps[index].fps, 2),
-            inference_fps=round(self.inference_fps.fps, 2),
-            synthetic=info.synthetic,
-            note=note,
-        )
-        self._events_written += 1
+        ids = []
+        for shot in shots:
+            is_lead = shot.camera == lead
+            # Another camera's save: say so, rather than claim its trigger. A
+            # snapshot is every camera's.
+            why = note if is_lead or trigger == "manual" else f"in camera {lead + 1}'s photo"
+            ids.append(self.db.insert_event(
+                site=self.site,
+                camera=shot.camera,
+                frame_seq=shot.frame.seq,
+                detections=shot.detections,
+                model_version=info.model_version,
+                conf_threshold=self.cfg.inference.conf_threshold,
+                iou_threshold=self.cfg.inference.iou_threshold,
+                severity=shot.severity,
+                trigger=trigger if is_lead or trigger == "manual" else "auto",
+                captured_at=captured_at.isoformat(timespec="milliseconds"),
+                image_path=str(image_rel) if image_rel else None,
+                thumb_path=str(thumb_rel) if thumb_rel else None,
+                inference_ms=round(self._inference_ms, 2),
+                preview_fps=round(self.preview_fps[shot.camera].fps, 2),
+                inference_fps=round(self.inference_fps.fps, 2),
+                synthetic=info.synthetic,
+                note="; ".join(part for part in (why, stored) if part) or None,
+                capture_id=capture_id,
+                capture_lead=is_lead,
+                camera_name=names[shot.camera],
+            ))
+        self._events_written += len(ids)
 
+        # Once per photo: the dashboard reloads its gallery and, for a
+        # snapshot, says it was saved.
+        worst = max((shot.severity for shot in shots), key=SEVERITY_ORDER.index)
         self.bus.publish(
             Topics.EVENT_PERSISTED,
             {
-                "event_id": event_id,
-                "camera": index,
+                "event_id": ids[[shot.camera for shot in shots].index(lead)],
+                "camera": lead,
+                "cameras": [shot.camera for shot in shots],
+                "capture_id": capture_id,
                 "captured_at": captured_at.isoformat(timespec="milliseconds"),
-                "severity": severity,
-                "detection_count": len(detections),
+                "severity": worst,
+                "detection_count": sum(len(shot.detections) for shot in shots),
                 "trigger": trigger,
                 "image_path": str(image_rel) if image_rel else None,
                 "thumb_path": str(thumb_rel) if thumb_rel else None,
             },
             qos=1,
         )
-        return event_id
+        return ids
+
+    def _camera_name(self, index: int) -> str:
+        """As the photo labels it: the dashboard's number, then the model."""
+        info = getattr(self.cameras[index], "info", None) if index < len(self.cameras) else None
+        model = (info.detail.get("model") or info.description) if info else None
+        return f"Camera {index + 1} · {model}" if model else f"Camera {index + 1}"
 
     # -- commands ----------------------------------------------------------
 
@@ -1211,12 +1285,13 @@ class Worker:
                 log.exception("snapshot failed")
 
     def _take_snapshot(self, request: dict[str, Any]) -> None:
-        """Capture a high-resolution still from every camera; one manual event each."""
+        """A high-resolution still from every camera that is on, saved as one photo."""
         hi_res = bool(request.get("hi_res", True))
+        shots: list[Shot] = []
         for index, camera in enumerate(self.cameras):
             if index not in self._active():
                 continue
-            try:  # one camera failing must not lose the other's snapshot
+            try:  # one camera failing must not lose the others' part
                 still = camera.capture_still() if hi_res else None
                 frame = self.latest[index].take(timeout=1.0)
                 if frame is None and index == 0:
@@ -1224,31 +1299,23 @@ class Worker:
                 if frame is None:
                     log.warning("snapshot requested but camera %d has no frame", index)
                     continue
-                self._snapshot_one(index, frame, still, request)
+                subject = still if still is not None else frame.bgr
+                detections, _ = self._detect(subject)
+                severity, _ = severity_from_config(detections, self.cfg)
+                shots.append(Shot(index, frame, detections, severity, subject))
             except Exception:  # noqa: BLE001
                 log.exception("snapshot from camera %d failed", index)
                 self.db.log_system(level="error", event="snapshot_failed", source="worker", detail=f"camera {index}")
-
-    def _snapshot_one(
-        self, index: int, frame: Frame, still: np.ndarray | None, request: dict[str, Any]
-    ) -> None:
-        if self.storage == "full":
-            log.warning("snapshot from camera %d not saved: the SD card is full", index)
+        if not shots:
             return
-        subject = still if still is not None else frame.bgr
-        detections, _ = self._detect(subject)
-        severity, _ = severity_from_config(detections, self.cfg)
-        event_id = self._write_event(
-            index,
-            frame,
-            detections,
-            severity,
-            self.detector.info,
-            trigger="manual",
+        if self.storage == "full":
+            log.warning("snapshot not saved: the SD card is full")
+            return
+        ids = self._write_capture(
+            shots, self.detector.info, trigger="manual",
             note=f"manual snapshot {request.get('request_id', '')}".strip(),
-            still=subject,
         )
-        log.info("snapshot stored as event %d (%d detections)", event_id, len(detections))
+        log.info("snapshot stored as events %s (%d detections)", ids, sum(len(s.detections) for s in shots))
 
 
 def _sha256(path: Path) -> str:

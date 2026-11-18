@@ -93,6 +93,47 @@ def draw_detections(
     return canvas
 
 
+def compose_cameras(panels: list[tuple[np.ndarray, str]]) -> np.ndarray:
+    """Several cameras' annotated frames as one photo, each named in its corner.
+
+    Two sit side by side; three or four go in a 2x2 grid, so a phone's gallery
+    thumbnail stays readable. Every panel is scaled to the smallest height
+    among them and centred in an equal cell, so a 16:9 still and a 4:3 webcam
+    frame can share a photo without being stretched.
+    """
+    height = min(image.shape[0] for image, _ in panels)
+    scaled = [
+        image if image.shape[0] == height
+        else cv2.resize(image, (max(1, round(image.shape[1] * height / image.shape[0])), height),
+                        interpolation=cv2.INTER_AREA)
+        for image, _ in panels
+    ]
+    width = max(image.shape[1] for image in scaled)
+    columns = min(2, len(panels))
+    rows = -(-len(panels) // columns)
+    gap = max(2, height // 160)
+    canvas = np.full(
+        (rows * height + (rows - 1) * gap, columns * width + (columns - 1) * gap, 3), 24, np.uint8
+    )
+    scale = max(0.5, height / 900.0)
+    thickness = max(1, round(scale * 1.5))
+    inset = max(4, height // 24)  # clear of a gallery tile's rounded corner
+    for slot, (image, (_, name)) in enumerate(zip(scaled, panels)):
+        row, column = divmod(slot, columns)
+        top, left = row * (height + gap), column * (width + gap)
+        x = left + (width - image.shape[1]) // 2
+        canvas[top:top + height, x:x + image.shape[1]] = image
+        # Hershey fonts draw ASCII only.
+        text = name.replace(" · ", " - ").encode("ascii", "replace").decode()
+        (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+        pad = max(4, text_h // 2)
+        x0, y0 = left + inset, top + inset
+        cv2.rectangle(canvas, (x0, y0), (x0 + text_w + 2 * pad, y0 + text_h + baseline + 2 * pad), (0, 0, 0), -1)
+        cv2.putText(canvas, text, (x0 + pad, y0 + pad + text_h), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, COLOUR_TEXT, thickness, cv2.LINE_AA)
+    return canvas
+
+
 def encode_jpeg(bgr: np.ndarray, quality: int = 75) -> bytes:
     """Encode to JPEG bytes, or raise if OpenCV refuses."""
     ok, buffer = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])

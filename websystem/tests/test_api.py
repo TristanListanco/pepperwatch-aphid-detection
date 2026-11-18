@@ -388,6 +388,64 @@ def test_photos_with_no_leaves_say_nothing_about_the_plants(app) -> None:
     assert database.recent_status() == {"severity": "low", "basis": "7d", "photos": 1}
 
 
+def _capture(database, severities, *, capture_id="cap-1") -> list[int]:
+    """One save of several cameras: a row each, sharing the side-by-side photo."""
+    from datetime import datetime, timezone
+
+    from pepperwatch.models import Detection
+
+    at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    leaf = Detection(class_id=0, class_name="healthy", confidence=0.9, x=0.5, y=0.5, w=0.1, h=0.1)
+    return [
+        database.insert_event(
+            site="Naawan", camera=camera, frame_seq=7, detections=[leaf], model_version="m",
+            conf_threshold=0.25, iou_threshold=0.45, severity=severity, trigger="manual", captured_at=at,
+            image_path=f"x/{capture_id}.jpg", thumb_path=f"x/{capture_id}_thumb.jpg", inference_ms=1.0,
+            preview_fps=1.0, inference_fps=1.0, capture_id=capture_id, capture_lead=camera == 0,
+            camera_name=f"Camera {camera + 1} · C270",
+        )
+        for camera, severity in enumerate(severities)
+    ]
+
+
+def test_a_photo_of_several_cameras_is_one_item_in_recent_photos(app, client) -> None:
+    database = app.config["PW_DB"]
+    lead, _ = _capture(database, ["none", "high"])  # the same frame number: allowed per camera
+    _event(database, "low")  # one camera's scan
+
+    page = client.get("/api/events").get_json()
+    assert page["total"] == 2
+    (photo,) = [item for item in page["items"] if item["cameras"]]
+    assert photo["id"] == lead and [c["severity"] for c in photo["cameras"]] == ["none", "high"]
+    # A filter on what was found matches when any camera in the photo does.
+    assert [i["id"] for i in client.get("/api/events?severity=high").get_json()["items"]] == [lead]
+
+    # Its advice follows the worst camera, not the row that leads it.
+    opened = client.get(f"/api/events/{lead}").get_json()
+    assert opened["advice"]["severity"] == "high" and len(opened["cameras"]) == 2
+
+    # Archived together.
+    client.post(f"/api/events/{lead}/archive", json={"archived": True})
+    assert client.get("/api/events").get_json()["total"] == 1
+    with database.read() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM detection_event WHERE archived = 1").fetchone()[0] == 2
+
+
+def test_the_csv_says_which_camera_and_which_photo(app, client) -> None:
+    _capture(app.config["PW_DB"], ["none", "low"])
+    rows = list(csv.DictReader(io.StringIO(client.get("/api/export.csv").get_data(as_text=True))))
+    assert [(r["camera"], r["camera_name"], r["capture_id"]) for r in sorted(rows, key=lambda r: r["camera"])] == [
+        ("0", "Camera 1 · C270", "cap-1"),
+        ("1", "Camera 2 · C270", "cap-1"),
+    ]
+
+
+def test_the_farmers_card_counts_photos_not_cameras(app) -> None:
+    database = app.config["PW_DB"]
+    _capture(database, ["low", "low"])
+    assert database.recent_status()["photos"] == 1
+
+
 def test_weekly_stats_carry_the_farmers_status_and_the_stub_flag(app, client) -> None:
     _event(app.config["PW_DB"], "low")
     app.config["PW_HUB"]._on_message("pepperwatch/status/detector", {"synthetic": True})

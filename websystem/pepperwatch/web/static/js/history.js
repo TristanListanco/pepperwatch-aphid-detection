@@ -8,11 +8,22 @@ import { dateTime, errorText, num, pct, relative, severityLabel } from './fmt.js
 import { isSimple, locale, word } from './words.js';
 // The simple view names a severity in plain words, in the chosen language.
 const severityText = (severity) => (isSimple() ? word(`sev.${severity}`) : severityLabel(severity));
-// The detector found no leaves in this photo. "Healthy" would claim what it
-// never checked, so the simple view says what happened instead.
 const noLeaves = (event) => isSimple() && event.severity === 'none' && !event.detection_count;
 const photoText = (event) => (noLeaves(event) ? word('photos.no_leaves') : severityText(event.severity));
 const photoClass = (event) => (noLeaves(event) ? 'muted' : `sev-${event.severity}`);
+// A photo of several cameras is as bad as its worst camera, and holds the
+// leaves all of them found.
+const RANK = ['none', 'low', 'moderate', 'high'];
+function overall(event) {
+    const cameras = event.cameras || [];
+    if (cameras.length < 2)
+        return event;
+    return {
+        severity: cameras.reduce((worst, c) => (RANK.indexOf(c.severity) > RANK.indexOf(worst) ? c.severity : worst), 'none'),
+        detection_count: cameras.reduce((sum, c) => sum + (c.detection_count || 0), 0),
+    };
+}
+const cameraName = (c) => c.camera_name || word('camera.n', { n: c.camera + 1 });
 export class History {
     constructor(root, { pageSize = 12 } = {}) {
         this.offset = 0;
@@ -120,14 +131,17 @@ export class History {
         button.className = 'scan';
         button.type = 'button';
         button.dataset.eventId = String(item.id);
+        const shown = overall(item);
+        const cameras = item.cameras || [];
         button.setAttribute('aria-label', isSimple()
-            ? `${word('photos.at', { time: dateTime(item.captured_at) })}, ${photoText(item)}`
-            : `Scan at ${dateTime(item.captured_at)}, severity ${severityLabel(item.severity)}`);
+            ? `${word('photos.at', { time: dateTime(item.captured_at) })}, ${photoText(shown)}`
+            : `Scan at ${dateTime(item.captured_at)}, severity ${severityLabel(shown.severity)}`);
         const thumb = document.createElement('img');
         thumb.className = 'scan-thumb';
         thumb.loading = 'lazy';
         thumb.decoding = 'async';
         thumb.alt = '';
+        thumb.classList.toggle('is-pair', cameras.length === 2); // side by side: twice as wide
         if (item.thumb_path)
             thumb.src = `/media/${item.thumb_path}`;
         else if (item.image_path)
@@ -140,13 +154,18 @@ export class History {
         const detail = document.createElement('div');
         detail.className = 'scan-detail';
         const severity = document.createElement('span');
-        severity.className = photoClass(item);
-        severity.textContent = photoText(item);
+        severity.className = photoClass(shown);
+        severity.textContent = photoText(shown);
         detail.appendChild(severity);
         if (!isSimple()) {
-            detail.appendChild(document.createTextNode(`${item.detection_count} box${item.detection_count === 1 ? '' : 'es'}`));
+            detail.appendChild(document.createTextNode(`${shown.detection_count} box${shown.detection_count === 1 ? '' : 'es'}`));
         }
-        if (this.multiCamera) {
+        if (cameras.length > 1) {
+            // The photo names each camera itself.
+            if (!isSimple())
+                detail.appendChild(document.createTextNode(`${cameras.length} cameras`));
+        }
+        else if (this.multiCamera) {
             const camera = (item.camera || 0) + 1;
             detail.appendChild(document.createTextNode(isSimple() ? word('camera.n', { n: camera }) : `Cam ${camera}`));
         }
@@ -203,19 +222,23 @@ export class History {
                 image.alt = `Scan from ${dateTime(event.captured_at)}`;
             }
             const meta = this.dialog.querySelector('[data-dialog-meta]');
+            const shown = overall(event);
+            const cameras = (event.cameras || []).length > 1 ? event.cameras || [] : [];
             if (meta && isSimple()) {
                 meta.innerHTML = `
           <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
-            <span class="muted">${escapeHtml(relative(event.captured_at))}${this.multiCamera ? ` · ${escapeHtml(word('camera.n', { n: (event.camera || 0) + 1 }))}` : ''}</span></div>
-          <div class="${escapeHtml(photoClass(event))}">${escapeHtml(photoText(event))}</div>
-          ${event.advice && !noLeaves(event) ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
+            <span class="muted">${escapeHtml(relative(event.captured_at))}${this.multiCamera && !cameras.length ? ` · ${escapeHtml(word('camera.n', { n: (event.camera || 0) + 1 }))}` : ''}</span></div>
+          <div class="${escapeHtml(photoClass(shown))}">${escapeHtml(photoText(shown))}</div>
+          ${cameras.map((c) => `<div class="${escapeHtml(photoClass(c))}">${escapeHtml(cameraName(c))}: ${escapeHtml(photoText(c))}</div>`).join('')}
+          ${event.advice && !noLeaves(shown) ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
             }
             else if (meta) {
                 meta.innerHTML = `
           <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
-            <span class="muted">${escapeHtml(relative(event.captured_at))}${this.multiCamera ? ` · Camera ${(event.camera || 0) + 1}` : ''}</span></div>
+            <span class="muted">${escapeHtml(relative(event.captured_at))}${this.multiCamera && !cameras.length ? ` · Camera ${(event.camera || 0) + 1}` : ''}</span></div>
+          ${cameras.length ? cameras.map((c) => `<div class="sev-${escapeHtml(c.severity)}">${escapeHtml(cameraName(c))}: ${escapeHtml(severityLabel(c.severity))}, ${c.detection_count} detections${c.max_confidence ? `, best ${pct(c.max_confidence, 0)}` : ''}</div>`).join('') : `
           <div class="sev-${escapeHtml(event.severity)}">Severity: ${escapeHtml(severityLabel(event.severity))}</div>
-          <div class="muted">${event.detection_count} detections${event.max_confidence ? `, best ${pct(event.max_confidence, 0)}` : ''}${event.damaged_area ? `, ${pct(event.damaged_area, 1)} of frame affected` : ''}</div>
+          <div class="muted">${event.detection_count} detections${event.max_confidence ? `, best ${pct(event.max_confidence, 0)}` : ''}${event.damaged_area ? `, ${pct(event.damaged_area, 1)} of frame affected` : ''}</div>`}
           <div class="muted mono">${escapeHtml(event.model_version)} · conf ≥ ${num(event.conf_threshold, 2)} · ${event.inference_ms ? `${num(event.inference_ms, 0)} ms` : '—'}</div>
           ${event.synthetic ? '<div class="sev-moderate">Synthetic — not a field measurement</div>' : ''}
           ${event.advice ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;

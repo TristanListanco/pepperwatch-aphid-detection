@@ -26,7 +26,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from werkzeug.security import safe_join
 
 from ..config import TUNABLES
-from ..models import Detection
+from ..models import SEVERITY_ORDER, Detection
 from ..session import csv_safe
 from ..mqtt_bus import Topics
 
@@ -48,6 +48,9 @@ EXPORT_COLUMNS = (
     "image_path",
     # Added later: new columns go last, so existing columns keep their places.
     "camera",
+    # The rows of one multi-camera photo share capture_id; each box's x, y, w
+    # and h are relative to its own camera's frame, not to the whole photo.
+    "capture_id", "camera_name",
 )
 
 
@@ -234,7 +237,9 @@ def get_event(event_id: int):
     event = _db().get_event(event_id)
     if event is None:
         return jsonify({"error": f"no event {event_id}"}), 404
-    event["advice"] = _advisory().for_severity(event["severity"], locale=_locale())
+    # A photo of several cameras is as bad as its worst camera.
+    worst = max((c["severity"] for c in event["cameras"]), key=SEVERITY_ORDER.index, default=event["severity"])
+    event["advice"] = _advisory().for_severity(worst, locale=_locale())
     return jsonify(event)
 
 

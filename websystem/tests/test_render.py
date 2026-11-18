@@ -12,6 +12,7 @@ from pepperwatch.render import (
     COLOUR_DAMAGE,
     COLOUR_HEALTHY,
     colour_for,
+    compose_cameras,
     draw_detections,
     encode_jpeg,
     make_thumbnail,
@@ -130,3 +131,28 @@ def test_thumbnail_preserves_aspect_ratio(frame: np.ndarray) -> None:
 def test_thumbnail_does_not_upscale() -> None:
     small = np.zeros((60, 80, 3), np.uint8)
     assert make_thumbnail(small, 320).shape == small.shape
+
+
+def test_two_cameras_sit_side_by_side_and_four_in_a_grid() -> None:
+    def panel(value: int, height: int = 480, width: int = 640) -> np.ndarray:
+        return np.full((height, width, 3), value, np.uint8)
+
+    two = compose_cameras([(panel(80), "Camera 1 · C270"), (panel(160), "Camera 2")])
+    assert two.shape[0] == 480 and two.shape[1] > 2 * 640  # side by side, with a gap
+    assert two[240, 320, 0] == 80 and two[240, -320, 0] == 160  # each in its own half
+
+    four = compose_cameras([(panel(v), f"Camera {v}") for v in (40, 80, 120, 160)])
+    assert four.shape[0] > 2 * 480 and four.shape[1] > 2 * 640  # 2x2
+    assert four[-240, -320, 0] == 160  # the fourth, bottom right
+
+    # A 16:9 still beside a 4:3 frame: scaled to one height, not stretched.
+    mixed = compose_cameras([(panel(80, 1296, 2304), "Camera 1"), (panel(160), "Camera 2")])
+    assert mixed.shape[0] == 480
+
+
+def test_each_camera_is_named_in_its_corner() -> None:
+    plain = np.full((480, 640, 3), 120, np.uint8)
+    photo = compose_cameras([(plain, "Camera 1 · C270"), (plain.copy(), "Camera 2")])
+    corner = photo[:80, :260]
+    assert (corner == 0).any() and (corner == 255).any()  # a dark band with white text
+    assert (photo[240, 320] == 120).all()  # the picture itself is left alone

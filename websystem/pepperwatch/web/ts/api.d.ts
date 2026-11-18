@@ -89,6 +89,20 @@ export interface ScanEvent {
   conf_threshold?: number;
   inference_ms?: number | null;
   advice?: Advice | null;
+  capture_id?: string | null;
+  camera_name?: string | null;
+  // Every camera's result, when the photo shows more than one.
+  cameras?: CaptureCamera[];
+}
+
+// One camera's result in a photo of several (ScanEvent.cameras).
+export interface CaptureCamera {
+  id: number;
+  camera: number;
+  camera_name?: string | null;
+  severity: Severity;
+  detection_count: number;
+  max_confidence?: number | null;
 }
 
 export interface EventsPage {

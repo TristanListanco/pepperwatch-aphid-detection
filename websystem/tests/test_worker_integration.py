@@ -154,6 +154,20 @@ def test_two_cameras_are_detected_saved_and_streamed_separately(tmp_path, monkey
     assert (0, "auto") in rows and (1, "auto") in rows
     assert (0, "manual") in rows and (1, "manual") in rows
 
+    # The snapshot is one photo of both cameras, side by side: one row each,
+    # sharing it, and each named as the photo labels it.
+    snapshot = sqlite3.connect(cfg.db_path).execute(
+        "SELECT camera, capture_id, image_path, camera_name, capture_lead FROM detection_event "
+        "WHERE trigger = 'manual' ORDER BY camera"
+    ).fetchall()
+    assert [row[0] for row in snapshot] == [0, 1] and len({row[1:3] for row in snapshot}) == 1
+    assert [row[3] for row in snapshot] == ["Camera 1 · fake /dev/video0", "Camera 2 · fake /dev/video2"]
+    assert sum(row[4] for row in snapshot) == 1  # listed once in Recent photos
+    import cv2
+
+    photo = cv2.imread(str(cfg.media_root / snapshot[0][2]))
+    assert photo.shape[1] > 2 * 640 and photo.shape[0] == 480
+
     statuses = {s["session_id"]: s["status"] for s in list_sessions(cfg.sessions_root)}
     assert statuses.pop(cut.session_id) == "interrupted" and list(statuses.values()) == ["complete"]
     recovered = sqlite3.connect(cfg.db_path).execute(
