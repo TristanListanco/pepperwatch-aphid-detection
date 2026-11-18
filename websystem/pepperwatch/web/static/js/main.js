@@ -19,9 +19,11 @@ function bootDashboard() {
     const bus = new Bus();
     const controls = new Controls(document, { onToast: toast });
     // Boxes show only while the detector is running and not paused; anything
-    // else would leave the last ones frozen over the picture.
+    // else would leave the last ones frozen over the picture. With no model the
+    // stand-in detector's boxes are made up, so they never show.
     let workerAlive = document.querySelector('[data-worker-chip].is-live') !== null;
     let paused = false;
+    let noModel = false;
     let lastReadingAt = null;
     let lastFrameAt = null;
     // -- live feed: one view per camera ------------------------------------
@@ -30,11 +32,13 @@ function bootDashboard() {
     const viewsRoot = document.querySelector('[data-viewports]');
     const views = [];
     let pageLoaded = false;
-    const showOverlay = () => views.forEach((view) => view.toggleOverlay(workerAlive && !paused));
+    const overlayOn = () => workerAlive && !paused && !noModel;
+    const overlayNote = () => (noModel ? word('live.no_model') : '');
+    const showOverlay = () => views.forEach((view) => view.toggleOverlay(overlayOn(), overlayNote()));
     const addView = (index, element) => {
         const view = new LiveView(element, index);
         view.setMirror(prefs.mirror);
-        view.toggleOverlay(workerAlive && !paused);
+        view.toggleOverlay(overlayOn(), overlayNote());
         if (pageLoaded && !document.hidden)
             view.setMode(liveMode);
         element.style.viewTransitionName = `camera-${index}`; // see focusCamera
@@ -211,7 +215,12 @@ function bootDashboard() {
         if (view)
             view.update(payload);
     });
-    bus.on('session', (meta) => showCameras(meta.cameras));
+    const showSession = (meta) => {
+        showCameras(meta.cameras);
+        noModel = meta.detector?.synthetic === true;
+        showOverlay();
+    };
+    bus.on('session', showSession);
     controls.setAvailable(workerAlive);
     // -- performance, power and the session --------------------------------
     const deviceRoot = document.querySelector('[data-device-list]');
@@ -266,7 +275,7 @@ function bootDashboard() {
             if (data && data.camera_connected)
                 camerasConnected = data.camera_connected;
             if (data && data.session) {
-                showCameras(data.session.cameras);
+                showSession(data.session);
                 session.render(data.session);
                 if (devices)
                     devices.setSession(data.session);
@@ -306,7 +315,7 @@ function bootDashboard() {
         });
     }
     bus.on('flag', (payload) => {
-        if (payload.severity && payload.severity !== 'none') {
+        if (!noModel && payload.severity && payload.severity !== 'none') {
             const camera = views.length > 1 ? `${word('camera.n', { n: (payload.camera || 0) + 1 })}: ` : '';
             if (isSimple()) {
                 toast(`${camera}${word(`sev.${payload.severity}`)}`);

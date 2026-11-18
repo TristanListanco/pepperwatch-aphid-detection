@@ -50,6 +50,7 @@ export class LiveView {
     // root is one camera's figure; camera is its index in the session.
     constructor(root, camera = 0) {
         this.summaryAt = 0;
+        this.overlayNote = '';
         this.mode = 'idle';
         this.pollTimer = null;
         this.detections = [];
@@ -137,8 +138,11 @@ export class LiveView {
         this.observer.disconnect();
         clearTimeout(this.summaryTimer);
     }
-    toggleOverlay(show) {
+    // note: said in place of the boxes while they are off, if there is a reason
+    // the viewer would not otherwise know.
+    toggleOverlay(show, note = '') {
         this.showOverlay = show;
+        this.overlayNote = note;
         this.draw();
         this.updateSummary();
     }
@@ -167,7 +171,7 @@ export class LiveView {
     // picture, which neither a screen reader nor a colour-blind eye can read.
     summaryText() {
         if (!this.showOverlay)
-            return '';
+            return this.overlayNote;
         const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
         const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
         if (isSimple()) {
@@ -189,8 +193,9 @@ export class LiveView {
             return;
         clearTimeout(this.summaryTimer);
         const wait = this.summaryAt + SUMMARY_MS - Date.now();
-        if (wait > 0 && text) {
-            // Trailing update: the latest count lands once the interval is up.
+        if (wait > 0 && text && this.showOverlay) {
+            // Trailing update: the latest count lands once the interval is up. A
+            // note about why the boxes are off is not a count; it lands at once.
             this.summaryTimer = setTimeout(() => this.updateSummary(), wait);
             return;
         }

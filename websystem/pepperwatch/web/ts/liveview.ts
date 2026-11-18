@@ -65,6 +65,7 @@ export class LiveView {
   private readonly observer: ResizeObserver;
   private summaryAt = 0;
   private summaryTimer: number | undefined;
+  private overlayNote = '';
   mode: LiveMode = 'idle';
   private pollTimer: number | null = null;
   private detections: Box[] = [];
@@ -159,8 +160,11 @@ export class LiveView {
     clearTimeout(this.summaryTimer);
   }
 
-  toggleOverlay(show: boolean): void {
+  // note: said in place of the boxes while they are off, if there is a reason
+  // the viewer would not otherwise know.
+  toggleOverlay(show: boolean, note = ''): void {
     this.showOverlay = show;
+    this.overlayNote = note;
     this.draw();
     this.updateSummary();
   }
@@ -193,7 +197,7 @@ export class LiveView {
   // What is in view, in words: the boxes alone are colour on a moving
   // picture, which neither a screen reader nor a colour-blind eye can read.
   private summaryText(): string {
-    if (!this.showOverlay) return '';
+    if (!this.showOverlay) return this.overlayNote;
     const damaged = this.detections.filter((d) => d.class_name === 'aphid_damage').length;
     const healthy = this.detections.filter((d) => d.class_name === 'healthy').length;
     if (isSimple()) {
@@ -213,8 +217,9 @@ export class LiveView {
     if (text === this.summary.textContent) return;
     clearTimeout(this.summaryTimer);
     const wait = this.summaryAt + SUMMARY_MS - Date.now();
-    if (wait > 0 && text) {
-      // Trailing update: the latest count lands once the interval is up.
+    if (wait > 0 && text && this.showOverlay) {
+      // Trailing update: the latest count lands once the interval is up. A
+      // note about why the boxes are off is not a count; it lands at once.
       this.summaryTimer = setTimeout(() => this.updateSummary(), wait);
       return;
     }

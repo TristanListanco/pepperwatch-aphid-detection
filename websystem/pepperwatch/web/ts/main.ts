@@ -1,6 +1,6 @@
 // Page bootstrap. Wires the transport to whichever panels this page contains.
 
-import type { CameraMeta, Health, SessionResponse, WeeklyStats, WorkerState } from './api.js';
+import type { CameraMeta, Health, SessionMeta, SessionResponse, WeeklyStats, WorkerState } from './api.js';
 import { Bus, poll, fetchJson, postJson } from './bus.js';
 import { Controls, toast } from './controls.js';
 import { DeviceList } from './devices.js';
@@ -24,9 +24,11 @@ function bootDashboard(): void {
   const controls = new Controls(document, { onToast: toast });
 
   // Boxes show only while the detector is running and not paused; anything
-  // else would leave the last ones frozen over the picture.
+  // else would leave the last ones frozen over the picture. With no model the
+  // stand-in detector's boxes are made up, so they never show.
   let workerAlive = document.querySelector('[data-worker-chip].is-live') !== null;
   let paused = false;
+  let noModel = false;
   let lastReadingAt: number | null = null;
   let lastFrameAt: number | null = null;
 
@@ -38,12 +40,14 @@ function bootDashboard(): void {
   const views: LiveView[] = [];
   let pageLoaded = false;
 
-  const showOverlay = () => views.forEach((view) => view.toggleOverlay(workerAlive && !paused));
+  const overlayOn = () => workerAlive && !paused && !noModel;
+  const overlayNote = () => (noModel ? word('live.no_model') : '');
+  const showOverlay = () => views.forEach((view) => view.toggleOverlay(overlayOn(), overlayNote()));
 
   const addView = (index: number, element: HTMLElement) => {
     const view = new LiveView(element, index);
     view.setMirror(prefs.mirror);
-    view.toggleOverlay(workerAlive && !paused);
+    view.toggleOverlay(overlayOn(), overlayNote());
     if (pageLoaded && !document.hidden) view.setMode(liveMode);
     element.style.viewTransitionName = `camera-${index}`; // see focusCamera
     views[index] = view;
@@ -204,7 +208,12 @@ function bootDashboard(): void {
     const view = views[payload.camera || 0];
     if (view) view.update(payload);
   });
-  bus.on('session', (meta) => showCameras(meta.cameras));
+  const showSession = (meta: SessionMeta) => {
+    showCameras(meta.cameras);
+    noModel = meta.detector?.synthetic === true;
+    showOverlay();
+  };
+  bus.on('session', showSession);
   controls.setAvailable(workerAlive);
 
   // -- performance, power and the session --------------------------------
@@ -256,7 +265,7 @@ function bootDashboard(): void {
       if (data && data.camera_on) camerasOn = data.camera_on;
       if (data && data.camera_connected) camerasConnected = data.camera_connected;
       if (data && data.session) {
-        showCameras(data.session.cameras);
+        showSession(data.session);
         session.render(data.session);
         if (devices) devices.setSession(data.session);
       }
@@ -294,7 +303,7 @@ function bootDashboard(): void {
   }
 
   bus.on('flag', (payload) => {
-    if (payload.severity && payload.severity !== 'none') {
+    if (!noModel && payload.severity && payload.severity !== 'none') {
       const camera = views.length > 1 ? `${word('camera.n', { n: (payload.camera || 0) + 1 })}: ` : '';
       if (isSimple()) {
         toast(`${camera}${word(`sev.${payload.severity}`)}`);
