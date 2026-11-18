@@ -10,6 +10,7 @@ by failing every off-host request and checking the page still renders.
 
 from __future__ import annotations
 
+import gzip
 import re
 from pathlib import Path
 
@@ -204,11 +205,48 @@ def test_media_serves_a_file_inside_the_root(client, cfg) -> None:
     response = client.get("/media/2026/09/x.jpg")
     assert response.status_code == 200
     assert response.get_data() == b"\xff\xd8test\xff\xd9"
+    assert "immutable" in response.headers["Cache-Control"]  # a saved photo never changes
 
 
 def test_static_assets_are_served(client) -> None:
     for asset in ("css/app.css", "js/main.js", "js/bus.js", "js/liveview.js"):
         assert client.get(f"/static/{asset}").status_code == 200, asset
+
+
+def test_pages_load_assets_a_phone_can_keep_until_they_change(client) -> None:
+    """Versioned URLs: kept for a year, and an update changes the URL."""
+    html = client.get("/").get_data(as_text=True)
+    urls = re.findall(r'(?:src|href)="(/static/v/[^"]+)"', html)
+    assert len(urls) == 4  # theme.js, the font, app.css, main.js
+    build = urls[0].split("/")[3]
+    # Module imports and the stylesheet's font are relative, so they share it.
+    for path in ("js/main.js", "js/words.js", "fonts/outfit-latin-var.woff2"):
+        response = client.get(f"/static/v/{build}/{path}")
+        assert response.status_code == 200 and "immutable" in response.headers["Cache-Control"], path
+    # A page from before an update still loads, but what it gets is not kept.
+    stale = client.get("/static/v/0000000000/js/main.js")
+    assert stale.status_code == 200 and "immutable" not in stale.headers["Cache-Control"]
+
+
+def test_the_asset_version_follows_the_files(tmp_path) -> None:
+    from pepperwatch.web import _static_version
+
+    (tmp_path / "app.css").write_text("a")
+    before = _static_version(tmp_path)
+    (tmp_path / "app.css").write_text("b")
+    assert _static_version(tmp_path) != before
+
+
+def test_text_is_gzipped_for_phones_that_ask(client) -> None:
+    gz = {"Accept-Encoding": "gzip, deflate"}
+    for path in ("/", "/api/config", "/static/css/app.css"):
+        assert client.get(path, headers=gz).headers.get("Content-Encoding") == "gzip", path
+    css = client.get("/static/css/app.css", headers=gz)
+    assert gzip.decompress(css.data) == client.get("/static/css/app.css").data
+    assert "Content-Encoding" not in client.get("/").headers  # did not ask
+    assert "Content-Encoding" not in client.get("/api/export.csv", headers=gz).headers  # a stream
+    # Still revalidated without sending the file again.
+    assert client.get("/static/css/app.css", headers={**gz, "If-None-Match": css.headers["ETag"]}).status_code == 304
 
 
 def test_javascript_modules_import_only_local_files(client) -> None:

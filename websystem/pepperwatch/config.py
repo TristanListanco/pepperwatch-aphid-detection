@@ -37,6 +37,16 @@ ENV_PREFIX = "PW"
 # default.toml is sized for, so it has none.
 TIER_PROFILES = ("mid", "low", "tiny")
 
+# What Settings may change while running (PATCH /api/config): the config table
+# each lives in, and its allowed range. The worker keeps them across sessions.
+TUNABLES = {
+    "conf_threshold": ("inference", 0.01, 0.99),
+    "iou_threshold": ("inference", 0.01, 0.99),
+    # How often a photo is saved while damage is in view, and while none is.
+    "heartbeat_detected_s": ("persist", 10, 86400),
+    "heartbeat_clean_s": ("persist", 10, 86400),
+}
+
 
 class ConfigError(RuntimeError):
     """Raised when configuration is missing or cannot be coerced."""

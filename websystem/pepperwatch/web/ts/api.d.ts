@@ -182,12 +182,15 @@ export interface WeeklyStats {
   advice?: Advice | null;
   detector_synthetic?: boolean;
   // What recent photos typically show: the simple view's status.
-  status?: { severity?: Severity; basis?: '24h' | '7d'; photos?: number; advice?: Advice | null };
+  // photos counts only those with leaves; no_leaves, those without, when none had any.
+  status?: { severity?: Severity; basis?: '24h' | '7d'; photos?: number; no_leaves?: number; advice?: Advice | null };
 }
 
 // /api/config
 export interface Config {
   inference: { conf_threshold: number; iou_threshold: number };
+  // Seconds between saved photos, while damage is in view and while none is.
+  persist: { heartbeat_detected_s: number; heartbeat_clean_s: number };
   site: { name: string };
   locales?: string[];
 }

@@ -40,8 +40,10 @@ function renderStatus(root, stats) {
     if (icon)
         icon.setAttribute('href', `#${noModel ? 'i-triangle-alert' : (urgency && URGENCY_ICONS[urgency]) || 'i-sprout'}`);
     text(card, '[data-farm-urgency]', urgency ? word(`urgency.${urgency}`) : '');
-    let headline = photos ? advice.headline || '' : word('status.empty');
-    let body = photos ? advice.body || '' : word('status.empty_note');
+    // Photos, but none with a leaf in them: the camera is aimed off the plants.
+    const empty = status.no_leaves ? 'status.no_leaves' : 'status.empty';
+    let headline = photos ? advice.headline || '' : word(empty);
+    let body = photos ? advice.body || '' : word(`${empty}_note`);
     if (noModel) {
         headline = word('status.no_model');
         body = word('status.no_model_note');

@@ -248,6 +248,23 @@ def test_every_reconnect_announces_the_worker_again() -> None:
     assert announced == ["online", "online"]
 
 
+def test_a_clean_disconnect_is_not_logged_as_a_problem(caplog) -> None:
+    """paho 2's ReasonCode is truthy even for "Normal disconnection"."""
+    import logging
+
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.reasoncodes import ReasonCode
+
+    from pepperwatch.mqtt_bus import MqttBus
+
+    bus = MqttBus(client_id="test")
+    with caplog.at_level(logging.WARNING, logger="pepperwatch.mqtt_bus"):
+        bus._on_disconnect(None, None, None, ReasonCode(PacketTypes.DISCONNECT, identifier=0))
+        assert not caplog.records
+        bus._on_disconnect(None, None, None, ReasonCode(PacketTypes.DISCONNECT, identifier=128))
+    assert "Unspecified error" in caplog.text
+
+
 def test_a_silent_camera_is_reported_and_reopened_then_recovers(monkeypatch) -> None:
     import numpy as np
 
@@ -356,8 +373,51 @@ def test_thresholds_set_from_the_dashboard_outlast_the_session(tmp_path) -> None
     second = _worker("/dev/video0")
     second.cfg, second.db, second.detector = load(use_env=False), database, Detector()
     assert second.cfg.inference.conf_threshold == 0.25
-    second._restore_thresholds()
+    second._restore_settings()
     assert second.cfg.inference.conf_threshold == 0.4 and second.detector.applied == (0.4, None)
+
+
+def test_a_renamed_site_is_stamped_on_new_photos_and_outlasts_the_session(tmp_path) -> None:
+    from pepperwatch.db import Database
+
+    cfg = load({"db": {"path": str(tmp_path / "db.sqlite")}}, use_env=False)
+    database = Database(cfg)
+    database.initialise()
+
+    running = _worker("/dev/video0")
+    running.db, running.site = database, "Naawan"
+    running._apply_config({"site_name": "Buru-un"})  # the dashboard's rename
+    assert running.site == "Buru-un" and running.cfg.site.name == "Buru-un"
+
+    database.set_meta("site_name", "Buru-un")  # what the dashboard saved
+    later = _worker("/dev/video0")
+    later.db, later.site = database, "Naawan"
+    later._restore_settings()
+    assert later.site == "Buru-un"
+
+
+def test_photo_interval_set_from_the_dashboard_reaches_every_camera_and_outlasts_the_session(tmp_path) -> None:
+    from pepperwatch.db import Database
+
+    cfg = load({"db": {"path": str(tmp_path / "db.sqlite")}}, use_env=False)
+    database = Database(cfg)
+    database.initialise()
+
+    def worker() -> worker_module.Worker:
+        made = _worker("/dev/video0", "/dev/video2")
+        made.cfg, made.db, made.detector = load(use_env=False), database, object()
+        made.policy = [worker_module.PersistPolicy(heartbeat_detected_s=30, heartbeat_clean_s=300) for _ in range(2)]
+        return made
+
+    first = worker()
+    first._apply_config({"heartbeat_detected_s": 60})
+    assert [policy.heartbeat_detected_s for policy in first.policy] == [60, 60]
+    assert first.cfg.persist.heartbeat_detected_s == 60
+
+    second = worker()  # a new session, which starts from the config files
+    second._restore_settings()
+    assert [policy.heartbeat_detected_s for policy in second.policy] == [60, 60]
+    assert [policy.heartbeat_clean_s for policy in second.policy] == [300, 300]
 
 
 def test_previews_are_encoded_only_as_often_as_they_can_be_sent(monkeypatch) -> None:

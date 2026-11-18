@@ -8,6 +8,11 @@ import { dateTime, errorText, num, pct, relative, severityLabel } from './fmt.js
 import { isSimple, locale, word } from './words.js';
 // The simple view names a severity in plain words, in the chosen language.
 const severityText = (severity) => (isSimple() ? word(`sev.${severity}`) : severityLabel(severity));
+// The detector found no leaves in this photo. "Healthy" would claim what it
+// never checked, so the simple view says what happened instead.
+const noLeaves = (event) => isSimple() && event.severity === 'none' && !event.detection_count;
+const photoText = (event) => (noLeaves(event) ? word('photos.no_leaves') : severityText(event.severity));
+const photoClass = (event) => (noLeaves(event) ? 'muted' : `sev-${event.severity}`);
 export class History {
     constructor(root, { pageSize = 12 } = {}) {
         this.offset = 0;
@@ -116,7 +121,7 @@ export class History {
         button.type = 'button';
         button.dataset.eventId = String(item.id);
         button.setAttribute('aria-label', isSimple()
-            ? `${word('photos.at', { time: dateTime(item.captured_at) })}, ${severityText(item.severity)}`
+            ? `${word('photos.at', { time: dateTime(item.captured_at) })}, ${photoText(item)}`
             : `Scan at ${dateTime(item.captured_at)}, severity ${severityLabel(item.severity)}`);
         const thumb = document.createElement('img');
         thumb.className = 'scan-thumb';
@@ -135,8 +140,8 @@ export class History {
         const detail = document.createElement('div');
         detail.className = 'scan-detail';
         const severity = document.createElement('span');
-        severity.className = `sev-${item.severity}`;
-        severity.textContent = severityText(item.severity);
+        severity.className = photoClass(item);
+        severity.textContent = photoText(item);
         detail.appendChild(severity);
         if (!isSimple()) {
             detail.appendChild(document.createTextNode(`${item.detection_count} box${item.detection_count === 1 ? '' : 'es'}`));
@@ -202,8 +207,8 @@ export class History {
                 meta.innerHTML = `
           <div><strong>${escapeHtml(dateTime(event.captured_at))}</strong>
             <span class="muted">${escapeHtml(relative(event.captured_at))}${this.multiCamera ? ` · ${escapeHtml(word('camera.n', { n: (event.camera || 0) + 1 }))}` : ''}</span></div>
-          <div class="sev-${escapeHtml(event.severity)}">${escapeHtml(severityText(event.severity))}</div>
-          ${event.advice ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
+          <div class="${escapeHtml(photoClass(event))}">${escapeHtml(photoText(event))}</div>
+          ${event.advice && !noLeaves(event) ? `<div>${escapeHtml(event.advice.headline)}</div>` : ''}`;
             }
             else if (meta) {
                 meta.innerHTML = `

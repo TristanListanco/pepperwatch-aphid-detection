@@ -9,12 +9,12 @@
   <meta name="theme-color" content="#e6e7e4">
   <title>{% block title %}Pepper Watch{% endblock %} · {{ site_name }}</title>
   <!-- Blocking on purpose and tiny: sets light or dark before the first paint. -->
-  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ asset('js/theme.js') }}"></script>
   <!-- Local stylesheet and font only. There is no internet on a field Pi, so
        nothing may come from a CDN (§3.3.2.2). -->
-  <link rel="preload" href="{{ url_for('static', filename='fonts/outfit-latin-var.woff2') }}"
+  <link rel="preload" href="{{ asset('fonts/outfit-latin-var.woff2') }}"
         as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ asset('css/app.css') }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2315803d' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z'/><path d='M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12'/></svg>">
 </head>
 <body data-page="{{ page }}">
@@ -39,7 +39,7 @@
     <main class="main">
       <header class="topbar">
         <div class="topbar-title">
-          <h1>{{ site_name }}</h1>
+          <h1 data-site-name>{{ site_name }}</h1>
           <p class="topbar-sub">{{ operator }} · {{ role }}</p>
         </div>
         <div class="topbar-actions">
@@ -89,6 +89,6 @@
     </main>
   </div>
 
-  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+  <script type="module" src="{{ asset('js/main.js') }}"></script>
 </body>
 </html>

@@ -1551,9 +1551,15 @@ button {
   max-width: 560px;
 }
 
-.settings-grid .metric-value {
-  font-size: var(--type-title);
-  font-weight: 500;
+/* A field with its own button: the site name in Settings. */
+.field-row {
+  display: flex;
+  gap: 8px;
+}
+
+.field-row input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .slider-row {

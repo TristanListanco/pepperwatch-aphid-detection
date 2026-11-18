@@ -47,4 +47,8 @@ def media(relative: str):
     root: Path = current_app.config["PW_CONFIG"].media_root
     if not (root / relative).resolve().is_relative_to(root.resolve()):
         abort(404)
-    return send_from_directory(root, relative, max_age=3600)
+    # A saved photo is never rewritten (its name holds the time and frame
+    # number), so a phone need not ask about it again.
+    response = send_from_directory(root, relative, max_age=30 * 24 * 3600)
+    response.cache_control.immutable = True
+    return response

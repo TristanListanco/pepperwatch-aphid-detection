@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  488 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  508 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -292,7 +292,7 @@ A frame becomes a database row only when it is informative:
 | Trigger | Rule |
 |---|---|
 | `state_change` | Severity moved to a new band **and held it for 4 s** (debounce, so a count hovering on a boundary doesn't write every frame) |
-| `heartbeat` | 30 s since the last write while damage is visible; 300 s while clean |
+| `heartbeat` | 30 s since the last write while damage is visible; 300 s while clean. Changeable in Settings → *Saving Photos* (full view, admin PIN) |
 | `manual` | The user pressed *Capture*. A full-resolution still is taken, and this trigger is exempt from the rate cap |
 | — | Hard cap: automatic writes are at most one per 8 s whatever the trigger |
 
@@ -335,6 +335,13 @@ The compiled files are committed, so the Pi needs no Node and no build step, and
 nothing loads from a CDN. After editing a `.ts` file, run
 `npx --yes -p typescript@7.0.2 tsc` in `websystem/` and commit both; CI fails if
 they differ. The API's payloads are typed in `web/ts/api.d.ts`.
+
+Pages load the stylesheet, font and scripts from `/static/v/<version>/`, where
+the version is a hash of the static files. A phone keeps them for a year and
+asks again only after an update changes the hash, so a revisit or a switch to
+Settings sends no asset requests to the Pi. HTML, CSS, JavaScript and JSON are
+gzipped (about 60 % less over the hotspot). Saved photos never change, so
+phones keep them for 30 days.
 
 - **`bus.ts`** opens the SSE connection. If it drops (a phone walking out of
   range), it falls back to polling `/api/telemetry`, `/api/pipeline` and
@@ -890,7 +897,7 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 
 | Key | Default | Notes |
 |---|---|---|
-| `site.name` | `Naawan` | Saved with every event |
+| `site.name` | `Naawan` | Saved with every event. Anyone can rename it in Settings → *Site & Language*; the new name is kept in the database and used for new photos, and earlier photos keep theirs |
 | `camera.kind` | `auto` | `auto` (CSI if attached, else USB), `csi` (Picamera2) or `usb` (OpenCV V4L2) |
 | `camera.device` | empty | Pick one of several cameras: a CSI number (`"0"`) or a USB path (`"/dev/video8"`). Set, it means that camera alone |
 | `camera.max_cameras` | 4 | How many cameras to run side by side (1 on the `low` and `tiny` profiles) |
@@ -912,7 +919,7 @@ After editing, restart: `sudo systemctl restart pepperwatch-worker pepperwatch-w
 | `sessions.root` | `var/sessions` | Set to `/var/lib/pepperwatch/sessions` by the systemd units |
 | `sessions.system_interval_s` | 1.0 | `system.csv` sample period |
 | `severity.*` | see above | Band thresholds by count and area |
-| `persist.heartbeat_detected_s` / `heartbeat_clean_s` | 30 / 300 | Periodic saves |
+| `persist.heartbeat_detected_s` / `heartbeat_clean_s` | 30 / 300 | Periodic saves. Also live-adjustable on the Settings page |
 | `persist.min_write_interval_s` | 8 | Hard cap on automatic saves |
 | `persist.retention_days` | 90 | `system_log` pruning (events are kept) |
 | `web.port` | 8000 | |
@@ -1112,7 +1119,8 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
 | POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
-| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
+| PATCH | `/api/site` | Rename the site: `{"name": "…"}`, 1–40 characters. No PIN; each rename is logged to `system_log` |
+| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99), and the photo intervals `heartbeat_detected_s`, `heartbeat_clean_s` (10–86400 s). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
@@ -1143,7 +1151,7 @@ reachable by anyone within Wi-Fi range or on the same wired network.
 | Layer | Protection |
 |---|---|
 | Wi-Fi | WPA2 with a random 12-character password, generated at install |
-| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause and start sessions. **Changing thresholds and clearing data need the admin PIN** (`X-Admin-Pin`; 6 digits from install, 5 wrong tries a minute lock it). Clearing also needs `{"confirm": "DELETE"}` |
+| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause and start sessions. **Changing thresholds or the photo interval, and clearing data, need the admin PIN** (`X-Admin-Pin`; 6 digits from install, 5 wrong tries a minute lock it). Clearing also needs `{"confirm": "DELETE"}` |
 | Requests | Bodies over 1 MB are refused; ingested class names must be the known ones (they are drawn into the charts); file downloads are confined to their folders by path, not string prefix |
 | Data exports | CSV cells that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) are written as plain text |
 | Broker | Mosquitto listens on `127.0.0.1` only; nothing on the network can publish commands |
@@ -1157,9 +1165,9 @@ reachable by anyone within Wi-Fi range or on the same wired network.
   and anyone on that network can use the dashboard. Use the wired connection
   only on a network you trust.
 - **The Wi-Fi password is the main gate.** Anyone on the PepperWatch network
-  can see the camera and scans and use the live controls; only thresholds and
-  clearing data need the admin PIN. Share each only with people who should
-  have it.
+  can see the camera and scans and use the live controls; only thresholds, the
+  photo interval and clearing data need the admin PIN. Share each only with
+  people who should have it.
 - **Secure the OS itself:** change the default user's password, prefer SSH
   keys, and turn SSH off for field deployment if you don't need it.
 
@@ -1223,7 +1231,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 488 tests (~1 min)
+.venv/bin/python -m pytest               # 508 tests (~1 min)
 npx --yes -p typescript@7.0.2 tsc       # type-check web/ts and compile it into static/js
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
@@ -1277,7 +1285,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 488 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 508 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; the dashboard's TypeScript type-checks (`tsconfig.json`, strict) and the committed `static/js` is exactly its output; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1308,6 +1316,7 @@ through every layer and handled:
 | A save or record failing (disk, database) | Live detection carries on; the error is logged at most once a minute |
 | Phones leaving with live streams open | Their connections are dropped after 20 s of silence (`TCP_USER_TIMEOUT`), and the dashboard has 32 threads, more than every stream slot together, so pages always load |
 | One false alarm (the green wall, once) | The farmer's card shows what most of the last 24 hours' photos show, per camera, taking the worst camera; one frame can't set it |
+| The camera aimed off the plants | Photos with no leaves found don't count as healthy. Recent photos label them *No leaves found*; if none from the last 7 days had leaves, the farmer's card says so and asks to check where the camera points |
 | No model installed (stub detector) | Its events are left out of every figure, and the farmer's card says the results aren't real instead of giving advice |
 | The saved network the Pi joined going away | Checked every two minutes; the hotspot comes back. Field mode skips saved networks entirely |
 | The broker dropping the worker's connection | The worker announces itself again on every reconnect, so the dashboard never sticks at "offline" |
@@ -1315,7 +1324,7 @@ through every layer and handled:
 | A camera that stays plugged in but freezes | After 10 s with no picture its frame says *isn't sending pictures*, and it's reopened every 30 s until it recovers |
 | A loose ribbon or a broken model failing constantly | Logged once a minute with a count, not twice a second |
 | The clock wrong after a power cut (no RTC battery) | The full view compares the Pi's clock with the phone's and warns past 5 minutes |
-| Clearing data or changing thresholds | Needs the admin PIN |
+| Clearing data, changing thresholds or the photo interval | Needs the admin PIN |
 | A camera replugged into another port, or in another order | USB cameras are numbered by the port they're in, not by `/dev/videoN`, so *Camera 1* stays the camera in the same port |
 | Thresholds tuned from the dashboard | Saved in the database and restored at every new session, so a camera plugged in doesn't undo them |
 | A session restarting while phones watch | The frame reader that every web thread shares is locked while it re-attaches |

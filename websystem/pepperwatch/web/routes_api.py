@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, Response, current_app, jsonify, request
 from werkzeug.security import safe_join
 
+from ..config import TUNABLES
 from ..models import Detection
 from ..session import csv_safe
 from ..mqtt_bus import Topics
@@ -452,7 +453,7 @@ def camera_switch(index: int):
 def get_config():
     """The tunables the Settings page exposes. Never the whole config."""
     cfg = _cfg()
-    live = _detector_thresholds()
+    live = _live_settings()
     return jsonify(
         {
             "site": {"name": cfg.site.name, "operator": cfg.site.operator, "role": cfg.site.role},
@@ -464,6 +465,10 @@ def get_config():
                 "input_size": cfg.inference.input_size,
                 "target_fps": cfg.inference.target_fps,
                 "class_names": list(cfg.inference.class_names),
+            },
+            "persist": {
+                key: live.get(key, cfg.persist.get(key))
+                for key in ("heartbeat_detected_s", "heartbeat_clean_s")
             },
             "severity": cfg.severity.as_dict(),
             "web": {
@@ -479,10 +484,10 @@ def get_config():
 
 @bp.patch("/config")
 def patch_config():
-    """Adjust detection thresholds live.
+    """Adjust detection thresholds and the photo-saving intervals live.
 
     Applied in this process and forwarded to the worker, which owns the
-    detector. Bounded to 0.01..0.99: a threshold of 0 or 1 makes the detector
+    detector. Thresholds are bounded to 0.01..0.99: 0 or 1 makes the detector
     useless in opposite directions, and there is no reason to allow it.
     """
     refused = _pin_refusal()
@@ -491,15 +496,15 @@ def patch_config():
     payload = request.get_json(silent=True) or {}
     updates: dict[str, float] = {}
 
-    for key in ("conf_threshold", "iou_threshold"):
+    for key, (_, low, high) in TUNABLES.items():
         if key not in payload:
             continue
         try:
             value = float(payload[key])
         except (TypeError, ValueError):
             return jsonify({"error": f"{key} must be a number"}), 400
-        if not 0.01 <= value <= 0.99:
-            return jsonify({"error": f"{key} must be between 0.01 and 0.99"}), 400
+        if not low <= value <= high:  # also refuses NaN
+            return jsonify({"error": f"{key} must be between {low:g} and {high:g}"}), 400
         updates[key] = value
 
     if not updates:
@@ -508,25 +513,50 @@ def patch_config():
     if not _publish_command(Topics.CMD_CONFIG, updates):
         return jsonify({"error": "the dashboard is not connected to the detector; try again in a moment"}), 503
 
-    # The worker reports its thresholds once a second. Only call it applied
+    # The worker reports its settings once a second. Only call it applied
     # when they match, so the page never claims a change the detector lacks.
     deadline = time.monotonic() + CONFIRM_TIMEOUT_S
     while True:
-        live = _detector_thresholds()
+        live = _live_settings()
         if all(key in live and math.isclose(live[key], value) for key, value in updates.items()):
             cfg = _cfg()
             for key, value in updates.items():
-                cfg.inference._data[key] = value  # noqa: SLF001
+                getattr(cfg, TUNABLES[key][0])._data[key] = value  # noqa: SLF001
             return jsonify({"updated": updates, "applied": True})
         if time.monotonic() >= deadline:
             return jsonify({"error": "the detector did not confirm the change; is it running?"}), 504
         time.sleep(0.1)
 
 
-def _detector_thresholds() -> dict[str, float]:
-    """The thresholds the detector reported in its last pipeline telemetry."""
+SITE_NAME_MAX = 40
+
+
+@bp.patch("/site")
+def rename_site():
+    """Rename the site shown on every page and stamped on new photos.
+
+    Open to anyone on the Pi's Wi-Fi, like the live controls: it is the farm's
+    own name. Photos already saved keep the name they were taken under. Each
+    rename is logged, so a surprise one can be traced.
+    """
+    name = (request.get_json(silent=True) or {}).get("name")
+    name = name.strip() if isinstance(name, str) else ""
+    if not name or len(name) > SITE_NAME_MAX or not name.isprintable():
+        return jsonify({"error": f"the name must be 1 to {SITE_NAME_MAX} characters"}), 400
+    cfg, db = _cfg(), _db()
+    previous = cfg.site.name
+    db.set_meta("site_name", name)
+    cfg.site._data["name"] = name  # noqa: SLF001
+    db.log_system(event="site_renamed", source="web", detail=f"{previous} -> {name}")
+    # A worker that misses this reads the saved name when its next session starts.
+    _publish_command(Topics.CMD_CONFIG, {"site_name": name})
+    return jsonify({"name": name})
+
+
+def _live_settings() -> dict[str, float]:
+    """The tunables the worker reported in its last pipeline telemetry."""
     live = _hub().snapshot()["latest"].get("telemetry/pipeline", {})
-    return {key: float(live[key]) for key in ("conf_threshold", "iou_threshold") if live.get(key) is not None}
+    return {key: float(live[key]) for key in TUNABLES if live.get(key) is not None}
 
 
 @bp.post("/time")

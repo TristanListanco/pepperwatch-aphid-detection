@@ -72,7 +72,7 @@
       <div class="field">
         <label for="admin-pin">PIN</label>
         <input id="admin-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" data-admin-pin>
-        <p class="note">Needed to change the detection thresholds or clear data. It was shown when the
+        <p class="note">Needed to change the detection thresholds or how often photos are saved, or to clear data. It was shown when the
           Pi was installed, and is in <code class="mono">/etc/pepperwatch/admin.pin</code>.</p>
       </div>
     </div>
@@ -115,13 +115,53 @@
   </div>
 </section>
 
+<section class="card" data-expert>
+  <div class="card-head">
+    <h2>Saving Photos</h2>
+    <span class="card-sub">Applied live</span>
+  </div>
+  <div class="card-body">
+    <div class="settings-grid">
+      <div class="field">
+        <label for="setting-heartbeat-detected">While aphid damage is in view, save a photo every</label>
+        <select id="setting-heartbeat-detected" data-setting-interval="heartbeat_detected_s">
+          <option value="10">10 seconds</option>
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="120">2 minutes</option>
+          <option value="300">5 minutes</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="setting-heartbeat-clean">While no damage is in view, save a photo every</label>
+        <select id="setting-heartbeat-clean" data-setting-interval="heartbeat_clean_s">
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+          <option value="900">15 minutes</option>
+          <option value="1800">30 minutes</option>
+          <option value="3600">1 hour</option>
+        </select>
+      </div>
+      <p class="note">Damage appearing or clearing is always saved (at most once every
+        8 seconds), and so is every snapshot. Longer intervals fill the SD card more slowly.</p>
+      <p class="note" data-interval-status role="status" aria-live="polite"></p>
+    </div>
+  </div>
+</section>
+
 <section class="card">
   <div class="card-head"><h2>Site &amp; Language</h2></div>
   <div class="card-body">
     <div class="settings-grid">
       <div class="field">
-        <label>Site</label>
-        <div class="metric-value" data-setting-site>—</div>
+        <label for="setting-site">Farm or site name</label>
+        <form class="field-row" data-site-form>
+          <input id="setting-site" name="name" maxlength="40" required autocomplete="off" data-setting-site>
+          <button class="btn" type="submit">Save name</button>
+        </form>
+        <p class="note">Shown at the top of every page and saved with each new photo. Photos
+          already taken keep the name they had.</p>
+        <p class="note" data-site-status role="status" aria-live="polite"></p>
       </div>
       <div class="field">
         <label for="setting-locale">Language</label>

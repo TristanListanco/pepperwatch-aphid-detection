@@ -1,5 +1,5 @@
 // The Settings page: the simple or full view, display preferences, detection
-// thresholds, locale, and clearing stored detections.
+// thresholds, how often photos are saved, locale, and clearing stored detections.
 //
 // The confidence slider matters more than it looks. Figure 3.3 specifies a
 // fixed "Confidence Filter (80)", but 0.80 on small aphid clusters would
@@ -53,9 +53,9 @@ export async function initSettings(root: ParentNode): Promise<void> {
 
   bindSlider(root, 'conf', config.inference.conf_threshold);
   bindSlider(root, 'iou', config.inference.iou_threshold);
+  bindIntervals(root, config.persist);
 
-  const site = root.querySelector('[data-setting-site]');
-  if (site) site.textContent = config.site.name;
+  bindSite(root, config.site.name);
 
   const localeSelect = root.querySelector<HTMLSelectElement>('[data-setting-locale]');
   if (localeSelect) {
@@ -68,6 +68,35 @@ export async function initSettings(root: ParentNode): Promise<void> {
       window.location.reload();
     });
   }
+}
+
+// The farm's name: on every page and on each new photo. No PIN; anyone may.
+function bindSite(root: ParentNode, initial: string): void {
+  const form = root.querySelector<HTMLFormElement>('[data-site-form]');
+  const input = root.querySelector<HTMLInputElement>('[data-setting-site]');
+  const status = root.querySelector('[data-site-status]');
+  if (!form || !input || !status) return;
+  input.value = initial;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button');
+    if (button) button.disabled = true;
+    status.className = 'note';
+    try {
+      const { name } = await patchJson<{ name: string }>('/api/site', { name: input.value });
+      input.value = name;
+      document.querySelectorAll('[data-site-name]').forEach((heading) => {
+        heading.textContent = name;
+      });
+      document.title = `${document.title.split(' · ')[0]} · ${name}`;
+      status.textContent = 'Saved. Other phones show the new name when they next open the page.';
+    } catch (error) {
+      status.textContent = `Not saved: ${errorText(error)}`;
+      status.className = 'note sev-high';
+    } finally {
+      if (button) button.disabled = false;
+    }
+  });
 }
 
 // Saved in this browser and read by the dashboard when it next opens.
@@ -150,23 +179,50 @@ function bindSlider(root: ParentNode, key: 'conf' | 'iou', initial: number): voi
   // worker over MQTT.
   slider.addEventListener('change', async () => {
     const field = key === 'conf' ? 'conf_threshold' : 'iou_threshold';
-    if (status) {
-      status.textContent = 'Applying…';
-      status.className = 'note';
-    }
-    try {
-      // Answers only once the detector reports the new value, a second or two.
-      await patchJson('/api/config', { [field]: Number(slider.value) }, adminHeaders());
+    if (await applySetting(field, Number(slider.value), status)) {
       applied = Number(slider.value);
-      if (status) status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
-    } catch (error) {
+    } else {
       // Show what the detector is really using, not the value that failed.
       slider.value = String(applied);
       if (readout) readout.textContent = num(applied, 2);
-      if (status) {
-        status.textContent = `Not applied: ${errorText(error)}`;
-        status.className = 'note sev-high';
-      }
     }
   });
+}
+
+function bindIntervals(root: ParentNode, initial: Config['persist']): void {
+  const status = root.querySelector('[data-interval-status]');
+  root.querySelectorAll<HTMLSelectElement>('[data-setting-interval]').forEach((select) => {
+    const field = select.dataset.settingInterval as keyof Config['persist'];
+    let applied = initial[field];
+    // A value set in the config files may not be one of the choices; show it
+    // anyway, so the page never claims an interval the Pi is not using.
+    if (![...select.options].some((option) => Number(option.value) === applied)) {
+      select.add(new Option(`${num(applied, 0)} seconds`, String(applied)));
+    }
+    select.value = String(applied);
+    select.addEventListener('change', async () => {
+      if (await applySetting(field, Number(select.value), status)) applied = Number(select.value);
+      else select.value = String(applied);
+    });
+  });
+}
+
+// Sends one change and says whether the worker took it.
+async function applySetting(field: string, value: number, status: Element | null): Promise<boolean> {
+  if (status) {
+    status.textContent = 'Applying…';
+    status.className = 'note';
+  }
+  try {
+    // Answers only once the worker reports the new value, a second or two.
+    await patchJson('/api/config', { [field]: value }, adminHeaders());
+    if (status) status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
+    return true;
+  } catch (error) {
+    if (status) {
+      status.textContent = `Not applied: ${errorText(error)}`;
+      status.className = 'note sev-high';
+    }
+    return false;
+  }
 }

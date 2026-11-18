@@ -9,7 +9,7 @@ const browser = Object.fromEntries(
   [
     'window', 'document', 'navigator', 'location', 'localStorage', 'console',
     'fetch', 'EventSource', 'AbortController', 'FormData', 'URL', 'URLSearchParams',
-    'CustomEvent', 'ResizeObserver', 'matchMedia', 'devicePixelRatio',
+    'CustomEvent', 'ResizeObserver', 'matchMedia', 'devicePixelRatio', 'Option',
     'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame',
   ].map((name) => [name, 'readonly']),
 );

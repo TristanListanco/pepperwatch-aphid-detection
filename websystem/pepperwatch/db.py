@@ -528,6 +528,11 @@ class Database:
         set it; then the camera whose plants look worst, so damage in front of
         one camera is not averaged away by a clean one. With no photos in that
         window, the last ``fallback_days``.
+
+        Only photos with leaves count: one where the detector found nothing
+        says nothing about the plants. With none in either window,
+        ``no_leaves`` says how many photos the camera did take, so the
+        dashboard can tell "aim the camera" from "no photos yet".
         """
         from .models import SEVERITY_ORDER
 
@@ -540,7 +545,7 @@ class Database:
                     f"""
                     SELECT camera, severity, COUNT(*) AS n
                     FROM detection_event
-                    WHERE captured_at >= ? AND synthetic = 0{site_clause}
+                    WHERE captured_at >= ? AND synthetic = 0 AND detection_count > 0{site_clause}
                     GROUP BY camera, severity
                     """,
                     [since.isoformat(timespec="milliseconds"), *([site] if site else [])],
@@ -556,7 +561,12 @@ class Database:
                 "basis": basis,
                 "photos": sum(sum(counts.values()) for counts in cameras.values()),
             }
-        return {"severity": "none", "basis": "7d", "photos": 0}
+        with self.read() as conn:
+            no_leaves = conn.execute(
+                f"SELECT COUNT(*) FROM detection_event WHERE captured_at >= ? AND synthetic = 0{site_clause}",
+                [windows[-1][1].isoformat(timespec="milliseconds"), *([site] if site else [])],
+            ).fetchone()[0]
+        return {"severity": "none", "basis": "7d", "photos": 0, "no_leaves": int(no_leaves)}
 
     def latest_telemetry(self) -> dict[str, Any] | None:
         with self.read() as conn:

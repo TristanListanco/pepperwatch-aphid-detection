@@ -9,11 +9,13 @@ why the deploy unit runs gunicorn with exactly one worker and many threads.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import logging
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, request, url_for
+from flask import Flask, jsonify, redirect, request, send_from_directory, url_for
 
 from ..advisory import load_advisory
 from ..config import Config, load
@@ -22,6 +24,9 @@ from ..frames import make_reader
 from .hub import EventHub
 
 log = logging.getLogger(__name__)
+
+YEAR_S = 365 * 24 * 3600
+COMPRESSIBLE = {"text/html", "text/css", "text/javascript", "application/javascript", "application/json", "image/svg+xml"}
 
 
 def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
@@ -46,6 +51,8 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     # §3.5.1's tests and for the alternative the manuscript describes in §3.4.3.
     database.initialise(writer="worker")
     app.config["PW_DB"] = database
+    # Renamed in Settings: the saved name wins over the config file's.
+    cfg.site._data["name"] = database.meta("site_name") or cfg.site.name  # noqa: SLF001
     # One reader per camera the worker may run; a camera that is not running
     # just has no frames yet.
     app.config["PW_FRAMES"] = [make_reader(cfg, i) for i in range(max(1, int(cfg.camera.max_cameras)))]
@@ -69,6 +76,21 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     app.register_blueprint(sessions_bp)
     app.register_blueprint(stream_bp)
     app.register_blueprint(pages_bp)
+
+    # Pages load the stylesheet and scripts from /static/v/<version>/, a
+    # version taken from the files' contents, so a phone can keep them for a
+    # year and still get new ones after an update. Module imports ("./words.js")
+    # and the stylesheet's font are relative, so they inherit the version.
+    version = _static_version(Path(app.static_folder))
+
+    @app.get("/static/v/<build>/<path:filename>")
+    def versioned_static(build: str, filename: str):
+        current = build == version  # an older page may still ask for its build
+        response = send_from_directory(app.static_folder, filename, max_age=YEAR_S if current else 0)
+        response.cache_control.immutable = current
+        return response
+
+    app.jinja_env.globals["asset"] = lambda name: url_for("versioned_static", build=version, filename=name)
 
     @app.errorhandler(404)
     def not_found(error):
@@ -103,8 +125,41 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         return response
 
+    @app.after_request
+    def compress(response):
+        # About 60 % less to send over the hotspot. Streams (live video, SSE,
+        # the exports) and already-compressed images and fonts are left alone.
+        if (
+            response.status_code != 200
+            or response.mimetype not in COMPRESSIBLE
+            or "gzip" not in request.headers.get("Accept-Encoding", "")
+            or "Content-Encoding" in response.headers
+        ):
+            return response
+        response.direct_passthrough = False  # static files: read the body here
+        body = response.get_data()
+        if len(body) < 1024:
+            return response
+        response.set_data(gzip.compress(body, compresslevel=6))
+        response.headers["Content-Encoding"] = "gzip"
+        response.vary.add("Accept-Encoding")
+        etag, weak = response.get_etag()
+        if etag and not weak:
+            response.set_etag(etag, weak=True)  # the bytes differ from the uncompressed file's
+        return response
+
     log.info("web app ready: site=%s db=%s", cfg.site.name, database.path)
     return app
+
+
+def _static_version(folder: Path) -> str:
+    """A short hash of every static file, so any edit gives new URLs."""
+    digest = hashlib.sha1(usedforsecurity=False)
+    for path in sorted(folder.rglob("*")):
+        if path.is_file():
+            digest.update(path.relative_to(folder).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
 
 
 def _admin_pin(cfg: Config) -> str | None:

@@ -248,7 +248,8 @@ class MqttBus:
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties=None) -> None:
         self._connected.clear()
-        if reason_code:
+        # A paho 2 ReasonCode is always truthy, "Normal disconnection" included.
+        if reason_code != 0:
             log.warning("mqtt disconnected (%s) — paho will retry", reason_code)
 
     def _on_message(self, client, userdata, message: mqtt.MQTTMessage) -> None:

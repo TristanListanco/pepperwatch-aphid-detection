@@ -338,12 +338,15 @@ def test_csv_export_of_an_empty_database_is_still_valid(client) -> None:
 _FRAMES = iter(range(10_000, 20_000))  # (site, frame, time) is unique
 
 
-def _event(database, severity, *, camera=0, hours_ago=1.0, synthetic=False) -> None:
+def _event(database, severity, *, camera=0, hours_ago=1.0, synthetic=False, leaves=1) -> None:
     from datetime import datetime, timedelta, timezone
 
+    from pepperwatch.models import Detection
+
     at = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    seen = [Detection(class_id=0, class_name="healthy", confidence=0.9, x=0.5, y=0.5, w=0.1, h=0.1)] * leaves
     database.insert_event(
-        site="Naawan", camera=camera, frame_seq=next(_FRAMES), detections=[], model_version="m",
+        site="Naawan", camera=camera, frame_seq=next(_FRAMES), detections=seen, model_version="m",
         conf_threshold=0.25, iou_threshold=0.45, severity=severity, trigger="auto",
         captured_at=at.isoformat(timespec="milliseconds"), image_path=None, thumb_path=None,
         inference_ms=1.0, preview_fps=1.0, inference_fps=1.0, synthetic=synthetic,
@@ -372,6 +375,17 @@ def test_the_status_falls_back_to_the_week_and_ignores_the_stub(app) -> None:
     _event(database, "low", hours_ago=72)
     assert database.recent_status() == {"severity": "low", "basis": "7d", "photos": 1}
     assert database.weekly_stats()["events"] == 1
+
+
+def test_photos_with_no_leaves_say_nothing_about_the_plants(app) -> None:
+    database = app.config["PW_DB"]
+    for _ in range(5):
+        _event(database, "none", leaves=0)  # pointed at the sky
+    assert database.recent_status() == {"severity": "none", "basis": "7d", "photos": 0, "no_leaves": 5}
+
+    # Leaves seen earlier in the week still answer, on the week's basis.
+    _event(database, "low", hours_ago=72)
+    assert database.recent_status() == {"severity": "low", "basis": "7d", "photos": 1}
 
 
 def test_weekly_stats_carry_the_farmers_status_and_the_stub_flag(app, client) -> None:
@@ -477,6 +491,7 @@ def test_clearing_data_and_thresholds_need_the_admin_pin(app, client) -> None:
     body = {"confirm": "DELETE"}
     assert client.post("/api/data/clear", json=body).status_code == 403
     assert client.patch("/api/config", json={"conf_threshold": 0.4}).status_code == 403
+    assert client.patch("/api/config", json={"heartbeat_detected_s": 60}).status_code == 403
     wrong = client.post("/api/data/clear", json=body, headers={"X-Admin-Pin": "000000"})
     assert wrong.status_code == 403 and "wrong" in wrong.get_json()["error"]
     right = client.post("/api/data/clear", json=body, headers={"X-Admin-Pin": "482913"})
@@ -523,7 +538,7 @@ def test_a_to_date_includes_that_whole_day(seeded_db, client) -> None:
 
 def test_config_exposes_only_the_tunables(client) -> None:
     body = client.get("/api/config").get_json()
-    assert set(body) == {"site", "inference", "severity", "web", "locales", "advisory"}
+    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory"}
     # Secrets must never appear.
     assert "secret_key" not in body["web"]
 
@@ -589,6 +604,53 @@ def test_config_shows_the_thresholds_the_detector_reports(app, client) -> None:
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.5, 1.5, "high"])
 def test_patch_config_rejects_out_of_range_thresholds(client, value) -> None:
     assert client.patch("/api/config", json={"conf_threshold": value}).status_code == 400
+
+
+def test_photo_interval_is_applied_once_the_worker_reports_it(app, client, monkeypatch) -> None:
+    sent = _worker_that_applies(app, monkeypatch)
+    response = client.patch("/api/config", json={"heartbeat_detected_s": 60})
+    assert response.status_code == 200 and response.get_json()["applied"] is True
+    assert sent == [("pepperwatch/cmd/config", {"heartbeat_detected_s": 60.0})]
+    persist = client.get("/api/config").get_json()["persist"]
+    assert persist == {"heartbeat_detected_s": 60.0, "heartbeat_clean_s": 300}
+
+
+@pytest.mark.parametrize("value", [0, 5, 86401, "often", float("nan")])
+def test_patch_config_rejects_impossible_photo_intervals(client, value) -> None:
+    assert client.patch("/api/config", json={"heartbeat_clean_s": value}).status_code == 400
+
+
+def test_anyone_can_rename_the_site_and_it_outlasts_a_restart(app, client, cfg) -> None:
+    from pepperwatch.config import load
+    from pepperwatch.web import create_app
+
+    app.config["PW_ADMIN_PIN"] = "482913"  # set, but not asked for: it is the farm's own name
+    response = client.patch("/api/site", json={"name": "  Buru-un  "})
+    assert response.status_code == 200 and response.get_json() == {"name": "Buru-un"}
+    assert client.get("/api/config").get_json()["site"]["name"] == "Buru-un"
+    assert "<h1 data-site-name>Buru-un</h1>" in client.get("/").get_data(as_text=True)
+    with app.config["PW_DB"].read() as conn:
+        logged = conn.execute("SELECT detail FROM system_log WHERE event = 'site_renamed'").fetchall()
+    assert [row["detail"] for row in logged] == ["Naawan -> Buru-un"]
+
+    # A restart reads the saved name, not the config file's.
+    fresh = load(
+        {
+            "db": {"path": cfg.db.path},
+            "media": {"root": str(cfg.media_root)},
+            "frames": {"shm_name": cfg.frames.shm_name, "tmpfs_dir": cfg.frames.tmpfs_dir},
+        },
+        use_env=False,
+    )
+    assert fresh.site.name == "Naawan"
+    create_app(fresh, start_hub=False)
+    assert fresh.site.name == "Buru-un"
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 41, "Farm\nName", None, 42])
+def test_a_site_name_must_be_one_short_line(client, name) -> None:
+    assert client.patch("/api/site", json={"name": name}).status_code == 400
+    assert client.get("/api/config").get_json()["site"]["name"] == "Naawan"
 
 
 def test_patch_config_rejects_an_empty_body(client) -> None:

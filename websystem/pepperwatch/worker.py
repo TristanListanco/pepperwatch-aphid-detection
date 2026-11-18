@@ -48,7 +48,7 @@ from typing import Any
 import numpy as np
 
 from .accel import AcceleratorChoice, choose_accelerator
-from .config import Config, detect_board_info, load, total_memory_mb
+from .config import TUNABLES, Config, detect_board_info, load, total_memory_mb
 from .db import Database, utcnow
 from .detect import Detector, get_detector, severity_from_config
 from .detect.postprocess import drop_non_plant
@@ -388,7 +388,7 @@ class Worker:
     def _run(self) -> int:
         info = self.detector.info
         self.db.initialise(writer="worker")
-        self._restore_thresholds()
+        self._restore_settings()
         for session_id in recover_interrupted(self.cfg.sessions_root):
             log.warning("session %s was cut off (power loss or crash); closed as interrupted", session_id)
             self.db.log_system(level="warn", event="session_recovered", source="worker", detail=session_id)
@@ -648,6 +648,8 @@ class Worker:
                 # What the detector is using, so Settings can confirm a change.
                 "conf_threshold": self.cfg.inference.conf_threshold,
                 "iou_threshold": self.cfg.inference.iou_threshold,
+                "heartbeat_detected_s": self.cfg.persist.heartbeat_detected_s,
+                "heartbeat_clean_s": self.cfg.persist.heartbeat_clean_s,
                 "inference_fps": round(self.inference_fps.fps, 2),
                 "inference_ms": round(self._inference_ms, 2),
                 "dropped": self._dropped(),
@@ -870,6 +872,8 @@ class Worker:
                 "preview_fps": self.cfg.camera.preview_fps,
                 "conf_threshold": self.cfg.inference.conf_threshold,
                 "iou_threshold": self.cfg.inference.iou_threshold,
+                "heartbeat_detected_s": self.cfg.persist.heartbeat_detected_s,
+                "heartbeat_clean_s": self.cfg.persist.heartbeat_clean_s,
                 "min_plant_fraction": self.cfg.inference.min_plant_fraction,
                 "intra_op_threads": self.cfg.inference.intra_op_threads if info.kind == "onnx" else None,
                 "target_fps": self.cfg.inference.target_fps,
@@ -1056,14 +1060,17 @@ class Worker:
             self.restart_requested = True
             self.request_stop()
 
-    def _restore_thresholds(self) -> None:
-        """Thresholds set from the dashboard outlast the session they were set in.
+    def _restore_settings(self) -> None:
+        """Settings changed from the dashboard outlast the session they were set in.
 
         A camera plugged in or out starts a new session; without this, an
         expert's tuning would silently fall back to the config file each time.
         """
+        name = self.db.meta("site_name")
+        if name:
+            self._apply_config({"site_name": name}, persist=False)
         saved = {}
-        for key in ("conf_threshold", "iou_threshold"):
+        for key in TUNABLES:
             value = self.db.meta(key)
             if value is not None:
                 saved[key] = float(value)
@@ -1071,26 +1078,31 @@ class Worker:
             self._apply_config(saved, persist=False)
 
     def _apply_config(self, payload: dict[str, Any], *, persist: bool = True) -> None:
-        conf = payload.get("conf_threshold")
-        iou = payload.get("iou_threshold")
+        name = payload.get("site_name")
+        if isinstance(name, str) and name.strip():
+            # Renamed in Settings, which saved it already; new photos carry it.
+            self.site = self.cfg.site._data["name"] = name.strip()  # noqa: SLF001
+            log.info("site is now %s", self.site)
+        changed = {key: float(payload[key]) for key in TUNABLES if payload.get(key) is not None}
+        if not changed:
+            return
+        conf = changed.get("conf_threshold")
+        iou = changed.get("iou_threshold")
         if hasattr(self.detector, "set_thresholds") and (conf is not None or iou is not None):
-            self.detector.set_thresholds(  # type: ignore[attr-defined]
-                conf=float(conf) if conf is not None else None,
-                iou=float(iou) if iou is not None else None,
-            )
-        if conf is not None:
-            self.cfg.inference._data["conf_threshold"] = float(conf)  # noqa: SLF001
-        if iou is not None:
-            self.cfg.inference._data["iou_threshold"] = float(iou)  # noqa: SLF001
-        log.info("thresholds %s: conf=%s iou=%s", "updated" if persist else "restored", conf, iou)
+            self.detector.set_thresholds(conf=conf, iou=iou)  # type: ignore[attr-defined]
+        for key, value in changed.items():
+            getattr(self.cfg, TUNABLES[key][0])._data[key] = value  # noqa: SLF001
+            if key.startswith("heartbeat_"):
+                # Read on every frame, so the next photo already follows it.
+                for policy in self.policy:
+                    setattr(policy, key, value)
+        detail = " ".join(f"{key}={value:g}" for key, value in changed.items())
+        log.info("settings %s: %s", "updated" if persist else "restored", detail)
         if not persist:
             return
-        for key, value in (("conf_threshold", conf), ("iou_threshold", iou)):
-            if value is not None:
-                self.db.set_meta(key, str(float(value)))
-        self.db.log_system(
-            event="config_change", source="web", detail=f"conf={conf} iou={iou}"
-        )
+        for key, value in changed.items():
+            self.db.set_meta(key, str(value))
+        self.db.log_system(event="config_change", source="web", detail=detail)
 
     def _switch_camera(self, payload: dict[str, Any]) -> None:
         """Turn one camera off or back on; the last one on stays on."""
