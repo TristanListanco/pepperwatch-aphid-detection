@@ -280,7 +280,7 @@ def test_settings_offers_the_simple_and_full_views(client) -> None:
     for value in ("simple", "full"):
         assert f'name="view" value="{value}"' in html
     # Thresholds and clearing data are for experts only.
-    assert re.search(r'<section class="card" data-expert>\s*<div class="card-head">\s*<h2>Detection Thresholds', html)
+    assert re.search(r'<section class="card" data-expert[^>]*>\s*<div class="card-head">\s*<h2>Detection Thresholds', html)
 
 
 def test_the_simple_view_hides_the_technical_parts(client) -> None:

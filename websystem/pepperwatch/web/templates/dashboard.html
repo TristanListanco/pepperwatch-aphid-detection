@@ -235,23 +235,32 @@
         <div><dt>Running for</dt><dd data-session-duration>—</dd></div>
       </dl>
 
-      <div class="downloads" data-session-downloads>
-        <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">
-          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Inference CSV</a>
-        <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">
-          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Power &amp; system CSV</a>
-        <a class="btn is-quiet" data-session-file="summary.json" href="#" download aria-disabled="true">Summary</a>
-        <a class="btn is-quiet" href="{{ url_for('sessions.sessions_csv') }}" download>All sessions CSV</a>
+      <div class="save-block">
+        <h3 class="block-title">Save this session's records</h3>
+        <ul class="save-list" data-session-downloads>
+          <li>
+            <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Power &amp; system CSV</a>
+            <span class="note">Every second: watts, energy, temperature, CPU load and frame rates</span>
+          </li>
+          <li>
+            <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Inference CSV</a>
+            <span class="note">Every frame the detector checked: its timing, boxes and severity</span>
+          </li>
+          <li>
+            <a class="btn is-quiet" data-session-file="summary.json" href="#" download aria-disabled="true">
+              <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Summary</a>
+            <span class="note">This session's averages and settings, as JSON</span>
+          </li>
+        </ul>
       </div>
 
-      <form class="session-new" data-session-new>
-        <label class="sr-only" for="session-label">Label for the new session</label>
-        <input id="session-label" name="label" maxlength="80" autocomplete="off"
-               placeholder="Label, e.g. hailo-row3-noon">
-        <button class="btn" type="submit">
-          <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New session</button>
-      </form>
-
+      <div class="block-head">
+        <h3 class="block-title">All sessions</h3>
+        <a class="btn is-quiet" href="{{ url_for('sessions.sessions_csv') }}" download>
+          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>All sessions CSV</a>
+      </div>
       <div class="table-wrap">
         <table class="table" data-session-table>
           <caption class="sr-only">Recorded sessions</caption>
@@ -272,6 +281,19 @@
           </tbody>
         </table>
       </div>
+
+      <form class="session-new" data-session-new>
+        <div class="field">
+          <label for="session-label">Start a new session</label>
+          <div class="field-row">
+            <input id="session-label" name="label" maxlength="80" autocomplete="off"
+                   placeholder="Label, e.g. hailo-row3-noon">
+            <button class="btn" type="submit">
+              <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>New session</button>
+          </div>
+          <p class="note">Ends this one and starts a fresh set of files, so a test run is kept apart.</p>
+        </div>
+      </form>
     </div>
   </section>
 
@@ -280,14 +302,19 @@
     <div class="card-head">
       <svg class="icon" aria-hidden="true"><use href="#i-image"/></svg>
       <h2><span data-expert>Historical Detection Log</span><span data-simple data-word="photos.title">Recent photos</span></h2>
-      <div class="card-head-actions" data-expert>
-        <button class="btn is-quiet" type="button" data-action-export>Export CSV</button>
-        <button class="btn is-quiet" type="button" data-action-export-zip
-                title="The CSV and the saved photo of every scan, as one ZIP">Export with photos</button>
-      </div>
     </div>
     <div class="card-body">
-      <div data-expert>{% include "_partials/filters.html" %}</div>
+      <div data-expert>
+        {% include "_partials/filters.html" %}
+        <div class="save-row">
+          <button class="btn" type="button" data-action-export>
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Scans CSV</button>
+          <button class="btn" type="button" data-action-export-zip>
+            <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Scans with photos (ZIP)</button>
+          <p class="note">Every scan, or only those between the From and To dates when set. The ZIP
+            adds each scan's photo, so it can be large.</p>
+        </div>
+      </div>
       <div class="gallery" data-gallery></div>
       <div class="pager" data-pager></div>
     </div>

@@ -67,13 +67,13 @@ export class Controls {
     const exportBtn = this.root.querySelector('[data-action-export]');
     if (exportBtn) {
       exportBtn.addEventListener('click', () => {
-        window.location.href = '/api/export.csv';
+        window.location.href = exportUrl('/api/export.csv');
       });
     }
     const exportZip = this.root.querySelector('[data-action-export-zip]');
     if (exportZip) {
       exportZip.addEventListener('click', () => {
-        window.location.href = '/api/export.zip';
+        window.location.href = exportUrl('/api/export.zip');
       });
     }
   }
@@ -91,6 +91,18 @@ export class Controls {
     const pause = this.root.querySelector('[data-action-pause]');
     if (pause) pause.textContent = this.paused ? 'Resume inference' : 'Pause inference';
   }
+}
+
+// The scans between the gallery's From and To dates, when set: what is saved
+// matches what the filters show.
+function exportUrl(base: string): string {
+  const query = new URLSearchParams();
+  for (const name of ['from', 'to']) {
+    const value = document.querySelector<HTMLInputElement>(`[data-filters] [name="${name}"]`)?.value;
+    if (value) query.set(name, value);
+  }
+  const text = query.toString();
+  return text ? `${base}?${text}` : base;
 }
 
 // The page has one toast; a new message replaces the one showing.

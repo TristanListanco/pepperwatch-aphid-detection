@@ -157,17 +157,22 @@ export class History {
         severity.className = photoClass(shown);
         severity.textContent = photoText(shown);
         detail.appendChild(severity);
-        if (!isSimple()) {
-            detail.appendChild(document.createTextNode(`${shown.detection_count} box${shown.detection_count === 1 ? '' : 'es'}`));
-        }
+        // Each its own element: adjacent text would run together ("24 boxes2 cameras").
+        const piece = (text) => {
+            const span = document.createElement('span');
+            span.textContent = text;
+            detail.appendChild(span);
+        };
+        if (!isSimple())
+            piece(`${shown.detection_count} box${shown.detection_count === 1 ? '' : 'es'}`);
         if (cameras.length > 1) {
             // The photo names each camera itself.
             if (!isSimple())
-                detail.appendChild(document.createTextNode(`${cameras.length} cameras`));
+                piece(`${cameras.length} cameras`);
         }
         else if (this.multiCamera) {
             const camera = (item.camera || 0) + 1;
-            detail.appendChild(document.createTextNode(isSimple() ? word('camera.n', { n: camera }) : `Cam ${camera}`));
+            piece(isSimple() ? word('camera.n', { n: camera }) : `Cam ${camera}`);
         }
         if (item.synthetic) {
             const flag = document.createElement('span');

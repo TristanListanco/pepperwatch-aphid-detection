@@ -212,6 +212,8 @@ export interface Config {
   persist: { heartbeat_detected_s: number; heartbeat_clean_s: number };
   site: { name: string };
   locales?: string[];
+  // Whether thresholds, photo saving and clearing data need the admin PIN.
+  pin_required?: boolean;
 }
 
 export interface ClearResult {

@@ -13,43 +13,157 @@ import { fetchJson, patchJson, postJson } from './bus.js';
 import { errorText, num } from './fmt.js';
 import { displayPrefs, setDisplayPref, type DisplayPrefs } from './liveview.js';
 
-// The admin PIN, for this tab only: thresholds and clearing data need it.
+// The admin PIN unlocks thresholds, photo saving and clearing data, for this
+// tab: kept in sessionStorage so a reload stays unlocked, and in memory where
+// storage is blocked.
+const PIN_KEY = 'pw-admin-pin';
+let pin = '';
+// Set by bindLock: locks the cards again when the Pi refuses a kept PIN.
+let pinRefused: () => void = () => {};
+
 function adminHeaders(): Record<string, string> {
-  let pin = '';
-  try {
-    pin = window.sessionStorage.getItem('pw-admin-pin') || '';
-  } catch (error) {
-    // Blocked storage: read it from the field instead.
-  }
-  const field = document.querySelector<HTMLInputElement>('[data-admin-pin]');
-  if (!pin && field) pin = field.value;
   return pin ? { 'X-Admin-Pin': pin } : {};
 }
 
-function bindPin(root: ParentNode): void {
-  const field = root.querySelector<HTMLInputElement>('[data-admin-pin]');
-  if (!field) return;
+function keepPin(value: string): void {
+  pin = value;
   try {
-    field.value = window.sessionStorage.getItem('pw-admin-pin') || '';
+    if (value) window.sessionStorage.setItem(PIN_KEY, value);
+    else window.sessionStorage.removeItem(PIN_KEY);
   } catch (error) {
-    // Not kept; typed again after a reload.
+    // Blocked storage: kept in memory until the page closes.
   }
-  field.addEventListener('input', () => {
-    try {
-      window.sessionStorage.setItem('pw-admin-pin', field.value.trim());
-    } catch (error) {
-      // Still sent from the field.
+}
+
+// Asks the Pi; changes nothing. Returns null when the PIN is right, or what to say.
+async function checkPin(candidate: string): Promise<string | null> {
+  try {
+    const response = await fetch('/api/admin/unlock', { method: 'POST', headers: { 'X-Admin-Pin': candidate } });
+    if (response.ok) return null;
+    if (response.status === 429) return 'Too many wrong tries. Wait a minute, then try again.';
+    return candidate ? "That PIN isn't right. Check it and try again." : 'Type the PIN first.';
+  } catch (error) {
+    return `Could not reach the Pi: ${errorText(error)}`;
+  }
+}
+
+function bindLock(root: ParentNode, required: boolean): void {
+  const fields = [...root.querySelectorAll<HTMLFieldSetElement>('[data-pin-fields]')];
+  const chips = [...root.querySelectorAll<HTMLElement>('[data-lock-chip]')];
+  const bar = root.querySelector<HTMLElement>('[data-pin-bar]');
+  const dialog = root.querySelector<HTMLDialogElement>('[data-pin-dialog]');
+  const form = root.querySelector<HTMLFormElement>('[data-pin-form]');
+  const input = root.querySelector<HTMLInputElement>('[data-pin-input]');
+  const message = root.querySelector('[data-pin-error]');
+  const submit = root.querySelector<HTMLButtonElement>('[data-pin-submit]');
+
+  const show = (locked: boolean, arriving = false) => {
+    fields.forEach((set) => {
+      set.disabled = locked;
+      set.classList.remove('is-unlocking');
+      if (arriving && !locked) {
+        void set.offsetWidth; // restart the settle animation
+        set.classList.add('is-unlocking');
+      }
+    });
+    chips.forEach((chip) => {
+      chip.hidden = !locked;
+    });
+    if (!bar) return;
+    bar.classList.toggle('is-unlocked', !locked);
+    bar.querySelector('[data-lock-icon]')?.setAttribute('href', locked ? '#i-lock' : '#i-lock-open');
+    const title = bar.querySelector('[data-lock-title]');
+    const note = bar.querySelector('[data-lock-note]');
+    if (title) title.textContent = locked ? 'Locked: detection, photo saving and data' : 'Unlocked in this tab';
+    if (note) {
+      note.textContent = locked
+        ? 'Anyone can see these settings. Changing them needs the admin PIN.'
+        : 'You can change the settings below. Closing the tab, or Lock again, locks them.';
     }
+    bar.querySelector<HTMLElement>('[data-unlock]')?.toggleAttribute('hidden', !locked);
+    bar.querySelector<HTMLElement>('[data-relock]')?.toggleAttribute('hidden', locked);
+  };
+
+  if (!required) {
+    // No PIN set up on this Pi (a development checkout): nothing to unlock.
+    if (bar) bar.hidden = true;
+    show(false);
+    return;
+  }
+  if (bar) bar.hidden = false;
+
+  let kept = '';
+  try {
+    kept = window.sessionStorage.getItem(PIN_KEY) || '';
+  } catch (error) {
+    // Not kept: asked for again.
+  }
+  pin = kept;
+  show(!kept);
+  // A PIN kept from earlier in this tab may have been changed on the Pi since.
+  if (kept) {
+    checkPin(kept).then((problem) => {
+      if (problem) {
+        keepPin('');
+        show(true);
+      }
+    });
+  }
+
+  pinRefused = () => {
+    keepPin('');
+    show(true);
+  };
+
+  const say = (text: string) => {
+    if (message) message.textContent = text;
+    input?.setAttribute('aria-invalid', text ? 'true' : 'false');
+  };
+
+  root.querySelectorAll('[data-unlock]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (!dialog || !input) return;
+      input.value = '';
+      say('');
+      dialog.showModal();
+      input.focus();
+    });
+  });
+  root.querySelector('[data-pin-cancel]')?.addEventListener('click', () => dialog?.close());
+  root.querySelector('[data-relock]')?.addEventListener('click', () => {
+    keepPin('');
+    show(true);
+  });
+
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!input || !dialog) return;
+    const candidate = input.value.trim();
+    if (submit) submit.disabled = true;
+    const problem = await checkPin(candidate);
+    if (submit) submit.disabled = false;
+    if (problem) {
+      say(problem);
+      input.classList.remove('is-wrong');
+      void input.offsetWidth;
+      input.classList.add('is-wrong');
+      input.value = ''; // typed again, rather than edited blind
+      input.focus();
+      return;
+    }
+    keepPin(candidate);
+    dialog.close();
+    show(false, true);
   });
 }
 
 export async function initSettings(root: ParentNode): Promise<void> {
   bindDisplayPrefs(root);
-  bindPin(root);
   bindClear(root);
 
   const config = await fetchJson<Config>('/api/config');
   if (!config) return;
+  bindLock(root, config.pin_required === true);
 
   const showConf = bindSlider(root, 'conf', config.inference.conf_threshold);
   const showIou = bindSlider(root, 'iou', config.inference.iou_threshold);
@@ -155,6 +269,7 @@ function bindClear(root: ParentNode): void {
       const result = await postJson<ClearResult>('/api/data/clear', { confirm: 'DELETE' }, adminHeaders());
       status.textContent = `Deleted ${result.deleted_events} detections and ${result.deleted_files} image files.`;
     } catch (error) {
+      if (/PIN/.test(errorText(error))) pinRefused();
       status.textContent = `Could not clear: ${errorText(error)}`;
     } finally {
       yes.disabled = false;
@@ -242,6 +357,7 @@ async function applySetting(changes: Record<string, number>, status: Element | n
     if (status) status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
     return true;
   } catch (error) {
+    if (/PIN/.test(errorText(error))) pinRefused();
     if (status) {
       status.textContent = `Not applied: ${errorText(error)}`;
       status.className = 'note sev-high';

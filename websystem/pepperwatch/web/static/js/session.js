@@ -97,12 +97,12 @@ export class SessionPanel {
                 row.className = 'is-current';
             const started = shortStamp(session.started_at);
             cellText(row, session.current ? `${started} (now)` : started, session.label || '');
-            cellText(row, session.accelerator || '—');
-            cellText(row, duration(session.duration_s), '', 'num');
-            cellText(row, num(session.inference_fps_mean, 1), '', 'num');
-            cellText(row, num(session.total_ms_p95, 1), '', 'num');
-            cellText(row, num(session.power_mean_w, 2), session.power_source || '', 'num');
-            cellText(row, num(session.energy_wh, 3), '', 'num');
+            cellText(row, session.accelerator || '—', '', '', 'Accelerator');
+            cellText(row, duration(session.duration_s), '', 'num', 'Length');
+            cellText(row, num(session.inference_fps_mean, 1), '', 'num', 'Inference fps');
+            cellText(row, num(session.total_ms_p95, 1), '', 'num', 'p95 ms');
+            cellText(row, num(session.power_mean_w, 2), session.power_source || '', 'num', 'Power W');
+            cellText(row, num(session.energy_wh, 3), '', 'num', 'Energy Wh');
             const files = row.insertCell();
             (session.files || []).filter((name) => name.endsWith('.csv')).forEach((name) => {
                 const link = document.createElement('a');
@@ -119,9 +119,12 @@ export class SessionPanel {
             el.textContent = value;
     }
 }
-function cellText(row, text, title = '', className = '') {
+// label: the column's name, shown beside the value when a phone stacks the row.
+function cellText(row, text, title = '', className = '', label = '') {
     const cell = row.insertCell();
     cell.textContent = text;
+    if (label)
+        cell.dataset.label = label;
     if (title)
         cell.title = title;
     if (className)

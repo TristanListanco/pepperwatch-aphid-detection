@@ -105,6 +105,13 @@ def _pin_refusal():
     return jsonify({"error": "wrong admin PIN" if given else "this needs the admin PIN"}), 403
 
 
+@bp.post("/admin/unlock")
+def admin_unlock():
+    """Check the admin PIN and change nothing: Settings unlocks its protected
+    cards on a 204. Wrong tries count towards the same lockout as any other."""
+    return _pin_refusal() or ("", 204)
+
+
 def _publish_command(topic: str, payload: dict) -> bool:
     """Send a command to the worker, reporting whether the bus accepted it."""
     bus = _hub().bus
@@ -484,6 +491,8 @@ def get_config():
             },
             "locales": _advisory().locales,
             "advisory": _advisory().meta,
+            # Whether thresholds, photo saving and clearing data are behind a PIN.
+            "pin_required": bool(current_app.config.get("PW_ADMIN_PIN")),
         }
     )
 

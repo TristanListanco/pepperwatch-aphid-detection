@@ -1425,32 +1425,128 @@ button {
   overflow-wrap: anywhere;
 }
 
-.downloads {
+/* A titled group inside a card: what can be saved, the session list. */
+.block-title {
+  margin: 0;
+  font-size: var(--type-body);
+  font-weight: 600;
+}
+
+.block-head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 16px;
+  margin-top: 28px;
+}
+
+.save-block {
+  margin-top: 24px;
+}
+
+/* Each download beside what is in it, so the right file is picked first time. */
+.save-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.save-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  align-items: center;
+}
+
+.save-list .btn {
+  justify-self: start;
+}
+
+@media (min-width: 700px) {
+  .save-list li {
+    grid-template-columns: 15rem minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .save-list .btn {
+    justify-self: stretch;
+    justify-content: flex-start;
+  }
 }
 
 .session-new {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  margin-top: 28px;
   max-width: 560px;
-}
-
-.session-new input {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .table-wrap {
   /* Positioned so the header's absolutely placed sr-only text is clipped by
    * this scroller instead of widening the whole page on a tablet. */
   position: relative;
-  margin: 18px -20px -20px;
+  margin: 10px -20px 0;
   border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   overflow-x: auto;
+}
+
+/* A phone: each session as a short labelled list, so power and energy are
+   on screen rather than past the table's right edge. */
+@media (max-width: 699px) {
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 16px;
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .table tbody td {
+    display: grid;
+    gap: 1px;
+    padding: 0;
+    border: none;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .table tbody td.num {
+    text-align: left;
+  }
+
+  .table tbody td[data-label]::before {
+    content: attr(data-label);
+    font-size: var(--type-label);
+    color: var(--ink-3);
+  }
+
+  .table tbody td:first-child,
+  .table tbody td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .table tbody td:last-child {
+    display: flex;
+    gap: 16px;
+  }
+
+  .table .empty {
+    padding: 0;
+  }
 }
 
 .table {
@@ -1502,15 +1598,44 @@ button {
 
 /* -- forms ------------------------------------------------------------------- */
 
+/* Two to a row on a phone, so the scans start sooner. */
 .filters {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
   gap: 10px;
+  align-items: end;
+  max-width: 860px;
+}
+
+.filters .field input,
+.filters .field select {
+  min-width: 0;
+  width: 100%;
+}
+
+.filters > .btn {
+  justify-self: start;
+}
+
+/* Saving the scans shown: under the filters whose dates it uses. */
+.save-row {
+  display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.save-row .note {
+  flex: 1 1 18rem;
+  margin: 0;
 }
 
 .field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* shrinks with its card, not held open by an input */
   gap: 5px;
 }
 
@@ -1562,6 +1687,11 @@ button {
   min-width: 0;
 }
 
+.field-row .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
 .slider-row {
   display: grid;
   gap: 8px;
@@ -1583,9 +1713,17 @@ button {
 
 .gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 12px;
-  margin-top: 16px;
+  align-items: start;
+  margin-top: 20px;
+}
+
+/* Two cameras side by side need two columns' width to be seen. */
+@media (min-width: 700px) {
+  .scan:has(.is-pair) {
+    grid-column: span 2;
+  }
 }
 
 .scan {
@@ -1634,7 +1772,8 @@ button {
 
 .scan-detail {
   display: flex;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: center;
   font-size: var(--type-label);
   color: var(--ink-3);
@@ -1691,6 +1830,173 @@ dialog img {
   gap: 5px;
   padding: 14px 18px;
   font-size: var(--type-control);
+}
+
+/* -- admin PIN: locked settings and the dialog that unlocks them ----------- */
+
+.lock-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 16px 20px;
+}
+
+.lock-text {
+  flex: 1 1 16rem;
+  display: grid;
+  gap: 2px;
+}
+
+.lock-text .note {
+  margin: 0;
+}
+
+.lock-mark {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--inset);
+  color: var(--ink-2);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.lock-bar.is-unlocked .lock-mark {
+  background: var(--green-soft);
+  color: var(--green-deep);
+}
+
+/* Beside a protected card's title: it says why the card is dim, and opens the PIN. */
+.lock-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--inset);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--type-label);
+  cursor: pointer;
+}
+
+.lock-chip .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.lock-chip:hover {
+  background: var(--inset-2);
+  color: var(--ink);
+}
+
+.pin-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  transition: opacity 0.35s ease;
+}
+
+/* Visible to read, plainly not editable. */
+.pin-fields:disabled {
+  opacity: 0.55;
+}
+
+/* Unlocked: the settings rise the last few pixels into place as they brighten. */
+.pin-fields.is-unlocking {
+  animation: settle 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes settle {
+  from {
+    translate: 0 6px;
+  }
+}
+
+.pin-dialog {
+  max-width: min(92vw, 400px);
+}
+
+.pin-form {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 26px 22px 20px;
+  text-align: center;
+}
+
+.pin-form h2 {
+  margin: 4px 0 0;
+  font-size: var(--type-title);
+  font-weight: 600;
+}
+
+.pin-form .note {
+  margin: 0;
+  max-width: 30ch;
+}
+
+.pin-input {
+  width: 100%;
+  max-width: 15rem;
+  min-height: 56px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--inset);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.5rem;
+  letter-spacing: 0.35em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pin-input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 0;
+  background: var(--field-focus);
+}
+
+.pin-input[aria-invalid="true"] {
+  border-color: var(--sev-high);
+}
+
+/* A wrong PIN: a short shake, the way a lock refuses. */
+.pin-input.is-wrong {
+  animation: refuse 0.32s ease-out;
+}
+
+@keyframes refuse {
+  20% { translate: -6px 0; }
+  40% { translate: 5px 0; }
+  60% { translate: -3px 0; }
+  80% { translate: 2px 0; }
+}
+
+.pin-error {
+  min-height: 1.4em;
+  margin: 0;
+  color: var(--sev-high);
+  font-size: var(--type-label);
+}
+
+.pin-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.pin-actions .btn {
+  flex: 1 1 0;
 }
 
 /* -- severity and change colours ------------------------------------------------ */

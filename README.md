@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  516 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  517 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -1240,7 +1240,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 516 tests (~1 min)
+.venv/bin/python -m pytest               # 517 tests (~1 min)
 npx --yes -p typescript@7.0.2 tsc       # type-check web/ts and compile it into static/js
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
@@ -1294,7 +1294,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 516 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 517 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; the dashboard's TypeScript type-checks (`tsconfig.json`, strict) and the committed `static/js` is exactly its output; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1377,7 +1377,7 @@ the manuscript assumes) with `scripts/finetune_model.py`'s training settings.
 | *The detection model is missing* | `models/pepperwatch.onnx` isn't on the Pi, so the stub runs. Copy the model and `sudo systemctl restart pepperwatch-worker` |
 | *The camera system hit a problem* | The worker failed to start and retries every 30 s. `journalctl -u pepperwatch-worker -b` says why |
 | *The Pi's clock is … behind this phone* | No RTC battery: fit one on J5. Photos taken meanwhile carry the wrong time |
-| Settings says *this needs the admin PIN* | Type the PIN from install (`sudo cat /etc/pepperwatch/admin.pin`) in Settings → Admin PIN |
+| Settings is *Locked* | Tap *Unlock* and type the PIN from install (`sudo cat /etc/pepperwatch/admin.pin`). It stays unlocked until the tab closes or *Lock again* |
 | `doctor` warns about numpy ABI | A pip-installed numpy is shadowing apt's. `sudo -u pepperwatch /opt/pepperwatch/.venv/bin/pip uninstall numpy` |
 | No PepperWatch hotspot | A saved Wi-Fi network was in range at boot, so the Pi joined it instead. See [Your Wi-Fi or the hotspot](#your-wi-fi-or-the-hotspot-automatic) |
 | Phone joins but no page opens | Browse to `http://192.168.4.1:8000/`. Some phones skip the portal check while mobile data is on. If no device ever gets the sheet, check the dashboard holds port 80: `sudo ss -ltnp 'sport = :80'` should list gunicorn |

@@ -62,30 +62,31 @@
   </div>
 </section>
 
-<section class="card" data-expert>
-  <div class="card-head">
-    <h2>Admin PIN</h2>
-    <span class="card-sub">Kept until this tab closes</span>
-  </div>
-  <div class="card-body">
-    <div class="settings-grid">
-      <div class="field">
-        <label for="admin-pin">PIN</label>
-        <input id="admin-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" data-admin-pin>
-        <p class="note">Needed to change the detection thresholds or how often photos are saved, or to clear data. It was shown when the
-          Pi was installed, and is in <code class="mono">/etc/pepperwatch/admin.pin</code>.</p>
-      </div>
+<section class="card lock-bar" data-expert data-pin-bar hidden>
+  <div class="lock-row">
+    <span class="lock-mark" aria-hidden="true">
+      <svg class="icon"><use href="#i-lock" data-lock-icon/></svg>
+    </span>
+    <div class="lock-text">
+      <strong data-lock-title>Locked: detection, photo saving and data</strong>
+      <p class="note" data-lock-note>Anyone can see these settings. Changing them needs the admin PIN.</p>
     </div>
+    <button class="btn is-primary" type="button" data-unlock>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock-open"/></svg>Unlock</button>
+    <button class="btn is-quiet" type="button" data-relock hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Lock again</button>
   </div>
 </section>
 
-<section class="card" data-expert>
+<section class="card" data-expert data-pin-card>
   <div class="card-head">
     <h2>Detection Thresholds</h2>
     <span class="card-sub">Applied live</span>
+    <button class="lock-chip" type="button" data-unlock data-lock-chip>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Locked</button>
   </div>
   <div class="card-body">
-    <div class="settings-grid">
+    <fieldset class="settings-grid pin-fields" data-pin-fields>
       <div class="slider-row">
         <div class="slider-head">
           <label for="slider-conf">Confidence threshold</label>
@@ -116,17 +117,19 @@
       </div>
 
       <p class="note" data-settings-status></p>
-    </div>
+    </fieldset>
   </div>
 </section>
 
-<section class="card" data-expert>
+<section class="card" data-expert data-pin-card>
   <div class="card-head">
     <h2>Saving Photos</h2>
     <span class="card-sub">Applied live</span>
+    <button class="lock-chip" type="button" data-unlock data-lock-chip>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Locked</button>
   </div>
   <div class="card-body">
-    <div class="settings-grid">
+    <fieldset class="settings-grid pin-fields" data-pin-fields>
       <div class="field">
         <label for="setting-heartbeat-detected">While aphid damage is in view, save a photo every</label>
         <select id="setting-heartbeat-detected" data-setting-interval="heartbeat_detected_s">
@@ -150,7 +153,7 @@
       <p class="note">Damage appearing or clearing is always saved (at most once every
         8 seconds), and so is every snapshot. Longer intervals fill the SD card more slowly.</p>
       <p class="note" data-interval-status role="status" aria-live="polite"></p>
-    </div>
+    </fieldset>
   </div>
 </section>
 
@@ -179,10 +182,12 @@
   </div>
 </section>
 
-<section class="card" data-expert>
-  <div class="card-head"><h2>Data</h2></div>
+<section class="card" data-expert data-pin-card>
+  <div class="card-head"><h2>Data</h2>
+    <button class="lock-chip" type="button" data-unlock data-lock-chip>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Locked</button></div>
   <div class="card-body">
-    <div class="settings-grid">
+    <fieldset class="settings-grid pin-fields" data-pin-fields>
       <div data-clear>
         <button class="btn is-danger" type="button" data-clear-start>Clear all detections</button>
         <p class="note">Deletes every saved scan, its boxes and its images. Session CSV files
@@ -196,7 +201,25 @@
         </div>
         <p class="note" data-clear-status role="status" aria-live="polite"></p>
       </div>
-    </div>
+    </fieldset>
   </div>
 </section>
+
+{# The admin PIN, asked for once per tab. Checked by the Pi before anything unlocks. #}
+<dialog class="pin-dialog" data-pin-dialog aria-labelledby="pin-title">
+  <form class="pin-form" data-pin-form novalidate>
+    <span class="lock-mark" aria-hidden="true"><svg class="icon"><use href="#i-lock"/></svg></span>
+    <h2 id="pin-title">Enter the admin PIN</h2>
+    <p class="note">It was shown when the Pi was installed. On the Pi it is in
+      <code class="mono">/etc/pepperwatch/admin.pin</code>.</p>
+    <label class="sr-only" for="pin-input">Admin PIN</label>
+    <input class="pin-input" id="pin-input" type="password" inputmode="numeric" autocomplete="off"
+           maxlength="12" aria-describedby="pin-error" data-pin-input>
+    <p class="pin-error" id="pin-error" role="alert" data-pin-error></p>
+    <div class="pin-actions">
+      <button class="btn is-quiet" type="button" data-pin-cancel>Cancel</button>
+      <button class="btn is-primary" type="submit" data-pin-submit>Unlock</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

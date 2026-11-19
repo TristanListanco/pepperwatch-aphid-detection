@@ -558,6 +558,17 @@ def test_clearing_data_and_thresholds_need_the_admin_pin(app, client) -> None:
     assert client.get("/api/config").status_code == 200
 
 
+def test_settings_can_check_the_pin_before_unlocking(app, client) -> None:
+    assert client.get("/api/config").get_json()["pin_required"] is False
+    assert client.post("/api/admin/unlock").status_code == 204  # no PIN set up: nothing to unlock
+
+    app.config["PW_ADMIN_PIN"] = "482913"
+    assert client.get("/api/config").get_json()["pin_required"] is True
+    assert client.post("/api/admin/unlock").status_code == 403
+    assert client.post("/api/admin/unlock", headers={"X-Admin-Pin": "000000"}).status_code == 403
+    assert client.post("/api/admin/unlock", headers={"X-Admin-Pin": "482913"}).status_code == 204
+
+
 def test_guessing_the_pin_is_locked_out_after_five_tries(app, client) -> None:
     app.config["PW_ADMIN_PIN"] = "482913"
     for guess in range(5):
@@ -596,7 +607,7 @@ def test_a_to_date_includes_that_whole_day(seeded_db, client) -> None:
 
 def test_config_exposes_only_the_tunables(client) -> None:
     body = client.get("/api/config").get_json()
-    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory"}
+    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory", "pin_required"}
     # Secrets must never appear.
     assert "secret_key" not in body["web"]
 
