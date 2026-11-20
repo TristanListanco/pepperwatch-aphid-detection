@@ -14,9 +14,14 @@ else — see the ``CPUAffinity`` note in the deploy units.
 
 from __future__ import annotations
 
+import ast
 import logging
+import math
+import mmap
+import re
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -26,24 +31,89 @@ from .postprocess import decode_yolov8, letterbox, to_tensor
 
 log = logging.getLogger(__name__)
 
+# Millions of weights in each size, trained on two classes: names an export's size.
+YOLO_SIZES = {
+    "YOLOv8": {"n": 3.0, "s": 11.1, "m": 25.9, "l": 43.6, "x": 68.2},
+    "YOLO11": {"n": 2.6, "s": 9.4, "m": 20.1, "l": 25.3, "x": 56.9},
+}
+
+
+def _literal(metadata: dict[str, str], key: str) -> Any:
+    try:
+        return ast.literal_eval(metadata.get(key, ""))
+    except (ValueError, SyntaxError):
+        return None
+
+
+def trained_names(metadata: dict[str, str]) -> list[str] | None:
+    """The class names exactly as trained, in class-index order.
+
+    The metadata holds ``names`` as ``"{0: 'aphid_infested', 1: 'healthy'}"``.
+    """
+    names = _literal(metadata, "names")
+    if not isinstance(names, dict) or not names:
+        return None
+    return [str(names[index]) for index in sorted(names)]
+
 
 def model_class_names(metadata: dict[str, str]) -> list[str] | None:
     """Class names from an Ultralytics export, mapped to this system's names.
 
-    The metadata holds ``names`` as ``"{0: 'aphid_infested', 1: 'healthy'}"``.
     Anything healthy becomes ``healthy`` and anything aphid- or damage-related
     ``aphid_damage``, the names severity, the advice and the charts key on.
     """
-    import ast
+    ordered = trained_names(metadata)
+    return [_canonical(name) for name in ordered] if ordered else None
 
-    try:
-        names = ast.literal_eval(metadata.get("names", ""))
-    except (ValueError, SyntaxError):
-        return None
-    if not isinstance(names, dict) or not names:
-        return None
-    ordered = [str(names[index]) for index in sorted(names)]
-    return [_canonical(name) for name in ordered]
+
+def yolo_architecture(path: Path, bytes_per_weight: int) -> tuple[str | None, float]:
+    """Which YOLO an Ultralytics ONNX export is, and its millions of weights.
+
+    The export does not say: a fine-tuned ``best.pt`` exports as "Ultralytics
+    best model". But every node keeps its Ultralytics layer path
+    (``/model.22/dfl/...``): the detection head is layer 22 in YOLOv8 and 23 in
+    YOLO11, and only YOLO11 has attention. The size letter is the nearest by
+    weight count, which the file size gives at a known precision.
+    shortcut: recognises only YOLOv8 and YOLO11, the families this thesis trained;
+    add a family's layer signature here before deploying another.
+    """
+    with path.open("rb") as handle, mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        found = re.findall(rb"/model\.(\d+)(?=/)|/(attn|dfl|cv4|one2one)", data)
+    head = max((int(layer) for layer, _ in found if layer), default=0)
+    marks = {mark for _, mark in found if mark}
+    weights_m = path.stat().st_size / bytes_per_weight / 1e6
+    family = None
+    # One-to-one heads are YOLOv10 or YOLO26, no DFL is YOLO26, cv4 is YOLOv9.
+    if b"dfl" in marks and not marks & {b"one2one", b"cv4"}:
+        if head == 22 and b"attn" not in marks:
+            family = "YOLOv8"
+        elif head == 23 and b"attn" in marks:
+            family = "YOLO11"
+    if family is None:
+        return None, weights_m
+    size, typical = min(YOLO_SIZES[family].items(), key=lambda item: abs(math.log(weights_m / item[1])))
+    return (family + size if abs(weights_m / typical - 1) < 0.2 else family), weights_m
+
+
+def describe_export(path: Path, metadata: dict[str, str], producer: str) -> dict[str, Any]:
+    """What an Ultralytics export records about itself, for Settings and the session record."""
+    args = _literal(metadata, "args")
+    args = args if isinstance(args, dict) else {}
+    if producer == "onnx.quantize":  # ONNX Runtime's quantizer
+        precision, width = "INT8", 1
+    elif args.get("half") or args.get("quantize") in ("fp16", "half"):
+        precision, width = "FP16", 2
+    else:
+        precision, width = "FP32", 4
+    architecture, weights_m = yolo_architecture(path, width)
+    return {
+        "architecture": architecture,
+        "weights_m": round(weights_m, 1),
+        "precision": precision,
+        "exported": metadata.get("date"),
+        "ultralytics_version": metadata.get("version"),
+        "trained_classes": trained_names(metadata),
+    }
 
 
 def _canonical(name: str) -> str:
@@ -99,7 +169,10 @@ class OnnxDetector(Detector):
         # Ultralytics stores the class order it was trained with. Trust that
         # over the config: a model trained as {0: aphid_infested, 1: healthy}
         # would otherwise have every label swapped, and severity inverted.
-        trained = model_class_names(self._session.get_modelmeta().custom_metadata_map)
+        meta = self._session.get_modelmeta()
+        self._export = describe_export(self._model_path, meta.custom_metadata_map, meta.producer_name)
+        self._runtime_version = ort.__version__
+        trained = model_class_names(meta.custom_metadata_map)
         if trained and trained != self._class_names:
             log.info("using the model's class order %s (config says %s)", trained, self._class_names)
             self._class_names = trained
@@ -157,11 +230,12 @@ class OnnxDetector(Detector):
         return DetectorInfo(
             kind="onnx",
             model_version=self._model_path.stem,
-            description=f"ONNX Runtime on the CPU ({self._threads} threads)",
+            description=f"ONNX Runtime {self._runtime_version} on the CPU ({self._threads} threads)",
             input_size=self._input_size,
             class_names=list(self._class_names),
             synthetic=False,
             detail={
+                **self._export,
                 "model_path": str(self._model_path),
                 "size_mb": round(self._model_path.stat().st_size / 1e6, 2),
                 "conf_threshold": self._conf_threshold,

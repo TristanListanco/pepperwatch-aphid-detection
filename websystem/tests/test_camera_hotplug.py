@@ -7,6 +7,8 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
+
 import pepperwatch.worker as worker_module
 from pepperwatch.config import load
 from pepperwatch.hal.base import CameraInfo
@@ -338,12 +340,18 @@ def test_low_storage_keeps_the_event_but_not_the_photo(tmp_path) -> None:
     worker.incoming.mkdir(parents=True)
     worker._inference_ms, worker._events_written = 1.0, 0
     worker.preview_fps, worker.inference_fps = [worker_module.FpsMeter()], worker_module.FpsMeter()
+    # A HAT with on-chip NMS: an IoU changed mid-session waits for the next one.
+    from types import SimpleNamespace
+
+    worker.detector = SimpleNamespace(info=SimpleNamespace(detail={"conf_threshold": 0.25, "iou_threshold": 0.45}))
+    cfg.inference._data["iou_threshold"] = 0.3  # noqa: SLF001 — the setting, not yet applied
     frame = Frame(seq=7, ts=time.time(), bgr=np.zeros((48, 64, 3), np.uint8))
 
     worker.storage = "low"
     worker._write_event(0, frame, [], "none", Info(), trigger="auto")
     rows = worker.db.list_events(limit=5)["items"]
     assert len(rows) == 1 and rows[0]["image_path"] is None and "storage low" in rows[0]["note"]
+    assert worker.db.get_event(rows[0]["id"])["iou_threshold"] == 0.45  # what the chip applied
     assert not list(worker.media_root.rglob("*.jpg"))
 
     worker.storage = "ok"
@@ -455,3 +463,115 @@ def test_previews_are_encoded_only_as_often_as_they_can_be_sent(monkeypatch) -> 
     thread.join(timeout=2)
     assert worker._frames_captured > 40  # every frame still reaches the detector
     assert len(published) <= 7  # ~10 a second, not 200
+
+
+def test_ai_hat_busy_share_is_the_time_spent_in_the_model() -> None:
+    """500 ms in the model over 2 s is 25% busy, 12.5 ms a run; on the CPU, nothing."""
+    from types import SimpleNamespace
+
+    worker = SimpleNamespace(accelerator=SimpleNamespace(kind="hailo"), _model_ms=500.0, _model_runs=40,
+                             _model_mark=(time.monotonic() - 2.0, 0.0, 0))
+    busy, per_run = worker_module.Worker._hat_figures(worker)
+    assert busy == pytest.approx(25.0, abs=0.2)
+    assert per_run == 12.5
+
+    worker.accelerator.kind = "cpu"
+    worker._model_ms += 100.0
+    assert worker_module.Worker._hat_figures(worker) == (None, None)
+
+
+def _stalling(kind: str) -> worker_module.Worker:
+    from types import SimpleNamespace
+
+    worker = _worker("/dev/video0")
+    worker.accelerator = SimpleNamespace(kind=kind)
+    worker._failing_since, worker._failures, worker.hat_failure = None, 0, None
+    return worker
+
+
+def test_an_ai_hat_that_stops_answering_hands_over_to_the_cpu() -> None:
+    """Every frame failing for 10 s ends the session; the next one runs on the CPU, saying why."""
+    worker = _stalling("hailo")
+    for _ in range(worker_module.INFERENCE_STALL_FAILURES):
+        assert worker._inference_stalled(TimeoutError("no answer")) is False  # not yet 10 s
+    worker._failing_since -= worker_module.INFERENCE_STALL_S
+    assert worker._inference_stalled(TimeoutError("no answer")) is True
+    assert worker.restart_requested and worker._stopping.is_set()
+    assert worker.hat_failure == "it stopped answering during the last session (TimeoutError: no answer)"
+    assert worker.db.logged == ["ai_hat_stopped"]
+    assert (Path(worker.cfg.sessions_root) / ".next_label").read_text() == "ai-hat-stopped"
+
+
+def test_a_few_failures_in_a_long_gap_are_not_a_stall() -> None:
+    """Ten seconds alone isn't enough: a camera gap between two failures must not end the session."""
+    worker = _stalling("hailo")
+    worker._inference_stalled(TimeoutError())
+    worker._failing_since -= 60.0
+    assert worker._inference_stalled(TimeoutError()) is False
+
+
+def test_inference_failing_on_the_cpu_is_left_to_mains_retry() -> None:
+    """No CPU to fall back to: raise, so main() says the system hit a problem and tries again."""
+    worker = _stalling("cpu")
+    for _ in range(worker_module.INFERENCE_STALL_FAILURES - 1):
+        worker._inference_stalled(RuntimeError("bad frame"))
+    worker._failing_since -= worker_module.INFERENCE_STALL_S
+    with pytest.raises(RuntimeError, match="every inference failed"):
+        worker._inference_stalled(RuntimeError("bad frame"))
+    assert worker.hat_failure is None and not worker.restart_requested
+
+
+def test_the_session_after_a_stall_avoids_the_hat_but_keeps_its_probe(monkeypatch, tmp_path) -> None:
+    """The probe stays so the dashboard's banner knows the HAT is there and why it's unused."""
+    from pepperwatch.accel import AcceleratorChoice, HailoProbe
+
+    probe = HailoProbe(present=True, arch="hailo8l", arch_confirmed=True)
+    monkeypatch.setattr(worker_module, "choose_accelerator", lambda cfg: AcceleratorChoice(
+        kind="hailo", name="Hailo-8L", profile="hailo", reason="found", hef_path=tmp_path / "m.hef", probe=probe))
+    cfg = load({"inference": {"model_path": str(tmp_path / "none.onnx")}}, use_env=False)
+    _, choice, detector = worker_module.start_session_hardware(cfg, "it stopped answering (TimeoutError)")
+    try:
+        assert (choice.kind, choice.profile, choice.reason) == ("cpu", "cpu", "it stopped answering (TimeoutError)")
+        assert choice.probe is probe and choice.hef_path is None
+        assert detector.info.kind != "hailo"
+    finally:
+        detector.close()
+
+
+def test_only_the_session_right_after_a_stall_avoids_the_hat(monkeypatch) -> None:
+    """A New session pressed later tries the HAT again: it may have been fixed."""
+    from types import SimpleNamespace
+
+    seen: list[str | None] = []
+
+    class FakeWorker:
+        def __init__(self, cfg, avoid_hat=None) -> None:
+            seen.append(avoid_hat)
+            self.restart_requested = len(seen) < 3
+            self.hat_failure = "it stopped answering (TimeoutError)" if len(seen) == 1 else None
+
+        def run(self) -> int:
+            return 0
+
+    monkeypatch.setattr(worker_module, "detect_board_info", lambda: SimpleNamespace(
+        supported=True, model="Pi 5", family="pi5", cpu="BCM2712", mem_mb=16384, tier="high"))
+    monkeypatch.setattr(worker_module, "load", lambda: None)
+    monkeypatch.setattr(worker_module, "Worker", FakeWorker)
+    assert worker_module.main() == 0
+    assert seen == [None, "it stopped answering (TimeoutError)", None]
+
+
+def test_on_the_hat_a_hot_chip_backs_off_inference_too() -> None:
+    """The CPU's governor watches the CPU; on the HAT, the chip has its own."""
+    from types import SimpleNamespace
+
+    from pepperwatch.thermal import ThermalGovernor
+
+    worker = SimpleNamespace(accelerator=SimpleNamespace(kind="hailo"), governor=ThermalGovernor(),
+                             hat_governor=ThermalGovernor(warn_c=85.0, name="AI HAT+"))
+    state = worker_module.Worker._thermal(worker, 60.0, 88.0)
+    assert (state.source, state.level, state.multiplier) == ("AI HAT+", 1, 2.0)
+    assert worker_module.Worker._thermal(worker, 60.0, 70.0).level == 0  # cooled: recovers
+
+    worker.accelerator.kind = "cpu"  # no HAT in use: its temperature is not this session's concern
+    assert worker_module.Worker._thermal(worker, 60.0, 99.0).level == 0

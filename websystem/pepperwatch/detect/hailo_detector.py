@@ -39,6 +39,8 @@ log = logging.getLogger(__name__)
 # configured threshold are filtered in Python, so lowering the confidence
 # threshold from the Settings page still works without reconfiguring the HAT.
 _ON_CHIP_SCORE_FLOOR = 0.05
+# After a failed temperature read, ask again this much later rather than never.
+_TEMPERATURE_RETRY_S = 30.0
 
 
 class HailoDetector(Detector):
@@ -68,6 +70,9 @@ class HailoDetector(Detector):
         self._runtime_version = runtime_version
         self._lock = threading.Lock()
         self._temperature_ok = True
+        self._temperature_retry_at = 0.0
+        # The chip's own score cut, set once when the network is configured.
+        self._chip_score = 0.0
 
         outputs = HEF(str(self._hef_path)).get_output_vstream_infos()
         if len(outputs) != 1:
@@ -116,8 +121,9 @@ class HailoDetector(Detector):
 
     def _tune_on_chip_nms(self, output) -> None:
         """Set the chip's NMS thresholds where this HailoRT version allows it."""
+        self._chip_score = min(self._conf_threshold, _ON_CHIP_SCORE_FLOOR)
         for setter, value in (
-            ("set_nms_score_threshold", min(self._conf_threshold, _ON_CHIP_SCORE_FLOOR)),
+            ("set_nms_score_threshold", self._chip_score),
             ("set_nms_iou_threshold", self._iou_threshold),
             ("set_nms_max_proposals_per_class", self._max_detections),
         ):
@@ -176,23 +182,34 @@ class HailoDetector(Detector):
         if conf is not None:
             self._conf_threshold = float(conf)
         if iou is not None:
-            self._iou_threshold = float(iou)
-            if self._nms:
+            if self._nms:  # baked into the configured network: kept, so the record stays true
                 log.info("IoU threshold %.2f applies from the next session on the AI HAT+", iou)
+            else:
+                self._iou_threshold = float(iou)
 
     def chip_temperature(self) -> float | None:
-        """The Hailo die temperature, or ``None`` where the runtime cannot read it."""
-        if not self._temperature_ok:
+        """The Hailo die temperature, or ``None`` when it can't be read now.
+
+        The hotter of the chip's two sensors, since it is what needs protecting.
+        A runtime without the call stops being asked; any other failure (a busy
+        control channel, say) is tried again after a pause. Given up on for good,
+        the session's peak would read low and the HAT's thermal backoff go blind.
+        """
+        if not self._temperature_ok or time.monotonic() < self._temperature_retry_at:
             return None
         try:
             with self._lock:
                 device = self._vdevice.get_physical_devices()[0]
                 reading = device.control.get_chip_temperature()
-            return round(float(reading.ts0_temperature), 1)
-        except Exception as exc:  # noqa: BLE001
+            sensors = (reading.ts0_temperature, getattr(reading, "ts1_temperature", None))
+            return round(max(float(value) for value in sensors if value is not None), 1)
+        except AttributeError as exc:
             log.info("Hailo temperature unavailable (%s); not asking again", exc)
             self._temperature_ok = False
-            return None
+        except Exception as exc:  # noqa: BLE001
+            log.info("Hailo temperature read failed (%s); trying again in %.0f s", exc, _TEMPERATURE_RETRY_S)
+            self._temperature_retry_at = time.monotonic() + _TEMPERATURE_RETRY_S
+        return None
 
     @property
     def info(self) -> DetectorInfo:
@@ -206,7 +223,8 @@ class HailoDetector(Detector):
             detail={
                 "hef_path": str(self._hef_path),
                 "size_mb": round(self._hef_path.stat().st_size / 1e6, 2),
-                "conf_threshold": self._conf_threshold,
+                # What is applied: the chip drops boxes below its own score cut first.
+                "conf_threshold": max(self._conf_threshold, self._chip_score),
                 "iou_threshold": self._iou_threshold,
                 "nms_on_chip": self._nms,
                 "accelerator": self._accelerator,

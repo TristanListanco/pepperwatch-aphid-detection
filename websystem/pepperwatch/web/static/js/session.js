@@ -7,6 +7,8 @@
 import { fetchJson, postJson } from './bus.js';
 import { errorText, num } from './fmt.js';
 const TABLE_ROWS = 12;
+// sysfs current_link_speed, as the session records it, to the PCIe generation.
+const PCIE_GENERATIONS = { '2.5': 1, '5.0': 2, '8.0': 3, '16.0': 4 };
 export class SessionPanel {
     constructor(root, { onToast } = {}) {
         this.meta = null;
@@ -65,6 +67,16 @@ export class SessionPanel {
             if (label)
                 label.textContent = accel.name || '—';
         }
+        // Plugged in but unused: say why. A deliberate CPU run ([accelerator] mode
+        // = "cpu") is not a fault, so it gets no banner.
+        const unused = document.querySelector('[data-hat-unused]');
+        if (unused) {
+            unused.hidden = !(accel.hailo?.present && accel.kind !== 'hailo' && !accel.deliberate);
+            const why = unused.querySelector('[data-hat-unused-reason]');
+            const reason = accel.reason || '';
+            if (why)
+                why.textContent = reason ? `${reason[0].toUpperCase()}${reason.slice(1)}.` : '';
+        }
         if (changed)
             this.loadTable();
         this.tick();
@@ -97,11 +109,27 @@ export class SessionPanel {
                 row.className = 'is-current';
             const started = shortStamp(session.started_at);
             cellText(row, session.current ? `${started} (now)` : started, session.label || '');
-            cellText(row, session.accelerator || '—', '', '', 'Accelerator');
+            const accelerator = cellText(row, session.accelerator || '—', '', '', 'Accelerator');
+            // The link speed changes the HAT's latency: keep it the same across compared runs.
+            const gen = PCIE_GENERATIONS[(session.pcie_link || '').split(' ')[0]];
+            if (gen)
+                cellNote(accelerator, gen < 3 ? `PCIe Gen ${gen}, slower than Gen 3` : `PCIe Gen ${gen}`, gen < 3 ? 'is-warn' : '');
             cellText(row, duration(session.duration_s), '', 'num', 'Length');
-            cellText(row, num(session.inference_fps_mean, 1), '', 'num', 'Inference fps');
+            const fps = cellText(row, num(session.inference_fps_mean, 1), '', 'num', 'Inference fps');
+            if (session.thermal_backoff_s)
+                cellNote(fps, 'Slowed by heat', 'is-warn');
             cellText(row, num(session.total_ms_p95, 1), '', 'num', 'p95 ms');
-            cellText(row, num(session.power_mean_w, 2), session.power_source || '', 'num', 'Power W');
+            const power = cellText(row, num(session.power_mean_w, 2), '', 'num', 'Power W');
+            // Said beside the figure, not in a tooltip a phone can't show: either
+            // makes this session's power unfit to compare with another's.
+            if (session.power_source?.includes('pmic')) {
+                cellNote(power, session.detector === 'hailo' ? 'PMIC: HAT not counted' : 'PMIC: board only');
+            }
+            if (session.detector !== 'hailo' && session.hat_fitted && session.power_source?.includes('ina219')) {
+                cellNote(power, 'Includes the idle HAT');
+            }
+            if (session.under_voltage)
+                cellNote(power, 'Supply sagged', 'is-warn');
             cellText(row, num(session.energy_wh, 3), '', 'num', 'Energy Wh');
             const files = row.insertCell();
             (session.files || []).filter((name) => name.endsWith('.csv')).forEach((name) => {
@@ -130,6 +158,12 @@ function cellText(row, text, title = '', className = '', label = '') {
     if (className)
         cell.className = className;
     return cell;
+}
+function cellNote(cell, text, className = '') {
+    const note = document.createElement('span');
+    note.className = `cell-note ${className}`.trim();
+    note.textContent = text;
+    cell.append(note);
 }
 // "Oct 29, 10:54": the year adds width to every row and nothing to a table
 // of recent runs.

@@ -113,6 +113,72 @@ def test_a_stall_does_not_book_hours_of_energy(tmp_path: Path, clock: Clock) -> 
     assert recorder.close()["energy_wh"] == pytest.approx(5.0 * 5.0 / 3600.0, rel=1e-4)
 
 
+def test_ai_hat_figures_are_recorded_and_summarised(tmp_path: Path) -> None:
+    """Busy share and chip temperature, each second and over the session. Paused seconds
+    are idle by choice, so they don't pull the busy mean down."""
+    recorder = SessionRecorder(tmp_path, META)
+    recorder.record_system({"hailo_temp_c": 50.0, "hailo_busy_pct": 30.0, "hailo_infer_ms": 9.5})
+    recorder.record_system({"hailo_temp_c": 54.0, "hailo_busy_pct": 50.0, "hailo_infer_ms": 9.9})
+    recorder.record_system({"hailo_temp_c": 52.0, "hailo_busy_pct": 0.0, "paused": True})
+    summary = recorder.close()
+    assert summary["hailo_busy_pct_mean"] == pytest.approx(40.0)
+    assert (summary["hailo_temp_mean_c"], summary["hailo_temp_max_c"]) == (52.0, 54.0)
+    first = _rows(recorder.directory / "system.csv")[0]
+    assert (first["hailo_busy_pct"], first["hailo_infer_ms"]) == ("30.0", "9.5")
+
+
+CPU_META = {**META, "accelerator": {"kind": "cpu", "name": "CPU", "profile": "cpu", "reason": "test"},
+            "detector": {"kind": "onnx", "model_file": "pepperwatch.onnx", "input_size": 640, "synthetic": False}}
+
+
+def test_fps_per_watt_counts_only_the_seconds_spent_inferring(tmp_path: Path) -> None:
+    """Paused seconds draw idle power and infer nothing. Counted in the power but
+    not the fps, they made a session look more efficient than it was."""
+    recorder = SessionRecorder(tmp_path, CPU_META)
+    for _ in range(5):
+        recorder.record_system({"power_w": 6.0, "power_source": "ina219", "inference_fps": 2.0})
+    for _ in range(5):
+        recorder.record_system({"power_w": 3.0, "power_source": "ina219", "inference_fps": 0.0, "paused": True})
+    summary = recorder.close()
+    assert summary["fps_per_watt"] == 0.333  # 2.0 / 6.0; was 2.0 / 4.5
+    assert summary["power_mean_w"] == pytest.approx(4.5)  # the session's power is still all of it
+
+
+@pytest.mark.parametrize(("meta", "sources", "expected"), [
+    (META, ["pmic"], None),                      # the PMIC can't see the HAT
+    (META, ["ina219", "pmic"], None),            # nor for the seconds the INA219 dropped out
+    (META, ["ina219"], 5.0),
+    (CPU_META, ["pmic"], 5.0),                   # board only, but nothing is left out between modes
+])
+def test_fps_per_watt_needs_the_hats_power_measured(tmp_path: Path, meta, sources, expected) -> None:
+    recorder = SessionRecorder(tmp_path, meta)
+    for source in sources:
+        recorder.record_system({"power_w": 5.0, "power_source": source, "inference_fps": 25.0})
+    summary = recorder.close()
+    assert summary["fps_per_watt"] == expected
+    assert summary["power_mean_w"] == 5.0  # the figure itself stays, labelled by power_source
+
+
+@pytest.mark.parametrize(("flags", "expected"), [
+    (["0x0", "0x0"], False),
+    (["0x50000", "0x50000"], False),             # latched before this session began
+    (["0x0", "0x50000"], True),                  # a dip between samples, latched during it
+    (["0x0", "0x50005", "0x50000"], True),       # seen as it happened
+])
+def test_a_supply_that_sagged_during_the_session_is_flagged(tmp_path: Path, flags, expected) -> None:
+    recorder = SessionRecorder(tmp_path, META)
+    for value in flags:
+        recorder.record_system({"throttled_flags": value})
+    assert recorder.close()["under_voltage"] is expected
+
+
+def test_a_cpu_session_records_whether_a_hat_was_fitted(tmp_path: Path) -> None:
+    """A fitted HAT idles and draws power that an INA219 counts in a CPU baseline."""
+    fitted = {**CPU_META, "accelerator": {**CPU_META["accelerator"], "hailo": {"present": True}}}
+    assert SessionRecorder(tmp_path, fitted).close()["hat_fitted"] is True
+    assert SessionRecorder(tmp_path, CPU_META).close()["hat_fitted"] is False
+
+
 def test_paused_samples_do_not_count_toward_mean_fps(tmp_path: Path) -> None:
     recorder = SessionRecorder(tmp_path, META)
     recorder.record_system({"inference_fps": 20.0})

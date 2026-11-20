@@ -49,3 +49,10 @@ def test_ina219_is_preferred_over_the_pmic_estimate() -> None:
     assert (pmic_only.power_source, pmic_only.best_power_w) == ("pmic", 3.9)
     assert (neither.power_source, neither.best_power_w) == (None, None)
     assert both.as_dict()["power_source"] == "ina219"
+
+
+def test_an_ina219_read_glitch_is_a_missing_second_not_the_pmics() -> None:
+    """The PMIC leaves out the HAT, USB devices and the fan: standing in for one
+    second, it would dip the session's energy and mix its power sources."""
+    glitch = Telemetry(ts=0.0, ina219_fitted=True, pmic_power_w=3.9)
+    assert (glitch.power_source, glitch.best_power_w) == (None, None)

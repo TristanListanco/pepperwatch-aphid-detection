@@ -55,6 +55,10 @@ mode = "auto"           # auto | hailo | cpu
 # then this path. A HEF must be compiled for the chip it runs on.
 hef_path = "models/pepperwatch.hef"
 timeout_ms = 1000
+# On the HAT, inference also backs off when its chip passes this temperature,
+# as it does for the CPU at 75 C: slowing inference is what cools the chip.
+# Between the dashboard's 80 C (amber) and 90 C (red) bands; not a datasheet limit.
+hailo_warn_c = 85.0
 
 # Applied over everything above when a session starts, according to the
 # accelerator it found. Override a value in local.toml under the same table,
@@ -65,9 +69,12 @@ timeout_ms = 1000
 # that tuning on slower boards.
 
 [profiles.hailo]
-# The HAT runs YOLOv8n far faster than the camera delivers frames, so the
-# camera becomes the limit: capture as fast as the sensor allows.
-camera.preview_fps = 60
+# The camera captures at the same rate as on the CPU, so a CPU and a HAT
+# session differ only in what runs the model: decoding extra frames the HAT
+# then drops would cost CPU power in HAT sessions alone and skew the power
+# comparison. The 25 fps default is above the 17 fps target, and the HAT's
+# busy share shows its headroom. For the most HAT throughput instead, raise
+# camera.preview_fps here in local.toml (the sensor caps it).
 inference.intra_op_threads = 1
 
 [sessions]

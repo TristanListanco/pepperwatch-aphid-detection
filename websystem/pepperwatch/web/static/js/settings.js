@@ -8,7 +8,7 @@
 // value be chosen from a measured precision/recall sweep instead of asserted,
 // which is a stronger result to defend.
 import { fetchJson, patchJson, postJson } from './bus.js';
-import { errorText, num } from './fmt.js';
+import { dateTime, errorText, num } from './fmt.js';
 import { displayPrefs, setDisplayPref } from './liveview.js';
 // The admin PIN unlocks thresholds, photo saving and clearing data, for this
 // tab: kept in sessionStorage so a reload stays unlocked, and in memory where
@@ -17,6 +17,8 @@ const PIN_KEY = 'pw-admin-pin';
 let pin = '';
 // Set by bindLock: locks the cards again when the Pi refuses a kept PIN.
 let pinRefused = () => { };
+// The HAT filters boxes on its chip: an IoU change waits for the next session.
+let iouOnChip = false;
 function adminHeaders() {
     return pin ? { 'X-Admin-Pin': pin } : {};
 }
@@ -165,6 +167,11 @@ export async function initSettings(root) {
     if (!config)
         return;
     bindLock(root, config.pin_required === true);
+    showModel(root, config.model);
+    iouOnChip = config.model?.detail?.nms_on_chip === true;
+    const chipNote = root.querySelector('[data-iou-chip-note]');
+    if (chipNote)
+        chipNote.hidden = !iouOnChip;
     const showConf = bindSlider(root, 'conf', config.inference.conf_threshold);
     const showIou = bindSlider(root, 'iou', config.inference.iou_threshold);
     bindReset(root, config.inference.defaults, () => {
@@ -184,6 +191,45 @@ export async function initSettings(root) {
             window.location.reload();
         });
     }
+}
+// The model doing the detecting, as the worker last reported it. Read only.
+function showModel(root, model) {
+    const list = root.querySelector('[data-model-facts]');
+    const note = root.querySelector('[data-model-note]');
+    if (!list || !note || !model?.kind)
+        return;
+    if (model.synthetic) {
+        note.textContent = 'No trained model is installed, so a heuristic stand-in is running: its boxes are '
+            + 'made up, and every photo it saves is marked as not from a model. Copy the model to '
+            + 'models/pepperwatch.onnx on the Pi and restart Pepper Watch.';
+        return;
+    }
+    const detail = model.detail || {};
+    const file = detail.model_path || detail.hef_path;
+    let exported = detail.exported ? dateTime(detail.exported) : null;
+    if (exported && detail.ultralytics_version)
+        exported += `, with Ultralytics ${detail.ultralytics_version}`;
+    const rows = [
+        ['YOLO version', detail.architecture || (model.kind === 'onnx' ? 'Not recognised from the model file' : null)],
+        ['Classes it was trained on', (detail.trained_classes || model.class_names)?.join(', ')],
+        ['Input size', model.input_size ? `${model.input_size} × ${model.input_size} pixels` : null],
+        ['Weights', detail.weights_m ? `About ${num(detail.weights_m, 1)} million, ${detail.precision}` : null],
+        ['Exported', exported],
+        ['File', file ? `${file.split('/').pop()}, ${num(detail.size_mb, 1)} MB` : null],
+        ['Box filtering (NMS)', detail.nms_on_chip == null ? null : detail.nms_on_chip ? 'On the AI HAT+' : 'On the CPU'],
+        ['Runs on', model.description],
+    ];
+    list.replaceChildren(...rows.filter(([, value]) => value).map(([label, value]) => {
+        const row = document.createElement('div');
+        const term = document.createElement('dt');
+        const text = document.createElement('dd');
+        term.textContent = label;
+        text.textContent = value || '';
+        row.append(term, text);
+        return row;
+    }));
+    note.hidden = true;
+    list.hidden = false;
 }
 // The farm's name: on every page and on each new photo. No PIN; anyone may.
 function bindSite(root, initial) {
@@ -357,8 +403,12 @@ async function applySetting(changes, status) {
     try {
         // Answers only once the worker reports the new value, a second or two.
         await patchJson('/api/config', changes, adminHeaders());
-        if (status)
-            status.textContent = 'Applied: the detector is using it now, and keeps it after restarts.';
+        if (status) {
+            status.textContent = iouOnChip && 'iou_threshold' in changes
+                ? `${'conf_threshold' in changes ? 'Confidence applied now. ' : 'Saved. '}`
+                    + 'On the AI HAT+ a new IoU is used from the next session.'
+                : 'Applied: the detector is using it now, and keeps it after restarts.';
+        }
         return true;
     }
     catch (error) {

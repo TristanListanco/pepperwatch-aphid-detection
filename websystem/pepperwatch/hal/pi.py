@@ -386,6 +386,7 @@ class PiTelemetry(TelemetrySource):
             voltage_v=voltage_v,
             current_ma=current_ma,
             power_w=power_w,
+            ina219_fitted=sensor is not None,
             pmic_power_w=pmic.rails_w if pmic else None,
             input_voltage_v=pmic.input_voltage_v if pmic else None,
             fan_rpm=read_fan_rpm(),

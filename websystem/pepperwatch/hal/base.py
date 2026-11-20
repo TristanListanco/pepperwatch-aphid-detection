@@ -64,6 +64,9 @@ class Telemetry:
     pmic_power_w: float | None = None
     input_voltage_v: float | None = None
     fan_rpm: float | None = None
+    # An INA219 is fitted. A second it fails to read then has no power reading,
+    # rather than the PMIC's, which leaves out the HAT, USB devices and the fan.
+    ina219_fitted: bool = False
     throttled: bool = False
     throttled_flags: int | None = None
     throttle_detail: str = ""
@@ -72,13 +75,15 @@ class Telemetry:
     def power_source(self) -> str | None:
         if self.power_w is not None:
             return "ina219"
+        if self.ina219_fitted:
+            return None
         if self.pmic_power_w is not None:
             return "pmic"
         return None
 
     @property
     def best_power_w(self) -> float | None:
-        return self.power_w if self.power_w is not None else self.pmic_power_w
+        return self.power_w if self.power_w is not None or self.ina219_fitted else self.pmic_power_w
 
     @property
     def mem_percent(self) -> float | None:

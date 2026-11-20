@@ -55,7 +55,7 @@ INFERENCE_COLUMNS = (
 
 SYSTEM_COLUMNS = (
     "timestamp", "elapsed_s",
-    "cpu_temp_c", "hailo_temp_c", "cpu_percent", "cpu_freq_mhz", "mem_used_mb", "fan_rpm",
+    "cpu_temp_c", "hailo_temp_c", "hailo_busy_pct", "hailo_infer_ms", "cpu_percent", "cpu_freq_mhz", "mem_used_mb", "fan_rpm",
     "throttled_now", "throttled_flags",
     "ina219_voltage_v", "ina219_current_ma", "ina219_power_w",
     "pmic_power_w", "input_voltage_v", "power_w", "power_source", "energy_wh",
@@ -65,7 +65,7 @@ SYSTEM_COLUMNS = (
 
 SUMMARY_COLUMNS = (
     "session_id", "label", "status", "started_at", "ended_at", "duration_s",
-    "accelerator", "accelerator_reason", "profile", "hailo_arch", "hailo_runtime", "pcie_link",
+    "accelerator", "accelerator_reason", "profile", "hailo_arch", "hailo_runtime", "pcie_link", "hat_fitted",
     "camera_kind", "camera_model", "camera_device", "preview_width", "preview_height",
     "preview_fps_target",
     "detector", "model_file", "model_sha256", "input_size", "conf_threshold", "iou_threshold",
@@ -77,13 +77,17 @@ SUMMARY_COLUMNS = (
     "postprocess_ms_mean", "total_ms_mean", "total_ms_p50", "total_ms_p95",
     "end_to_end_ms_mean", "end_to_end_ms_p95",
     "frames_with_damage", "detections_total",
-    "cpu_temp_mean_c", "cpu_temp_max_c", "hailo_temp_max_c", "cpu_percent_mean",
-    "throttled_s", "throttle_flags_seen", "thermal_backoff_s",
+    "cpu_temp_mean_c", "cpu_temp_max_c", "hailo_temp_mean_c", "hailo_temp_max_c", "hailo_busy_pct_mean",
+    "cpu_percent_mean",
+    "throttled_s", "throttle_flags_seen", "under_voltage", "thermal_backoff_s",
     "power_source", "power_mean_w", "power_max_w", "energy_wh",
     "ina219_power_mean_w", "pmic_power_mean_w", "fps_per_watt",
 )
 
 NEXT_LABEL_FILE = ".next_label"
+# vcgencmd get_throttled: bit 0 is under-voltage now, bit 16 latches it until reboot.
+UNDER_VOLTAGE_NOW = 1 << 0
+UNDER_VOLTAGE_SINCE_BOOT = 1 << 16
 _RESERVOIR = 20_000
 
 
@@ -149,6 +153,7 @@ class _Stats:
     preview_fps: Mean = field(default_factory=Mean)
     cpu_temp: Mean = field(default_factory=Mean)
     hailo_temp: Mean = field(default_factory=Mean)
+    hailo_busy: Mean = field(default_factory=Mean)
     cpu_percent: Mean = field(default_factory=Mean)
     power: Mean = field(default_factory=Mean)
     ina219: Mean = field(default_factory=Mean)
@@ -158,6 +163,10 @@ class _Stats:
     throttled_s: float = 0.0
     backoff_s: float = 0.0
     flags_seen: int = 0
+    first_flags: int | None = None
+    under_voltage: bool = False
+    # Power over the same seconds the fps mean covers: inferring, not paused.
+    active_power: Mean = field(default_factory=Mean)
 
 
 class SessionRecorder:
@@ -272,12 +281,15 @@ class SessionRecorder:
             stats.pmic.add(_num(row.get("pmic_power_w")))
             stats.cpu_temp.add(_num(row.get("cpu_temp_c")))
             stats.hailo_temp.add(_num(row.get("hailo_temp_c")))
+            if not row.get("paused"):
+                stats.hailo_busy.add(_num(row.get("hailo_busy_pct")))
             stats.cpu_percent.add(_num(row.get("cpu_percent")))
             stats.preview_fps.add(_num(row.get("preview_fps")))
             if not row.get("paused"):
                 fps = _num(row.get("inference_fps"))
                 if fps:
                     stats.inference_fps.add(fps)
+                    stats.active_power.add(power)
 
             step = min(now - self._last_system_at, 5.0) if self._last_system_at else 0.0
             self._last_system_at = now
@@ -285,7 +297,12 @@ class SessionRecorder:
                 stats.throttled_s += step
             if int(row.get("thermal_level") or 0) > 0:
                 stats.backoff_s += step
-            stats.flags_seen |= _flags(row.get("throttled_flags"))
+            flags = _flags(row.get("throttled_flags"))
+            stats.flags_seen |= flags
+            if stats.first_flags is None:
+                stats.first_flags = flags
+            if flags & UNDER_VOLTAGE_NOW:
+                stats.under_voltage = True
 
             self._system.writerow(
                 _format(self._stamp({**row, "energy_wh": stats.energy_j / 3600.0}))
@@ -311,7 +328,14 @@ class SessionRecorder:
             settings = meta.get("settings", {})
             power_mean = s.power.value
             fps_mean = s.inference_fps.value
+            active_power = s.active_power.value
             sources = sorted(s.power_sources)
+            # The PMIC can't see the HAT and the HAT has no sensor: without an
+            # INA219 throughout, a HAT session's fps per watt leaves its power out.
+            hat_unmeasured = accel.get("kind") == "hailo" and sources != ["ina219"]
+            # A dip between one-second samples shows only as the latched bit
+            # appearing; set before the session, it belongs to an earlier one.
+            newly_latched = s.flags_seen & ~(s.first_flags or 0) & UNDER_VOLTAGE_SINCE_BOOT
 
             summary = {
                 "session_id": self.session_id,
@@ -326,6 +350,8 @@ class SessionRecorder:
                 "hailo_arch": hailo.get("arch") if accel.get("kind") == "hailo" else None,
                 "hailo_runtime": hailo.get("runtime_version") if accel.get("kind") == "hailo" else None,
                 "pcie_link": hailo.get("pcie_link") if accel.get("kind") == "hailo" else None,
+                # On a CPU session a fitted HAT still idles and draws power an INA219 counts.
+                "hat_fitted": bool(hailo.get("present")),
                 "camera_kind": camera.get("kind"),
                 "camera_model": camera.get("model"),
                 "camera_device": camera.get("device"),
@@ -368,10 +394,13 @@ class SessionRecorder:
                 "detections_total": s.detections_total,
                 "cpu_temp_mean_c": _r(s.cpu_temp.value, 1),
                 "cpu_temp_max_c": _r(s.cpu_temp.peak, 1),
+                "hailo_temp_mean_c": _r(s.hailo_temp.value, 1),
                 "hailo_temp_max_c": _r(s.hailo_temp.peak, 1),
+                "hailo_busy_pct_mean": _r(s.hailo_busy.value, 1),
                 "cpu_percent_mean": _r(s.cpu_percent.value, 1),
                 "throttled_s": round(s.throttled_s, 1),
                 "throttle_flags_seen": hex(s.flags_seen),
+                "under_voltage": s.under_voltage or bool(newly_latched),
                 "thermal_backoff_s": round(s.backoff_s, 1),
                 "power_source": "+".join(sources) if sources else None,
                 "power_mean_w": _r(power_mean),
@@ -379,7 +408,9 @@ class SessionRecorder:
                 "energy_wh": _r(s.energy_j / 3600.0, 6),
                 "ina219_power_mean_w": _r(s.ina219.value),
                 "pmic_power_mean_w": _r(s.pmic.value),
-                "fps_per_watt": _r(fps_mean / power_mean, 3) if fps_mean and power_mean else None,
+                "fps_per_watt": (
+                    _r(fps_mean / active_power, 3) if fps_mean and active_power and not hat_unmeasured else None
+                ),
             }
         return summary
 

@@ -267,6 +267,14 @@ def run_case(cfg, *, size: int, threads: int, seconds: float, quality: int, acce
     return row
 
 
+def worker_running() -> bool:
+    try:
+        result = subprocess.run(["systemctl", "is-active", "--quiet", "pepperwatch-worker"], timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False  # no systemd here: nothing to check
+    return result.returncode == 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -282,6 +290,11 @@ def main() -> int:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # The camera and the AI HAT+ serve one process at a time. Measured alongside
+    # the worker, the bench would fail, or worse, take the HAT from the next session.
+    if worker_running():
+        raise SystemExit("The Pepper Watch worker is running and holds the camera and the AI HAT+.\n"
+                         "Stop it first: sudo systemctl stop pepperwatch-worker (start it again afterwards).")
     base = load()
     accelerator = args.accelerator
     if accelerator == "auto":

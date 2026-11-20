@@ -86,3 +86,73 @@ def test_a_malformed_packed_buffer_is_rejected() -> None:
 def test_the_wrong_class_count_is_rejected() -> None:
     with pytest.raises(ValueError, match="classes"):
         decode_hailo_nms([np.zeros((0, 5))] * 3, _transform(), CLASSES, conf_threshold=0.1)
+
+
+def test_the_hat_reports_the_thresholds_its_chip_applies(tmp_path) -> None:
+    """With NMS on the chip, an IoU change waits for the next session, and the
+    chip's own score cut is a floor under confidence: the record says so."""
+    from pepperwatch.detect.hailo_detector import HailoDetector
+
+    hef = tmp_path / "m.hef"
+    hef.write_bytes(b"x")
+    det = HailoDetector.__new__(HailoDetector)
+    det._hef_path, det._input_size, det._class_names = hef, 640, ["healthy", "aphid_damage"]
+    det._accelerator, det._runtime_version, det._nms = "Hailo-8L", "4.20.0", True
+    det._conf_threshold, det._iou_threshold, det._chip_score = 0.25, 0.45, 0.05
+
+    det.set_thresholds(conf=0.03, iou=0.3)
+    detail = det.info.detail
+    assert (detail["conf_threshold"], detail["iou_threshold"]) == (0.05, 0.45)
+
+    det._nms = False  # NMS in Python: both apply at once
+    det.set_thresholds(iou=0.3)
+    assert det.info.detail["iou_threshold"] == 0.3
+
+
+def _hat_reading(*answers):
+    """A HailoDetector whose chip answers temperature reads in turn."""
+    import threading
+    from types import SimpleNamespace
+
+    from pepperwatch.detect.hailo_detector import HailoDetector
+
+    queue = list(answers)
+
+    def read():
+        answer = queue.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    det = HailoDetector.__new__(HailoDetector)
+    det._lock, det._temperature_ok, det._temperature_retry_at = threading.Lock(), True, 0.0
+    chip = SimpleNamespace(control=SimpleNamespace(get_chip_temperature=read))
+    det._vdevice = SimpleNamespace(get_physical_devices=lambda: [chip])
+    return det
+
+
+def test_a_failed_temperature_read_is_tried_again_later() -> None:
+    """Given up for good, the session's peak would read low and the HAT's backoff go blind."""
+    from types import SimpleNamespace
+
+    det = _hat_reading(RuntimeError("control busy"), SimpleNamespace(ts0_temperature=71.2, ts1_temperature=73.9))
+    assert det.chip_temperature() is None
+    assert det.chip_temperature() is None  # not asked again straight away
+    det._temperature_retry_at = 0.0  # 30 s later
+    assert det.chip_temperature() == 73.9  # the hotter sensor
+
+
+def test_a_runtime_without_the_call_is_not_asked_again() -> None:
+    det = _hat_reading(AttributeError("no get_chip_temperature"))
+    assert det.chip_temperature() is None
+    det._temperature_retry_at = 0.0
+    assert det.chip_temperature() is None and det._temperature_ok is False
+
+
+def test_a_hat_that_will_not_start_says_why_in_plain_words() -> None:
+    from pepperwatch.detect import start_hint
+
+    busy = RuntimeError("Failed to create vdevice. status=HAILO_OUT_OF_PHYSICAL_DEVICES(74)")
+    assert start_hint(busy).startswith("another program is probably using the AI HAT+")
+    assert "HAILO_OUT_OF_PHYSICAL_DEVICES(74)" in start_hint(busy)  # the error itself is kept
+    assert start_hint(RuntimeError("something new")) == "something new"

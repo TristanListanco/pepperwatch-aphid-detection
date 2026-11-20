@@ -10,11 +10,18 @@ export interface Telemetry {
   cpu_temp_c?: number | null;
   cpu_percent?: number | null;
   hailo_temp_c?: number | null;
+  // While the AI HAT+ runs inference: the share of each second it spends on
+  // the model, and its mean run per frame. Null on the CPU.
+  hailo_busy_pct?: number | null;
+  hailo_infer_ms?: number | null;
+  accelerator?: string;
+  throttled_flags?: number | null; // vcgencmd get_throttled; bit 0 is under-voltage now
   power_w?: number | null;
   best_power_w?: number | null;
   power_source?: string | null;
   thermal_level?: number;
   thermal_multiplier?: number;
+  thermal_source?: string; // "CPU" or "AI HAT+": which part the backoff protects
   throttled?: boolean;
   throttle_detail?: string | null;
 }
@@ -127,6 +134,7 @@ export interface Accelerator {
   kind?: string;
   name?: string;
   reason?: string;
+  deliberate?: boolean; // chosen in the config, not a fallback
   hailo?: { present?: boolean; name?: string; pcie_link?: string };
 }
 
@@ -145,7 +153,10 @@ export interface SessionMeta {
 // session/summary
 export interface Summary {
   energy_wh?: number | null;
+  // Null on the HAT without an INA219 throughout: the PMIC can't see the HAT.
   fps_per_watt?: number | null;
+  detector?: string | null;
+  power_source?: string | null;
   total_ms_p95?: number | null;
 }
 
@@ -169,6 +180,11 @@ export interface SessionRow {
   power_mean_w?: number | null;
   power_source?: string;
   energy_wh?: number | null;
+  detector?: string | null;
+  under_voltage?: boolean | null; // the supply sagged during the session
+  hat_fitted?: boolean | null;
+  thermal_backoff_s?: number | null;
+  pcie_link?: string | null; // HAT sessions: "8.0 GT/s PCIe x1"
   files?: string[];
 }
 
@@ -214,6 +230,29 @@ export interface Config {
   locales?: string[];
   // Whether thresholds, photo saving and clearing data need the admin PIN.
   pin_required?: boolean;
+  // The worker's retained detector status; null before it first reports.
+  model?: DetectorStatus | null;
+}
+
+export interface DetectorStatus {
+  kind?: string; // onnx, hailo or stub
+  description?: string;
+  input_size?: number;
+  class_names?: string[];
+  synthetic?: boolean;
+  accelerator?: string;
+  detail?: {
+    architecture?: string | null; // e.g. YOLOv8m, read from the model's layers
+    weights_m?: number;
+    precision?: string;
+    exported?: string | null;
+    ultralytics_version?: string | null;
+    trained_classes?: string[] | null;
+    model_path?: string;
+    hef_path?: string;
+    size_mb?: number;
+    nms_on_chip?: boolean; // AI HAT+ only
+  };
 }
 
 export interface ClearResult {

@@ -46,6 +46,22 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
+# HailoRT status names worth a plain word when the HAT won't start; the
+# message itself follows either way, so an unmatched one is still shown whole.
+_START_HINTS = {
+    "OUT_OF_PHYSICAL_DEVICES": "another program is probably using the AI HAT+ (stop it, then start a new session)",
+    "NOT_COMPATIBLE": "the HEF was compiled for a different chip",
+    "DRIVER_VERSION": "the Hailo driver and HailoRT versions don't match (reinstall hailo-all, then reboot)",
+}
+
+
+def start_hint(exc: Exception) -> str:
+    """Why the HAT wouldn't start, in plain words where the error is a known one."""
+    text = str(exc)
+    hint = next((hint for status, hint in _START_HINTS.items() if status in text), None)
+    return f"{hint}: {text}" if hint else text
+
+
 def onnx_model_path(cfg: Config) -> Path | None:
     """The ONNX model to use on the CPU, preferring one exported at this board's size.
 
@@ -95,7 +111,7 @@ def get_detector(cfg: Config, choice: AcceleratorChoice) -> tuple[Detector, Acce
                 kind="cpu",
                 name="CPU",
                 profile="cpu",
-                reason=f"{choice.name} failed to start {choice.hef_path.name}: {exc}",
+                reason=f"{choice.name} failed to start {choice.hef_path.name}: {start_hint(exc)}",
             )
 
     model_path = onnx_model_path(cfg)

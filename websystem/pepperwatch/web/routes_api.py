@@ -491,6 +491,8 @@ def get_config():
             },
             "locales": _advisory().locales,
             "advisory": _advisory().meta,
+            # The model doing the detecting, as the worker last reported it.
+            "model": _hub().detector or None,
             # Whether thresholds, photo saving and clearing data are behind a PIN.
             "pin_required": bool(current_app.config.get("PW_ADMIN_PIN")),
         }

@@ -205,12 +205,52 @@
       </div>
       <div class="meter" data-health-temp-meter><i style="width:0"></i></div>
       <p class="tile-note">CPU, <span data-health-cpu>—</span> load</p>
-      <p class="tile-note" data-health-hailo hidden>AI HAT+ <span data-health-hailo-temp>—</span>°C</p>
+      <p class="tile-note stale-note" data-stale-note hidden></p>
+    </article>
+
+    {# Only while the AI HAT+ runs inference: its figures, a row of their own. #}
+    <article class="tile hat-tile" data-live-figure data-hat-tile hidden>
+      <div class="tile-head">
+        <svg class="icon" aria-hidden="true"><use href="#i-microchip"/></svg>
+        <h3>AI HAT+</h3>
+        <span class="chip tile-corner" data-hat-name>—</span>
+      </div>
+      <dl class="hat-figures">
+        <div>
+          <dt>Busy</dt>
+          <dd><span class="tile-value"><span data-hat-busy>—</span><small>%</small></span>
+            <div class="meter" data-hat-busy-meter><i style="width:0"></i></div></dd>
+        </div>
+        <div>
+          <dt>Model run per frame</dt>
+          <dd><span class="tile-value"><span data-hat-infer>—</span><small>ms</small></span></dd>
+        </div>
+        <div>
+          <dt>Chip temperature</dt>
+          <dd><span class="tile-value"><span data-health-hailo-temp>—</span><small>°C</small></span>
+            <div class="meter" data-health-hailo-temp-meter><i style="width:0"></i></div></dd>
+        </div>
+      </dl>
+      <p class="tile-note">Busy is the share of each second the HAT spends running the model,
+        transfers included. The rest is headroom for more frames.</p>
+      <p class="tile-note" data-hat-power></p>
+      <p class="tile-note" data-hat-backoff hidden>Inference is slowed for heat right now, so the idle
+        share isn't spare capacity.</p>
       <p class="tile-note stale-note" data-stale-note hidden></p>
     </article>
   </section>
 
   <div class="dash-alerts" data-expert>
+    {# The HAT is plugged in, but this session fell back to the CPU. #}
+    <div class="banner is-caution" data-hat-unused hidden>
+      <svg class="icon" aria-hidden="true"><use href="#i-microchip"/></svg>
+      <div>
+        <strong>The AI HAT+ is connected, but no model is running on it.</strong>
+        <span data-hat-unused-reason></span>
+        Detection runs on the CPU until then, more slowly. After fixing it, start a new
+        session (Session card) to use the HAT.
+      </div>
+    </div>
     <div class="banner is-caution" data-health-backoff hidden></div>
     <div class="banner is-offline" data-health-throttled hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-triangle-alert"/></svg>
@@ -241,7 +281,8 @@
           <li>
             <a class="btn" data-session-file="system.csv" href="#" download aria-disabled="true">
               <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Power &amp; system CSV</a>
-            <span class="note">Every second: watts, energy, temperature, CPU load and frame rates</span>
+            <span class="note">Every second: watts, energy, temperature, CPU load and frame rates, and
+              the AI HAT+'s busy share and chip temperature when it runs inference</span>
           </li>
           <li>
             <a class="btn" data-session-file="inference.csv" href="#" download aria-disabled="true">

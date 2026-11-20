@@ -85,7 +85,7 @@ Python 3.11+, since it needs no hardware.
     ├── deploy/                 install.sh, update.sh, systemd units, Mosquitto, Wi-Fi AP
     ├── scripts/                bench_fps.py (CPU vs AI HAT+), finetune_model.py, check_js.sh
     ├── models/                 pepperwatch.onnx and pepperwatch_<chip>.hef (not committed)
-    └── tests/                  517 hardware-free unit and API tests, plus a worker integration test
+    └── tests/                  549 hardware-free unit and API tests, plus a worker integration test
 ```
 
 `websystem/README.md` holds the engineering notes, including the list of
@@ -173,8 +173,8 @@ dashboard), it checks the hardware before any frame is taken:
    a compiled model matching the chip is in `models/`, the session runs on the
    HAT. Otherwise it runs on the CPU, and the reason is recorded.
 2. **Profile.** The matching `[profiles.hailo]` or `[profiles.cpu]` table is
-   applied: the HAT profile captures at up to 60 fps because inference keeps
-   up; the CPU profile captures at 25 fps and gives ONNX Runtime 3 threads.
+   applied. Both capture at the same rate (25 fps on a Pi 5) so the two can be
+   compared like for like; the CPU profile gives ONNX Runtime 3 threads.
 3. **Cameras.** CSI cameras are listed through libcamera and USB webcams
    through sysfs (`uvcvideo` driver). Every camera found is started, CSI
    first, up to `[camera] max_cameras` (default 4); one that won't start is
@@ -756,12 +756,13 @@ Hailo-8L also runs on the Hailo-8 (at Hailo-8L speed), but not the other way
 round. When `hailortcli` can't tell the 8 from the 8L, the 8L build is tried
 first.
 
-**What changes on the HAT.** The HAT runs YOLOv8n well above the camera's frame
-rate, so the camera becomes the limit. The `hailo` profile therefore captures
-at up to 60 fps (the sensor caps it), the network and NMS run on the chip, and
-the CPU is left with letterboxing and decoding. The `cpu` profile keeps capture
-at 25 fps, since CPU inference can't use more frames and JPEG-encoding them
-would only compete with it. Both profiles are in `config/default.toml` under
+**What changes on the HAT.** The network and NMS run on the chip, and the CPU
+is left with letterboxing and decoding. The camera captures at the same 25 fps
+as on the CPU, above the 17 fps target: a faster capture would decode frames
+the HAT then drops, costing CPU power in HAT sessions only and skewing the
+CPU-vs-HAT power comparison. The dashboard's AI HAT+ busy share shows how much
+headroom is left; for the most throughput instead, raise
+`[profiles.hailo] camera.preview_fps` in `local.toml`. Both profiles are in `config/default.toml` under
 `[profiles.*]`; override them in `local.toml`.
 
 **When the HAT isn't used**, the session runs on the CPU and says why: on the
@@ -800,7 +801,7 @@ the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
 | `inference.csv` | One row per inference |
 | `system.csv` | One row per second |
 | `session.json` | Hardware, accelerator, camera, model (file name and SHA-256), settings, OS |
-| `summary.json` | Means, p50/p95 latency, power, energy; rewritten every 15 s |
+| `summary.json` | Means, p50/p95 latency, power, energy, and on the AI HAT+ its mean busy share and mean/peak chip temperature; rewritten every 15 s. `fps_per_watt` uses the power of the seconds spent inferring (not paused, not stalled), and is left blank for a HAT session unless an INA219 measured it throughout, since the PMIC can't see the HAT. `under_voltage` is true when the supply sagged during the session: leave its power figures out of comparisons. `hat_fitted` says a HAT was on the board, even in a CPU session |
 | `../sessions.csv` | One row per session, rebuilt from every `summary.json`: the table to start a results chapter from |
 
 **`inference.csv`**
@@ -826,6 +827,7 @@ the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
 | Column | Meaning |
 |---|---|
 | `cpu_temp_c`, `hailo_temp_c` | SoC and Hailo die temperatures |
+| `hailo_busy_pct`, `hailo_infer_ms` | While the AI HAT+ runs inference: the share of that second spent waiting on the HAT (model plus PCIe transfer; the rest is headroom), and its mean run per frame. Empty on the CPU. The HAT has no power sensor, so its draw appears only in an INA219 reading; the PMIC estimate leaves it out |
 | `cpu_percent`, `cpu_freq_mhz`, `mem_used_mb`, `fan_rpm` | Load, current ARM clock, memory, Active Cooler speed |
 | `throttled_now`, `throttled_flags` | Whether the SoC is throttled, and the raw `vcgencmd get_throttled` bits |
 | `ina219_voltage_v`, `ina219_current_ma`, `ina219_power_w` | Whole-device supply, when an INA219 is fitted |
@@ -845,7 +847,11 @@ rsync -av <user>@<pi-address>:/var/lib/pepperwatch/sessions/ ./sessions/
 a label on the Session card and press *New session*; the worker closes the
 current session and starts the next, detecting the camera and the HAT again.
 For a CPU-only run with the HAT still fitted, set `[accelerator] mode = "cpu"`
-in `local.toml` and restart the worker.
+in `local.toml` and restart the worker. The fitted HAT still idles and draws
+power, which an INA219 counts: the session records `hat_fitted` and the sessions
+table says *Includes the idle HAT*. For a clean CPU baseline, take the HAT off.
+Sessions marked *Slowed by heat* (`thermal_backoff_s` above 0) or *Supply
+sagged* ran under different conditions; compare them with care.
 
 Disk use is about 200 bytes per inference: roughly 170 MB for an 8-hour day at
 30 fps. Sessions are never pruned automatically.
@@ -1129,7 +1135,7 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
 | POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
 | PATCH | `/api/site` | Rename the site: `{"name": "…"}`, 1–40 characters. No PIN; each rename is logged to `system_log` |
-| GET / PATCH | `/api/config` | Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99), and the photo intervals `heartbeat_detected_s`, `heartbeat_clean_s` (10–86400 s). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
+| GET / PATCH | `/api/config` | GET also returns `model`, the detector as the worker reports it (YOLO version read from the ONNX layer names, weights, precision, export date, Ultralytics version), shown in Settings → *Detection Model* (full view). Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99), and the photo intervals `heartbeat_detected_s`, `heartbeat_clean_s` (10–86400 s). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
@@ -1240,7 +1246,7 @@ The tests need no camera, HAT or Pi, so they run on any machine with Python
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest               # 517 tests (~1 min)
+.venv/bin/python -m pytest               # 549 tests (~1 min)
 npx --yes -p typescript@7.0.2 tsc       # type-check web/ts and compile it into static/js
 ./scripts/check_js.sh                    # ES-module syntax check (needs Node)
 npx eslint@10.14.0 pepperwatch/web/static/js   # undefined names and other JS bugs
@@ -1294,7 +1300,7 @@ flowchart LR
 
 | Job | What it checks |
 |---|---|
-| **Tests** | The 517 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
+| **Tests** | The 549 unit and API tests on Python 3.11 (Raspberry Pi OS Bookworm), 3.13 (Trixie) and 3.10 (Ubuntu 22.04, the base of many Orange Pi and Banana Pi images), on x64 and on **arm64**, the Pi 5's architecture, so a missing aarch64 wheel fails in CI rather than on the device |
 | **Integration** | The real worker with two fake cameras against a real mosquitto broker, on arm64 with Python 3.11: both cameras' frames, boxes, saved scans, snapshots and session CSV rows stay separate |
 | **Lint** | ESLint (`eslint.config.mjs`) for names used but never defined, which otherwise fail only in a browser; ruff (`ruff.toml`) for unused imports and undefined names in Python; the dashboard's TypeScript type-checks (`tsconfig.json`, strict) and the committed `static/js` is exactly its output; every dashboard script parses as an ES module (`check_js.sh`); `shellcheck` on the deploy and helper scripts |
 | **Promote** | Runs only for pushes to `main` once all jobs above pass. It fast-forwards `stable` to the tested commit; a fast-forward-only update means a late-finishing older run can never move `stable` backwards |
@@ -1321,6 +1327,15 @@ through every layer and handled:
 |---|---|
 | No camera, or a camera that sends nothing, at start | The worker waits instead of exiting; the dashboard says *No camera is connected*; plugging one in starts detection |
 | A corrupt model, or any other start-up failure | The worker logs it, the dashboard says the system hit a problem, and it tries again every 30 s. systemd never stops restarting either service (`StartLimitIntervalSec=0`) |
+| The AI HAT+ stops answering (a brown-out, a PCIe glitch, or a HEF that loads but won't run) | Once every inference has failed for 10 s (5 failures or more), the session ends and a new one starts at once on the CPU, labelled `ai-hat-stopped`. A failure at warm-up hands over immediately. The dashboard's banner says the HAT is connected but unused, and why; the system log has `ai_hat_stopped`. Only that one session avoids the HAT: *New session* tries it again. Inference failing like this on the CPU shows *the system hit a problem* and starts again every 30 s, instead of running on with no boxes |
+| Under-voltage (a weak supply, a power bank, an INA219 wired into the supply line) | The dashboard's banner says the supply can't keep up and, on the HAT, that it may stop answering; if it does, the CPU takes over (above). The session is marked `under_voltage`, shown as *Supply sagged* in the sessions table |
+| The AI HAT+ chip running hot | On the HAT, inference also backs off when the chip passes `[accelerator] hailo_warn_c` (85 °C), as for the CPU at 75 °C; the banner says which part it protects |
+| A HAT temperature read failing | Tried again 30 s later rather than given up for the session; the hotter of the chip's two sensors is used |
+| The AI HAT+ won't start (busy, wrong chip, driver mismatch) | The session runs on the CPU, and the reason starts with a plain explanation for known HailoRT errors, e.g. *another program is probably using the AI HAT+*. `scripts/bench_fps.py` refuses to run while the worker holds the camera and HAT |
+| HAT sessions on different PCIe links | The sessions table shows each HAT session's PCIe generation, and marks one below Gen 3 |
+| The Hailo driver still loading at boot | In the two minutes after boot, the first session waits up to 10 s for `/dev/hailo0` instead of running on the CPU |
+| An INA219 read failing for a second | That second has no power reading, rather than the PMIC's, which leaves the HAT, USB devices and fan out and would dip the energy |
+| The NMS IoU changed while on the HAT | The chip applies NMS with the session's IoU, so a change is saved and used from the next session; Settings says so, and each saved scan records the thresholds actually applied |
 | The SD card filling up | Below 2 GB free, photos stop being saved (events still are); below 512 MB nothing is saved. Detection carries on, the dashboard warns in both views, and nothing is deleted automatically (`[persist] min_free_mb`, `critical_free_mb`) |
 | A save or record failing (disk, database) | Live detection carries on; the error is logged at most once a minute |
 | Phones leaving with live streams open | Their connections are dropped after 20 s of silence (`TCP_USER_TIMEOUT`), and the dashboard has 32 threads, more than every stream slot together, so pages always load |

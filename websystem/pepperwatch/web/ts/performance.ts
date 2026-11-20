@@ -17,6 +17,9 @@ const TEMP_DANGER = 80;
 // Display bands for the Hailo die, on the same 0-100 °C meter.
 const HAILO_WARN = 80;
 const HAILO_DANGER = 90;
+// Near 100% busy the HAT, not the camera or CPU, caps the frame rate.
+const BUSY_WARN = 80;
+const BUSY_DANGER = 95;
 
 const POWER_SOURCES: Record<string, string> = {
   ina219: 'INA219, whole device',
@@ -31,11 +34,21 @@ export function renderTelemetry(root: ParentNode, telemetry: Telemetry | null): 
   setMeter(root, 'health-temp', num(telemetry.cpu_temp_c, 1), telemetry.cpu_temp_c, TEMP_WARN, TEMP_DANGER, 100);
   setText(root, 'health-cpu', telemetry.cpu_percent == null ? '—' : `${num(telemetry.cpu_percent, 0)}%`);
 
-  const hailo = root.querySelector<HTMLElement>('[data-health-hailo]');
-  if (hailo) {
-    hailo.hidden = telemetry.hailo_temp_c == null;
+  const hat = root.querySelector<HTMLElement>('[data-hat-tile]');
+  if (hat) {
+    hat.hidden = telemetry.hailo_busy_pct == null && telemetry.hailo_temp_c == null;
+    setText(root, 'hat-name', telemetry.accelerator || 'Hailo');
+    setMeter(root, 'hat-busy', num(telemetry.hailo_busy_pct, 0), telemetry.hailo_busy_pct, BUSY_WARN, BUSY_DANGER, 100);
+    setText(root, 'hat-infer', num(telemetry.hailo_infer_ms, 1));
     setMeter(root, 'health-hailo-temp', num(telemetry.hailo_temp_c, 1), telemetry.hailo_temp_c,
       HAILO_WARN, HAILO_DANGER, 100);
+    const resting = root.querySelector<HTMLElement>('[data-hat-backoff]');
+    if (resting) resting.hidden = !telemetry.thermal_level;
+    // The HAT has no power sensor; only a meter on the supply counts its draw.
+    setText(root, 'hat-power', telemetry.power_source === 'ina219'
+      ? 'Its power is in the INA219 reading: the HAT has no sensor of its own.'
+      : "Its power isn't in the PMIC estimate, which covers the Pi's own rails. "
+        + 'An INA219 on the supply would include it.');
   }
 
   const watts = telemetry.best_power_w ?? telemetry.power_w;
@@ -48,16 +61,26 @@ export function renderTelemetry(root: ParentNode, telemetry: Telemetry | null): 
     backoff.hidden = level === 0;
     if (level > 0) {
       const multiplier = telemetry.thermal_multiplier || 2;
+      const hat = telemetry.thermal_source === 'AI HAT+';
       backoff.textContent =
         `Thermal backoff level ${level}: inference slowed ${multiplier}x at ` +
-        `${temp(telemetry.cpu_temp_c)} to protect the processor. The live preview is unaffected.`;
+        `${temp(hat ? telemetry.hailo_temp_c : telemetry.cpu_temp_c)} to protect the ` +
+        `${hat ? 'AI HAT+' : 'processor'}. The live preview is unaffected.`;
     }
   }
 
   const throttled = root.querySelector<HTMLElement>('[data-health-throttled]');
   if (throttled) {
     throttled.hidden = telemetry.throttled !== true;
-    setText(root, 'health-throttle-detail', telemetry.throttle_detail ? `${telemetry.throttle_detail}.` : '');
+    // Under-voltage now: the fix is the supply, and the HAT is what drops out first.
+    const sagging = ((telemetry.throttled_flags ?? 0) & 1) !== 0;
+    const hat = telemetry.hailo_busy_pct != null || telemetry.hailo_temp_c != null;
+    const supply = sagging
+      ? `The power supply can't keep up${hat ? ', and the AI HAT+ may stop answering' : ''}: use the `
+        + 'official 27 W supply. An INA219 wired into the supply line lowers the voltage further.'
+      : '';
+    setText(root, 'health-throttle-detail',
+      [telemetry.throttle_detail ? `${telemetry.throttle_detail}.` : '', supply].filter(Boolean).join(' '));
   }
 }
 
@@ -96,8 +119,10 @@ export function renderPipeline(root: ParentNode, pipeline: Pipeline | null): voi
 export function renderSummary(root: ParentNode, summary: Summary | null | undefined): void {
   if (!summary) return;
   setText(root, 'session-energy', summary.energy_wh == null ? '—' : `${num(summary.energy_wh, 3)} Wh`);
-  setText(root, 'session-efficiency',
-    summary.fps_per_watt == null ? 'fps per watt after the first minute' : `${num(summary.fps_per_watt, 2)} fps per watt`);
+  const hatUnmeasured = summary.detector === 'hailo' && summary.power_source !== 'ina219';
+  setText(root, 'session-efficiency', summary.fps_per_watt != null
+    ? `${num(summary.fps_per_watt, 2)} fps per watt`
+    : hatUnmeasured ? 'no fps per watt: the PMIC misses the HAT' : 'fps per watt after the first minute');
   setText(root, 'session-p95', summary.total_ms_p95 == null ? '—' : `${num(summary.total_ms_p95, 1)} ms`);
 }
 

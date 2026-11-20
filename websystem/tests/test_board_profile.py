@@ -264,7 +264,7 @@ def test_a_cpu_session_keeps_the_tier_settings(monkeypatch) -> None:
     low = _tier(monkeypatch, "low")
     assert low.with_profile("cpu").camera.preview_fps == low.camera.preview_fps == 15
     assert low.with_profile("cpu").inference.intra_op_threads == 2
-    assert low.with_profile("hailo").camera.preview_fps > 15
+    assert low.with_profile("hailo").camera.preview_fps == 15  # compared like for like
 
 
 def test_a_board_profile_layers_over_its_tier(monkeypatch, tmp_path) -> None:

@@ -607,7 +607,7 @@ def test_a_to_date_includes_that_whole_day(seeded_db, client) -> None:
 
 def test_config_exposes_only_the_tunables(client) -> None:
     body = client.get("/api/config").get_json()
-    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory", "pin_required"}
+    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory", "pin_required", "model"}
     # Secrets must never appear.
     assert "secret_key" not in body["web"]
 
@@ -668,6 +668,15 @@ def test_config_shows_the_thresholds_the_detector_reports(app, client) -> None:
     )
     inference = client.get("/api/config").get_json()["inference"]
     assert (inference["conf_threshold"], inference["iou_threshold"]) == (0.35, 0.5)
+
+
+def test_config_shows_the_model_the_detector_reports(app, client) -> None:
+    """Settings' Detection Model card: nothing until the worker says, then what it said."""
+    assert client.get("/api/config").get_json()["model"] is None
+    app.config["PW_HUB"]._on_message(
+        "pepperwatch/status/detector", {"kind": "onnx", "detail": {"architecture": "YOLOv8m"}}
+    )
+    assert client.get("/api/config").get_json()["model"]["detail"]["architecture"] == "YOLOv8m"
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0, -0.5, 1.5, "high"])

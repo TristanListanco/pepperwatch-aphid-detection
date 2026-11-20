@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -34,6 +35,11 @@ log = logging.getLogger(__name__)
 PCI_DEVICES = Path("/sys/bus/pci/devices")
 DEV = Path("/dev")
 HAT = Path("/proc/device-tree/hat")
+UPTIME = Path("/proc/uptime")
+# Just after boot the Hailo driver may still be loading when the worker starts:
+# wait this long for /dev/hailo0 rather than run the first session on the CPU.
+BOOT_WINDOW_S = 120.0
+BOOT_SETTLE_S = 10.0
 
 HAILO_VENDOR = "0x1e60"
 # 0x2864 is shared by the Hailo-8 and Hailo-8L.
@@ -80,6 +86,8 @@ class AcceleratorChoice:
     reason: str
     hef_path: Path | None = None
     probe: HailoProbe | None = None
+    # Chosen in the config ([accelerator] mode = "cpu"), not a fallback.
+    deliberate: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -87,6 +95,7 @@ class AcceleratorChoice:
             "name": self.name,
             "profile": self.profile,
             "reason": self.reason,
+            "deliberate": self.deliberate,
             "hef_path": str(self.hef_path) if self.hef_path else None,
             "hailo": self.probe.as_dict() if self.probe else None,
         }
@@ -99,8 +108,14 @@ def probe_hailo(
     hat_root: Path = HAT,
     identify: bool = True,
     import_runtime: bool = True,
+    settle_s: float | None = None,
 ) -> HailoProbe:
-    """Look for a Hailo device and everything needed to use it."""
+    """Look for a Hailo device and everything needed to use it.
+
+    ``settle_s`` is how long to wait for the driver's device node when the chip
+    is on the bus without one; by default 10 s in the two minutes after boot,
+    when the driver may still be loading, and not at all otherwise.
+    """
     hat_product = _read_dt(hat_root / "product")
 
     address = arch = link = None
@@ -122,7 +137,13 @@ def probe_hailo(
         if identified:
             arch, confirmed = identified, True
 
-    nodes = sorted(dev_root.glob("hailo*")) if dev_root.is_dir() else []
+    nodes = _device_nodes(dev_root)
+    if not nodes:
+        wait = settle_s if settle_s is not None else BOOT_SETTLE_S if _uptime_s() < BOOT_WINDOW_S else 0.0
+        deadline = time.monotonic() + wait
+        while not nodes and time.monotonic() < deadline:
+            time.sleep(0.25)
+            nodes = _device_nodes(dev_root)
     node = nodes[0] if nodes else None
     accessible = bool(node) and os.access(node, os.R_OK | os.W_OK)
 
@@ -216,7 +237,10 @@ def choose_accelerator(cfg: Config, probe: HailoProbe | None = None) -> Accelera
     """Decide between the AI HAT+ and the CPU for this session."""
     mode = str(cfg.accelerator.mode).lower()
     if mode == "cpu":
-        return _cpu("[accelerator] mode is cpu")
+        # Still look (sysfs only): a fitted HAT idles and draws power in a CPU
+        # baseline, and the session record should say it was there.
+        fitted = probe if probe is not None else probe_hailo(identify=False, import_runtime=False, settle_s=0)
+        return _cpu("[accelerator] mode is cpu", fitted, deliberate=True)
 
     probe = probe if probe is not None else probe_hailo()
     problem = _hailo_problem(cfg, probe)
@@ -257,8 +281,19 @@ def _hailo_problem(cfg: Config, probe: HailoProbe) -> str | None:
     return None
 
 
-def _cpu(reason: str, probe: HailoProbe | None = None) -> AcceleratorChoice:
-    return AcceleratorChoice(kind="cpu", name="CPU", profile="cpu", reason=reason, probe=probe)
+def _cpu(reason: str, probe: HailoProbe | None = None, *, deliberate: bool = False) -> AcceleratorChoice:
+    return AcceleratorChoice(kind="cpu", name="CPU", profile="cpu", reason=reason, probe=probe, deliberate=deliberate)
+
+
+def _device_nodes(dev_root: Path) -> list[Path]:
+    return sorted(dev_root.glob("hailo*")) if dev_root.is_dir() else []
+
+
+def _uptime_s() -> float:
+    try:
+        return float(UPTIME.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return float("inf")  # not Linux: no boot to wait out
 
 
 def _read(path: Path) -> str:

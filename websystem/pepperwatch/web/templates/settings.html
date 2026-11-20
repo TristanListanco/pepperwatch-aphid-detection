@@ -62,6 +62,17 @@
   </div>
 </section>
 
+<section class="card" data-expert>
+  <div class="card-head">
+    <h2>Detection Model</h2>
+    <span class="card-sub">Read only</span>
+  </div>
+  <div class="card-body">
+    <p class="note" data-model-note>Waiting for the detector to report its model.</p>
+    <dl class="facts" data-model-facts hidden></dl>
+  </div>
+</section>
+
 <section class="card lock-bar" data-expert data-pin-bar hidden>
   <div class="lock-row">
     <span class="lock-mark" aria-hidden="true">
@@ -109,6 +120,8 @@
           Applied per class, so an aphid cluster sitting on a leaf does not
           suppress the leaf.
         </p>
+        <p class="note" data-iou-chip-note hidden>On the AI HAT+ boxes are filtered on the chip,
+          so a new IoU is saved now and used from the next session.</p>
       </div>
 
       <div>

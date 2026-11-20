@@ -59,8 +59,34 @@ def test_hailo8_family_found_with_link_speed(tmp_path: Path) -> None:
 def test_hailo10h_is_identified_by_its_device_id(tmp_path: Path) -> None:
     _pci(tmp_path / "pci", "0001:01:00.0", vendor="0x1e60", device="0x45c4")
     probe = probe_hailo(pci_root=tmp_path / "pci", dev_root=tmp_path / "dev",
-                        hat_root=tmp_path / "hat", identify=False, import_runtime=False)
+                        hat_root=tmp_path / "hat", identify=False, import_runtime=False, settle_s=0)
     assert probe.arch == "hailo10h" and probe.arch_confirmed and probe.name == "Hailo-10H"
+
+
+def test_just_after_boot_the_probe_waits_for_the_driver(tmp_path: Path) -> None:
+    """The driver can still be loading when the worker starts; wait rather than
+    run the whole first session on the CPU."""
+    import threading
+
+    _pci(tmp_path / "pci", "0001:01:00.0", vendor="0x1e60", device="0x2864")
+    (tmp_path / "dev").mkdir()
+    threading.Timer(0.3, (tmp_path / "dev" / "hailo0").write_text, args=("",)).start()
+    probe = probe_hailo(pci_root=tmp_path / "pci", dev_root=tmp_path / "dev", hat_root=tmp_path / "hat",
+                        identify=False, import_runtime=False, settle_s=3)
+    assert probe.device_path and probe.device_path.endswith("hailo0")
+
+
+def test_long_after_boot_a_missing_driver_is_reported_at_once(tmp_path: Path, monkeypatch) -> None:
+    import time
+
+    import pepperwatch.accel as accel
+
+    monkeypatch.setattr(accel, "_uptime_s", lambda: 3600.0)
+    _pci(tmp_path / "pci", "0001:01:00.0", vendor="0x1e60", device="0x2864")
+    began = time.monotonic()
+    probe = probe_hailo(pci_root=tmp_path / "pci", dev_root=tmp_path / "dev", hat_root=tmp_path / "hat",
+                        identify=False, import_runtime=False)
+    assert probe.device_path is None and time.monotonic() - began < 1.0
 
 
 @pytest.mark.parametrize(
@@ -117,12 +143,19 @@ def test_each_reason_to_fall_back_is_reported(cfg, probe: HailoProbe, reason: st
     assert reason in choice.reason
 
 
-def test_mode_cpu_never_probes(cfg, monkeypatch) -> None:
+def test_mode_cpu_only_reads_sysfs_to_record_a_fitted_hat(cfg, monkeypatch) -> None:
+    """No hailortcli, no runtime import, no waiting: only whether a HAT is there,
+    since a fitted one idles and draws power in a CPU baseline."""
     import pepperwatch.accel as accel
 
-    monkeypatch.setattr(accel, "probe_hailo", lambda **_: pytest.fail("probed"))
+    calls = []
+    fitted = HailoProbe(present=True, arch="hailo8")
+    monkeypatch.setattr(accel, "probe_hailo", lambda **kwargs: calls.append(kwargs) or fitted)
     cfg.accelerator._data["mode"] = "cpu"  # noqa: SLF001
-    assert choose_accelerator(cfg).kind == "cpu"
+    choice = choose_accelerator(cfg)
+    assert (choice.kind, choice.deliberate, choice.probe) == ("cpu", True, fitted)
+    assert calls == [{"identify": False, "import_runtime": False, "settle_s": 0}]
+    assert choice.as_dict()["deliberate"] is True  # the dashboard's banner stays quiet
 
 
 def test_mode_hailo_still_falls_back_rather_than_refusing_to_run(cfg) -> None:
@@ -134,7 +167,8 @@ def test_mode_hailo_still_falls_back_rather_than_refusing_to_run(cfg) -> None:
 
 def test_profiles_adjust_the_session_settings(cfg) -> None:
     hailo, cpu = cfg.with_profile("hailo"), cfg.with_profile("cpu")
-    assert hailo.camera.preview_fps > cpu.camera.preview_fps
+    # Same capture rate, so CPU and HAT sessions differ only in what runs the model.
+    assert hailo.camera.preview_fps == cpu.camera.preview_fps
     assert cpu.inference.intra_op_threads == 3
     assert hailo.get("session_profile") == "hailo"
     # The base config is untouched.

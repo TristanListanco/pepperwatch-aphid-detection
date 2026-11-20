@@ -17,7 +17,7 @@ import pytest
 from pepperwatch.accel import AcceleratorChoice
 from pepperwatch.config import load
 from pepperwatch.detect import get_detector
-from pepperwatch.detect.onnx_detector import OnnxDetector
+from pepperwatch.detect.onnx_detector import OnnxDetector, describe_export, yolo_architecture
 from tests.make_fixture_model import build
 
 CPU = AcceleratorChoice(kind="cpu", name="CPU", profile="cpu", reason="test")
@@ -222,3 +222,48 @@ def test_class_order_comes_from_the_model(names, expected) -> None:
     from pepperwatch.detect.onnx_detector import model_class_names
 
     assert model_class_names({"names": names}) == expected
+
+
+def _export(path: Path, names: bytes, megabytes: float) -> Path:
+    """A stand-in for an Ultralytics export: its layer names, padded to a model's size."""
+    path.write_bytes(names)
+    with path.open("r+b") as handle:
+        handle.truncate(int(megabytes * 1e6))
+    return path
+
+
+@pytest.mark.parametrize(
+    ("names", "expected"),
+    [
+        # YOLOv8: the head is layer 22, with DFL and no attention.
+        (b"/model.0/conv/Conv /model.21/cv1/Conv /model.22/dfl/conv/Conv", "YOLOv8m"),
+        # YOLO11: the head is layer 23, with attention at layer 10. 25.9 M is its l.
+        (b"/model.10/m/m.0/attn/qkv/conv/Conv /model.23/dfl/conv/Conv", "YOLO11l"),
+        # A one-to-one head (YOLOv10, YOLO26) is neither.
+        (b"/model.10/m/attn/Conv /model.23/one2one_cv2.0/Conv /model.23/dfl/Conv", None),
+        (b"/model.2/Conv", None),
+    ],
+)
+def test_reads_the_yolo_version_from_the_layer_names(tmp_path: Path, names: bytes, expected) -> None:
+    """Exports of a fine-tuned best.pt don't name their YOLO; the layers do."""
+    architecture, weights_m = yolo_architecture(_export(tmp_path / "m.onnx", names, 103.6), 4)
+    assert architecture == expected
+    assert weights_m == pytest.approx(25.9)
+
+
+def test_an_unusual_size_keeps_only_the_family(tmp_path: Path) -> None:
+    """A size between the standard ones isn't given a letter it may not have."""
+    path = _export(tmp_path / "m.onnx", b"/model.22/dfl/conv/Conv", 70.0)
+    assert yolo_architecture(path, 4)[0] == "YOLOv8"
+
+
+def test_describes_a_quantized_export(tmp_path: Path) -> None:
+    path = _export(tmp_path / "m.onnx", b"/model.22/dfl/conv/Conv", 26.6)
+    metadata = {"names": "{0: 'aphid_infested', 1: 'healthy'}", "date": "2026-10-29T19:30:12+08:00",
+                "version": "8.4.163", "args": "{'quantize': None}"}
+    described = describe_export(path, metadata, "onnx.quantize")
+    assert described == {
+        "architecture": "YOLOv8m", "weights_m": 26.6, "precision": "INT8",
+        "exported": "2026-10-29T19:30:12+08:00", "ultralytics_version": "8.4.163",
+        "trained_classes": ["aphid_infested", "healthy"],
+    }

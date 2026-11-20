@@ -838,6 +838,7 @@ button {
 /* A live figure the detector has stopped updating: kept for reference, but
  * faded (still 3:1 for the large value), with the time of the reading. */
 .tile.is-stale .tile-figure,
+.tile.is-stale .hat-figures,
 .tile.is-stale .meter {
   opacity: 0.55;
 }
@@ -922,6 +923,29 @@ button {
 
 .tile.is-hero.is-high .badge {
   color: #b42318;
+}
+
+/* The AI HAT+, while it runs inference: a row of its own under the system
+ * tiles, its three figures side by side. */
+.tile.hat-tile {
+  grid-column: 1 / -1;
+  min-height: 0;
+}
+
+.hat-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 18px 28px;
+  margin: 14px 0 6px;
+}
+
+.hat-figures dt {
+  font-size: var(--type-label);
+  color: var(--ink-3);
+}
+
+.hat-figures dd {
+  margin: 8px 0 0;
 }
 
 /* -- meters ---------------------------------------------------------------- */
@@ -1490,6 +1514,18 @@ button {
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
+}
+
+/* What a session's power figure leaves out, or that its supply sagged. */
+.cell-note {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--type-label);
+  color: var(--ink-3);
+}
+
+.cell-note.is-warn {
+  color: var(--amber-ink);
 }
 
 /* A phone: each session as a short labelled list, so power and energy are

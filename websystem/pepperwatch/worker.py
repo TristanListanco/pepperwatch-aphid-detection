@@ -32,6 +32,7 @@ from scratch, within the same process.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import platform
@@ -68,7 +69,7 @@ from .mqtt_bus import (
 )
 from .render import compose_cameras, draw_detections, encode_jpeg, make_thumbnail
 from .session import SessionRecorder, recover_interrupted, request_next_label, write_durably
-from .thermal import ThermalGovernor
+from .thermal import ThermalGovernor, ThermalState
 
 log = logging.getLogger(__name__)
 
@@ -84,6 +85,10 @@ REOPEN_S = 30.0
 # and reload the model, every few seconds.
 ARRIVAL_CHECKS = 10
 CAMERA_RESTART_GAP_S = 60.0
+# Every inference failing for this long, this many times in a row, ends the
+# session: a HAT that fell off the bus fails every frame while the video plays on.
+INFERENCE_STALL_S = 10.0
+INFERENCE_STALL_FAILURES = 5
 
 
 class _NoRoom(Exception):
@@ -280,14 +285,20 @@ class PersistPolicy:
             self._last_write = now if now is not None else time.monotonic()
 
 
-def start_session_hardware(base: Config) -> tuple[Config, AcceleratorChoice, Detector]:
+def start_session_hardware(
+    base: Config, avoid_hat: str | None = None
+) -> tuple[Config, AcceleratorChoice, Detector]:
     """Pick the accelerator, apply its profile, and build the detector.
 
     If the AI HAT+ was chosen but its detector would not start, the session
     drops to the CPU profile before the CPU detector is built, so the CPU path
-    gets its own thread count rather than the HAT profile's.
+    gets its own thread count rather than the HAT profile's. ``avoid_hat`` is
+    why the last session's HAT stopped answering: this one then runs on the CPU
+    and says so, keeping the probe so the dashboard knows the HAT is there.
     """
     choice = choose_accelerator(base)
+    if avoid_hat and choice.kind == "hailo":
+        choice = dataclasses.replace(choice, kind="cpu", name="CPU", profile="cpu", reason=avoid_hat, hef_path=None)
     cfg = base.with_profile(choice.profile)
     detector, final = get_detector(cfg, choice)
     if final.profile != choice.profile:
@@ -304,9 +315,9 @@ class Worker:
     # When a camera last restarted a session, across sessions (see CAMERA_RESTART_GAP_S).
     _camera_restart_at = float("-inf")
 
-    def __init__(self, base_cfg: Config) -> None:
+    def __init__(self, base_cfg: Config, avoid_hat: str | None = None) -> None:
         self.base_cfg = base_cfg
-        self.cfg, self.accelerator, self.detector = start_session_hardware(base_cfg)
+        self.cfg, self.accelerator, self.detector = start_session_hardware(base_cfg, avoid_hat)
         cfg = self.cfg
         self.site = cfg.site.name
 
@@ -326,6 +337,7 @@ class Worker:
         self.bus: MqttBus = make_bus(cfg, "worker", with_will=True)
 
         self.governor = ThermalGovernor()
+        self.hat_governor = ThermalGovernor(warn_c=float(cfg.accelerator.hailo_warn_c), name="AI HAT+")
         self.latest = [LatestFrame() for _ in range(count)]
         # Turned off from the dashboard: no reads, no encodes, no inference, so
         # the other camera gets the whole detector. Until the next session.
@@ -371,6 +383,15 @@ class Worker:
         # Each camera's newest result, for the other cameras' saves to include.
         self._last_result: list[tuple[Frame, list[Detection], str] | None] = [None] * count
         self._inference_ms = 0.0
+        # Time spent in the model itself, for the AI HAT+'s busy share.
+        self._model_ms = 0.0
+        self._model_runs = 0
+        self._model_mark = (time.monotonic(), 0.0, 0)
+        # Inference failing without a success between: when it began, and how often.
+        self._failing_since: float | None = None
+        self._failures = 0
+        # Why the HAT was given up this session; main() starts the next on the CPU.
+        self.hat_failure: str | None = None
         self._events_written = 0
         self._frames_captured = 0
         self.recorder: SessionRecorder | None = None
@@ -434,7 +455,13 @@ class Worker:
         if primer is None:
             log.error("no camera sent a picture in 10 s; waiting for the cameras to change")
             return EXIT_NO_FRAMES
-        self.detector.warmup(primer.bgr, rounds=2)
+        try:
+            self.detector.warmup(primer.bgr, rounds=2)
+        except Exception as exc:
+            if self.accelerator.kind != "hailo":
+                raise
+            self._hat_stopped(exc, "while warming up")
+            return 0
 
         # Recording starts after warm-up, so first-call allocation does not
         # land in the session's latency figures.
@@ -636,11 +663,13 @@ class Worker:
         """One telemetry round. Returns when telemetry was last logged."""
         payload = sample.as_dict()
         payload["hailo_temp_c"] = chip_temperature() if chip_temperature else None
+        payload["hailo_busy_pct"], payload["hailo_infer_ms"] = self._hat_figures()
         payload["accelerator"] = self.accelerator.name
         self._last_telemetry = payload
 
-        state = self.governor.update(sample.cpu_temp_c)
+        state = self._thermal(sample.cpu_temp_c, payload["hailo_temp_c"])
         payload["thermal_level"] = state.level
+        payload["thermal_source"] = state.source
         payload["thermal_multiplier"] = state.multiplier
         payload["backing_off"] = state.backing_off
         self._record_system(sample, payload, state.level)
@@ -688,7 +717,7 @@ class Worker:
                 event="thermal_backoff",
                 source="worker",
                 telemetry=payload,
-                detail=f"level {self._last_thermal_level} -> {state.level}: {state.reason}",
+                detail=f"{state.source} level {self._last_thermal_level} -> {state.level}: {state.reason}",
             )
             self._last_thermal_level = state.level
 
@@ -709,6 +738,8 @@ class Worker:
             {
                 "cpu_temp_c": sample.cpu_temp_c,
                 "hailo_temp_c": payload.get("hailo_temp_c"),
+                "hailo_busy_pct": payload.get("hailo_busy_pct"),
+                "hailo_infer_ms": payload.get("hailo_infer_ms"),
                 "cpu_percent": sample.cpu_percent,
                 "cpu_freq_mhz": sample.cpu_freq_mhz,
                 "mem_used_mb": sample.mem_used_mb,
@@ -730,6 +761,67 @@ class Worker:
                 "paused": self._paused.is_set(),
             }
         )
+
+    def _thermal(self, cpu_temp_c: float | None, hat_temp_c: float | None) -> ThermalState:
+        """The stricter of the CPU's governor and, on the HAT, the HAT chip's.
+
+        On the HAT most of the CPU's heat is the camera's, so backing off
+        inference cools the CPU only a little; it is what cools the HAT.
+        """
+        cpu = self.governor.update(cpu_temp_c)
+        if self.accelerator.kind != "hailo":
+            return cpu
+        hat = self.hat_governor.update(hat_temp_c)
+        return hat if hat.level > cpu.level else cpu
+
+    def _inference_stalled(self, exc: Exception) -> bool:
+        """Whether inference has failed every time for INFERENCE_STALL_S, ending the session.
+
+        Left alone, a HAT that dropped off the bus (a brown-out, a PCIe glitch)
+        fails every frame while the live video plays on, so nobody sees that
+        nothing is being checked. On the HAT the next session runs on the CPU
+        and the dashboard says why. On the CPU this raises: main() then shows
+        that the system hit a problem and starts again in 30 s.
+        """
+        now = time.monotonic()
+        if self._failing_since is None:
+            self._failing_since = now
+        self._failures += 1
+        if self._failures < INFERENCE_STALL_FAILURES or now - self._failing_since < INFERENCE_STALL_S:
+            return False
+        if self.accelerator.kind != "hailo":
+            raise RuntimeError(f"every inference failed for {now - self._failing_since:.0f} s") from exc
+        self._hat_stopped(exc, "during the last session")
+        return True
+
+    def _hat_stopped(self, exc: Exception, when: str) -> None:
+        """Give up on the HAT: a new session starts at once, on the CPU."""
+        detail = f"{type(exc).__name__}: {exc}"[:200]
+        self.hat_failure = f"it stopped answering {when} ({detail})"
+        log.error("the AI HAT+ stopped answering %s (%s); starting a new session on the CPU", when, detail)
+        try:  # a full disk refuses these too; the restart must still happen
+            self.db.log_system(level="error", event="ai_hat_stopped", source="worker", detail=detail)
+            request_next_label(self.cfg.sessions_root, "ai-hat-stopped")
+        except Exception:  # noqa: BLE001
+            pass
+        self.restart_requested = True
+        self.request_stop()
+
+    def _hat_figures(self) -> tuple[float | None, float | None]:
+        """The AI HAT+'s busy share (%) and mean model run (ms) since the last call.
+
+        Busy is the time inference spent waiting on the HAT, transfers included,
+        over wall time: HailoRT offers no utilisation counter to read in-process.
+        Both are None when the HAT isn't running inference.
+        """
+        now, spent, runs = time.monotonic(), self._model_ms, self._model_runs
+        then, spent_before, runs_before = self._model_mark
+        self._model_mark = (now, spent, runs)
+        if self.accelerator.kind != "hailo" or now <= then:
+            return None, None
+        busy = round(min(100.0, (spent - spent_before) / ((now - then) * 10.0)), 1)
+        per_run = round((spent - spent_before) / (runs - runs_before), 2) if runs > runs_before else None
+        return busy, per_run
 
     def _dropped(self) -> int:
         return sum(slot.dropped for slot in self.latest)
@@ -754,6 +846,7 @@ class Worker:
             self._drain_snapshots()
 
             if self._paused.is_set():
+                self._failures, self._failing_since = 0, None
                 self._stopping.wait(timeout=0.2)
                 continue
 
@@ -772,9 +865,12 @@ class Worker:
             began = time.perf_counter()
             try:
                 detections, non_plant = self._detect(frame.bgr)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 self._report("inference_error", "inference_error")
+                if self._inference_stalled(exc):
+                    return
                 continue
+            self._failures, self._failing_since = 0, None
             self._inference_ms = (time.perf_counter() - began) * 1000.0
             self.inference_fps.mark()
 
@@ -794,7 +890,7 @@ class Worker:
 
             # The governor stretches this interval when hot. It does not touch
             # the capture loop, so the preview stays smooth while backing off.
-            state = self.governor.update(self._last_telemetry.get("cpu_temp_c"))
+            state = self._thermal(self._last_telemetry.get("cpu_temp_c"), self._last_telemetry.get("hailo_temp_c"))
             if state.multiplier > 1.0:
                 self._stopping.wait(timeout=base_interval * (state.multiplier - 1.0))
 
@@ -802,6 +898,8 @@ class Worker:
         """Detect, then drop boxes with almost no plant colour. Returns the
         boxes kept and how many were dropped, for the session record."""
         found = self.detector.detect(bgr)
+        self._model_ms += self.detector.timings.infer_ms
+        self._model_runs += 1
         if self.detector.info.synthetic:  # the stub's boxes are not on plants anyway
             return found, 0
         kept = drop_non_plant(bgr, found, float(self.cfg.inference.min_plant_fraction))
@@ -881,6 +979,7 @@ class Worker:
                 "kind": info.kind,
                 "description": info.description,
                 "model_version": info.model_version,
+                "architecture": info.detail.get("architecture"),
                 "model_file": model_path.name or None,
                 "model_sha256": _sha256(model_path) if model_path.is_file() else None,
                 "input_size": info.input_size,
@@ -1036,6 +1135,11 @@ class Worker:
             self._report("media_write", "media_write_failed", f"frame {seq}")
             image_rel = thumb_rel = None  # type: ignore[assignment]
 
+        # What the detector applies, which on the HAT can differ from the
+        # setting: its on-chip NMS keeps the session's IoU until the next one.
+        applied = self.detector.info.detail
+        conf = applied.get("conf_threshold", self.cfg.inference.conf_threshold)
+        iou = applied.get("iou_threshold", self.cfg.inference.iou_threshold)
         ids = []
         for shot in shots:
             is_lead = shot.camera == lead
@@ -1048,8 +1152,8 @@ class Worker:
                 frame_seq=shot.frame.seq,
                 detections=shot.detections,
                 model_version=info.model_version,
-                conf_threshold=self.cfg.inference.conf_threshold,
-                iou_threshold=self.cfg.inference.iou_threshold,
+                conf_threshold=conf,
+                iou_threshold=iou,
                 severity=shot.severity,
                 trigger=trigger if is_lead or trigger == "manual" else "auto",
                 captured_at=captured_at.isoformat(timespec="milliseconds"),
@@ -1391,10 +1495,11 @@ def main() -> int:
     )
     # Never exits on a problem it can recover from: systemd would restart it
     # anyway, and the dashboard would only say "offline" without saying why.
+    avoid_hat: str | None = None  # set for one session after the HAT stopped answering
     while True:
         cfg = load()
         try:
-            worker = Worker(cfg)
+            worker = Worker(cfg, avoid_hat)
         except CameraError as exc:
             log.error("%s", exc)
             wait_for_camera(cfg)
@@ -1403,6 +1508,7 @@ def main() -> int:
             log.exception("the worker could not start; trying again in 30 s")
             wait_after_error(cfg)
             continue
+        avoid_hat = None
         try:
             code = worker.run()
         except Exception:  # noqa: BLE001
@@ -1418,6 +1524,7 @@ def main() -> int:
         elif not worker.restart_requested:
             return code
         else:
+            avoid_hat = worker.hat_failure
             log.info("starting a new session")
 
 

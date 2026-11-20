@@ -32,8 +32,9 @@ _LEVEL_MULTIPLIERS = (1.0, 2.0, 4.0, 8.0)
 class ThermalState:
     level: int
     multiplier: float
-    cpu_temp_c: float | None
+    cpu_temp_c: float | None  # the reading of whichever part this governs
     reason: str
+    source: str = "CPU"
 
     @property
     def backing_off(self) -> bool:
@@ -50,7 +51,9 @@ class ThermalGovernor:
         step_c: float = 3.0,
         recover_margin_c: float = 4.0,
         max_level: int = 3,
+        name: str = "CPU",
     ) -> None:
+        self._name = name
         self._warn_c = float(warn_c)
         self._step_c = float(step_c)
         # Recovery needs the temperature to fall this far below the threshold
@@ -78,7 +81,8 @@ class ThermalGovernor:
 
         if self._level != previous:
             log.warning(
-                "thermal backoff %s: %.1f C -> level %d (inference interval x%.0f)",
+                "%s thermal backoff %s: %.1f C -> level %d (inference interval x%.0f)",
+                self._name,
                 "up" if self._level > previous else "down",
                 cpu_temp_c,
                 self._level,
@@ -98,6 +102,7 @@ class ThermalGovernor:
             multiplier=_LEVEL_MULTIPLIERS[self._level],
             cpu_temp_c=cpu_temp_c,
             reason=reason,
+            source=self._name,
         )
 
     @property
