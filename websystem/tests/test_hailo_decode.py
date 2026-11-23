@@ -44,6 +44,16 @@ def test_split_layout_maps_back_to_the_frame() -> None:
     assert detections[0].confidence == pytest.approx(0.9)  # best first
 
 
+def test_boxes_come_back_as_plain_floats_ready_to_publish() -> None:
+    """NumPy 2 keeps float32 through the arithmetic; json.dumps rejects it, which stopped the HAT session."""
+    import json
+
+    output = [np.zeros((0, 5), np.float32), np.array([_box_on_content(320, 240, 384, 336, 0.7)], np.float32)]
+    (damage,) = decode_hailo_nms(output, _transform(), CLASSES, conf_threshold=0.25)
+    assert all(type(v) is float for v in (damage.confidence, damage.x, damage.y, damage.w, damage.h))
+    json.dumps(damage.as_dict())
+
+
 def test_packed_layout_decodes_identically() -> None:
     split = [
         np.array([_box_on_content(64, 48, 192, 144, 0.9)], np.float32),

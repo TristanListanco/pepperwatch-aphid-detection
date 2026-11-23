@@ -882,7 +882,11 @@ class Worker:
                 self._record_inference(index, frame, detections, severity, damaged_area, non_plant)
             except Exception:  # noqa: BLE001
                 self._report("session_record", "session_record_failed")
-            self._publish_detections(index, frame, detections, severity, damaged_area)
+            # A failed publish costs the live boxes, never the session.
+            try:
+                self._publish_detections(index, frame, detections, severity, damaged_area)
+            except Exception:  # noqa: BLE001
+                self._report("publish", "publish_failed")
             try:
                 self._maybe_persist(index, frame, detections, severity, info)
             except Exception:  # noqa: BLE001

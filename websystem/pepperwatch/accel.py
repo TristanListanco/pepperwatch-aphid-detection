@@ -276,8 +276,10 @@ def _hailo_problem(cfg: Config, probe: HailoProbe) -> str | None:
     if not probe.runtime_version:
         return f"HailoRT Python bindings unavailable ({probe.runtime_error}); install {package}"
     if find_hef(cfg, probe) is None:
-        tried = ", ".join(p.name for p in hef_candidates(cfg, probe.arch, confirmed=probe.arch_confirmed))
-        return f"no compiled model for the {probe.name} (looked for {tried} in models/)"
+        candidates = hef_candidates(cfg, probe.arch, confirmed=probe.arch_confirmed)
+        tried = ", ".join(p.name for p in candidates)
+        # The full folder: on the Pi it is /opt/pepperwatch/models, not the checkout's models/.
+        return f"no compiled model for the {probe.name} (looked for {tried} in {candidates[0].parent})"
     return None
 
 

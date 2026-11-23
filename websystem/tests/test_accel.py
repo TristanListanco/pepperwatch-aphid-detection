@@ -143,6 +143,12 @@ def test_each_reason_to_fall_back_is_reported(cfg, probe: HailoProbe, reason: st
     assert reason in choice.reason
 
 
+def test_a_missing_model_names_the_folder_it_looked_in(cfg) -> None:
+    """On the Pi that is /opt/pepperwatch/models: a HEF left only in the checkout is not there."""
+    reason = choose_accelerator(cfg, READY).reason
+    assert f"pepperwatch.hef in {cfg.hef_path.parent})" in reason
+
+
 def test_mode_cpu_only_reads_sysfs_to_record_a_fitted_hat(cfg, monkeypatch) -> None:
     """No hailortcli, no runtime import, no waiting: only whether a HAT is there,
     since a fitted one idles and draws power in a CPU baseline."""

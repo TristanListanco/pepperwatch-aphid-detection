@@ -303,7 +303,9 @@ def decode_hailo_nms(
 
     candidates: list[tuple[float, int, tuple[float, float, float, float]]] = []
     for class_id, boxes in enumerate(per_class):
-        for y1, x1, y2, x2, score in boxes:
+        # tolist(): Python floats. NumPy 2 keeps float32 through the arithmetic
+        # below, and json.dumps rejects it, which stopped the session on the first box.
+        for y1, x1, y2, x2, score in boxes.tolist():
             if score < conf_threshold:
                 continue
             candidates.append((float(score), class_id, (x1 * size, y1 * size, x2 * size, y2 * size)))
