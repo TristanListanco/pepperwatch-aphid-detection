@@ -149,3 +149,17 @@ def make_thumbnail(bgr: np.ndarray, width: int) -> np.ndarray:
         return bgr.copy()
     target_height = max(1, round(height * width / source_width))
     return cv2.resize(bgr, (width, target_height), interpolation=cv2.INTER_AREA)
+
+
+def digital_zoom(bgr: np.ndarray, zoom: float) -> np.ndarray:
+    """The middle 1/zoom of the picture, enlarged back to its size.
+
+    For a camera that cannot crop on its sensor (a USB webcam): leaves come out
+    bigger, which the detector finds more often, but with no more detail.
+    """
+    if zoom <= 1.0:
+        return bgr
+    height, width = bgr.shape[:2]
+    crop_h, crop_w = round(height / zoom), round(width / zoom)
+    top, left = (height - crop_h) // 2, (width - crop_w) // 2
+    return cv2.resize(bgr[top:top + crop_h, left:left + crop_w], (width, height), interpolation=cv2.INTER_LINEAR)

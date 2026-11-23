@@ -38,6 +38,8 @@ def _worker(*devices: str) -> worker_module.Worker:
     worker = worker_module.Worker.__new__(worker_module.Worker)
     worker.cameras = [FakeCamera(device) for device in devices]
     worker.camera_on = [True] * len(devices)
+    worker.camera_zoom = [1.0] * len(devices)
+    worker._sensor_zoom = [False] * len(devices)
     worker.camera_connected = [True] * len(devices)
     worker.latest = [worker_module.LatestFrame() for _ in devices]
     worker._usb_seen = set(devices)

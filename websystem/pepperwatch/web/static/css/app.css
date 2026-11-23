@@ -1066,6 +1066,41 @@ button {
   display: none;
 }
 
+/* Zoom, over the picture's top left corner. */
+.viewport-zoom {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--glass);
+}
+
+.viewport-zoom button {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font-size: var(--type-label);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.viewport-zoom button[aria-pressed="true"] {
+  background: var(--rail);
+  color: var(--on-rail);
+}
+
+.viewport-zoom button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .viewport-meta {
   position: absolute;
   left: 12px;

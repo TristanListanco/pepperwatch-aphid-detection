@@ -36,6 +36,7 @@ export interface Pipeline {
   target_fps?: number | null;
   dropped?: number;
   camera_on?: boolean[];
+  camera_zoom?: number[];
   camera_connected?: boolean[];
   camera_stalled?: boolean[];
   storage?: 'ok' | 'low' | 'full';

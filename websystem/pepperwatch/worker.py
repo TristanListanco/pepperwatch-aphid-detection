@@ -57,7 +57,7 @@ from .detect.postprocess import drop_non_plant
 from .frames import make_writer
 from .hal import CameraError, CameraSource, Frame, discover_cameras, get_telemetry, open_cameras
 from .hal.discovery import SYSFS_VIDEO, usb_cameras
-from .models import SEVERITY_ORDER, Detection
+from .models import SEVERITY_ORDER, ZOOMS, Detection
 from .mqtt_bus import (
     STATUS_ERROR,
     STATUS_NO_CAMERA,
@@ -68,7 +68,7 @@ from .mqtt_bus import (
     Topics,
     make_bus,
 )
-from .render import compose_cameras, draw_detections, encode_jpeg, make_thumbnail
+from .render import compose_cameras, digital_zoom, draw_detections, encode_jpeg, make_thumbnail
 from .session import SessionRecorder, recover_interrupted, request_next_label, write_durably
 from .thermal import ThermalGovernor, ThermalState
 
@@ -343,6 +343,10 @@ class Worker:
         # Turned off from the dashboard: no reads, no encodes, no inference, so
         # the other camera gets the whole detector. Until the next session.
         self.camera_on = [True] * count
+        # Each camera's zoom, kept across sessions, and whether its sensor does
+        # the cropping (a CSI camera) or the worker enlarges the picture.
+        self.camera_zoom = [1.0] * count
+        self._sensor_zoom = [False] * count
         # Unplugged while running (USB only): stopped and shown as such, while
         # the others carry on. Plugging one in restarts the session instead.
         self.camera_connected = [True] * count
@@ -622,6 +626,10 @@ class Worker:
 
             meter.mark()
             self._frames_captured += 1
+            # Zoomed here when the sensor cannot crop: the preview, the detector
+            # and saved photos all see the same picture, so the boxes line up.
+            if self.camera_zoom[index] > 1.0 and not self._sensor_zoom[index]:
+                frame = dataclasses.replace(frame, bgr=digital_zoom(frame.bgr, self.camera_zoom[index]))
 
             # Published CLEAN. The browser draws boxes on a canvas over this,
             # which keeps encode cost off the inference budget and lets the
@@ -694,6 +702,7 @@ class Worker:
                     for index, meter in enumerate(self.preview_fps)
                 ],
                 "camera_on": list(self.camera_on),
+                "camera_zoom": list(self.camera_zoom),
                 "camera_connected": list(self.camera_connected),
                 "camera_stalled": list(self.camera_stalled),
                 "storage": self.storage,
@@ -936,6 +945,7 @@ class Worker:
         self.recorder.record_inference(
             {
                 "camera": index,
+                "zoom": self.camera_zoom[index],
                 "frame_seq": frame.seq,
                 "preprocess_ms": timings.preprocess_ms,
                 "infer_ms": timings.infer_ms,
@@ -1237,7 +1247,10 @@ class Worker:
             self._apply_config(payload)
 
         elif topic == Topics.CMD_CAMERA:
-            self._switch_camera(payload)
+            if "zoom" in payload:
+                self._zoom_camera(payload)
+            else:
+                self._switch_camera(payload)
 
         elif topic == Topics.CMD_SESSION:
             # Stop this session cleanly; main() then builds a new Worker, which
@@ -1267,6 +1280,10 @@ class Worker:
                 saved[key] = float(value)
         if saved:
             self._apply_config(saved, persist=False)
+        for index in range(len(self.cameras)):
+            zoom = self.db.meta(f"camera_zoom_{index}")
+            if zoom is not None:
+                self._zoom_camera({"camera": index, "zoom": float(zoom)}, persist=False)
 
     def _apply_config(self, payload: dict[str, Any], *, persist: bool = True) -> None:
         name = payload.get("site_name")
@@ -1314,6 +1331,23 @@ class Worker:
         state = "on" if on else "off"
         log.info("camera %d turned %s", index, state)
         self.db.log_system(event=f"camera_{state}", source="web", detail=f"camera {index}")
+
+    def _zoom_camera(self, payload: dict[str, Any], *, persist: bool = True) -> None:
+        """Zoom one camera to 1, 1.5, 2 or 3 times; kept for the next sessions."""
+        index, zoom = payload.get("camera"), payload.get("zoom")
+        if (not isinstance(index, int) or not 0 <= index < len(self.cameras)
+                or isinstance(zoom, bool) or zoom not in ZOOMS):
+            log.warning("ignoring zoom command %r", payload)
+            return
+        zoom = float(zoom)
+        sensor = self.cameras[index].set_zoom(zoom)
+        self._sensor_zoom[index] = sensor and zoom > 1.0
+        self.camera_zoom[index] = zoom
+        self.latest[index].take(timeout=0)  # a frame from before the zoom is stale
+        log.info("camera %d zoomed to %gx (%s)", index, zoom, "sensor crop" if sensor else "enlarged picture")
+        if persist:
+            self.db.set_meta(f"camera_zoom_{index}", str(zoom))
+            self.db.log_system(event="camera_zoom", source="web", detail=f"camera {index} {zoom:g}x")
 
     def _active(self) -> list[int]:
         """The cameras the detector takes frames from: turned on and plugged in."""
@@ -1382,6 +1416,8 @@ class Worker:
         try:
             camera.stop()
             camera.start()
+            # A restarted camera has lost its sensor crop.
+            self._sensor_zoom[index] = self.camera_zoom[index] > 1.0 and camera.set_zoom(self.camera_zoom[index])
         except Exception:  # noqa: BLE001
             self._report(f"reopen:{index}", "camera_reopen_failed", f"camera {index}")
 
@@ -1410,6 +1446,8 @@ class Worker:
                 continue
             try:  # one camera failing must not lose the others' part
                 still = camera.capture_still() if hi_res else None
+                if still is not None and not self._sensor_zoom[index]:
+                    still = digital_zoom(still, self.camera_zoom[index])
                 frame = self.latest[index].take(timeout=1.0)
                 if frame is None and index == 0:
                     frame = self._await_first_frame(timeout=2.0)

@@ -51,6 +51,14 @@
           <p data-camera-unplugged></p>
           <p class="viewport-short" data-camera-short>Plug it back in</p>
         </div>
+        {# Closer pictures for the detector too: it finds more on leaves that fill
+           the frame. A CSI camera crops on its sensor; a USB one is enlarged. #}
+        <div class="viewport-zoom" role="group" aria-label="Zoom" data-camera-zoom data-expert>
+          <button type="button" data-zoom="1" aria-pressed="true">1×</button>
+          <button type="button" data-zoom="1.5" aria-pressed="false">1.5×</button>
+          <button type="button" data-zoom="2" aria-pressed="false">2×</button>
+          <button type="button" data-zoom="3" aria-pressed="false">3×</button>
+        </div>
         {# Shown with several cameras: tap the picture, or this, to expand one. #}
         <button class="viewport-expand" type="button" data-camera-expand>
           <svg class="icon" aria-hidden="true"><use href="#i-maximize"/></svg></button>

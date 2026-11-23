@@ -93,6 +93,7 @@ function bootDashboard(): void {
   let camerasOn: boolean[] = [];
   let camerasConnected: boolean[] = [];
   let camerasStalled: boolean[] = [];
+  let camerasZoom: number[] = [];
   // The camera expanded to the whole card, or null. The others fetch no
   // frames meanwhile: the radio's bandwidth goes to the one being looked at.
   let focused: number | null = null;
@@ -135,6 +136,12 @@ function bootDashboard(): void {
         button.setAttribute('aria-label', `${action} camera ${index + 1}`);
         button.disabled = !view.off && onCount < 2; // the last camera on stays on
       }
+      const zoomed = camerasZoom[index] ?? 1;
+      const zoom = view.root.querySelector<HTMLElement>('[data-camera-zoom]');
+      if (zoom) zoom.hidden = !active(index);
+      view.root.querySelectorAll<HTMLButtonElement>('[data-zoom]').forEach((option) => {
+        option.setAttribute('aria-pressed', String(Number(option.dataset.zoom) === zoomed));
+      });
       if (view.idle) view.setMode('idle');
       else if (view.mode === 'idle' && pageLoaded && !document.hidden) view.setMode(liveMode);
     });
@@ -168,6 +175,22 @@ function bootDashboard(): void {
     viewsRoot.addEventListener('click', async (event) => {
       const target = event.target as Element;
       const at = views.findIndex((view) => view.root.contains(target));
+      // Before the picture's own click, which expands a camera.
+      const zoomOption = target.closest<HTMLButtonElement>('[data-zoom]');
+      if (zoomOption) {
+        const zoom = Number(zoomOption.dataset.zoom);
+        if (zoomOption.getAttribute('aria-pressed') === 'true') return;
+        zoomOption.disabled = true; // until the worker's next report shows it
+        try {
+          await postJson(`/api/camera/${at}`, { zoom });
+          toast(`Camera ${at + 1} zoomed to ${zoom}×`);
+        } catch (error) {
+          toast(`Could not zoom camera ${at + 1}: ${errorText(error)}`, 'error');
+        } finally {
+          zoomOption.disabled = false;
+        }
+        return;
+      }
       if (target.closest('[data-camera-exit]')) {
         focusCamera(null);
         return;
@@ -232,6 +255,7 @@ function bootDashboard(): void {
     paused = Boolean(payload.paused);
     showOverlay();
     camerasOn = payload.camera_on || [];
+    camerasZoom = payload.camera_zoom || [];
     const connected = payload.camera_connected || [];
     connected.forEach((plugged, index) => {
       if (plugged === false && camerasConnected[index] === true) {

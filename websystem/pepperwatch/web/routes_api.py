@@ -28,7 +28,7 @@ from werkzeug.security import safe_join
 from .. import debuglog
 from ..accel import MODES
 from ..config import TUNABLES
-from ..models import SEVERITY_ORDER, Detection
+from ..models import SEVERITY_ORDER, ZOOMS, Detection
 from ..session import csv_safe
 from ..mqtt_bus import Topics
 
@@ -434,17 +434,30 @@ def inference_control(action: str):
 
 @bp.post("/camera/<int:index>")
 def camera_switch(index: int):
-    """Turn one camera off, or back on, until the next session.
+    """Turn one camera off, or back on, until the next session; or zoom it.
 
     With two cameras the detector alternates between them; turning one off
     gives the other the whole detector and the whole stream rate.
+
+    ``{"zoom": 1 | 1.5 | 2 | 3}`` crops to the middle of the picture for the
+    preview, the detector and saved photos alike, kept across sessions. A CSI
+    camera crops on its sensor (real detail); a USB one is enlarged.
     """
     payload = request.get_json(silent=True) or {}
+    hub = _hub()
+    count = len(hub.session.get("cameras") or [])
+    if "zoom" in payload:
+        zoom = payload["zoom"]
+        if isinstance(zoom, bool) or zoom not in ZOOMS:
+            return jsonify({"error": f"zoom must be one of {', '.join(f'{z:g}' for z in ZOOMS)}"}), 400
+        if not 0 <= index < count:
+            return jsonify({"error": "no such camera"}), 404
+        if not _publish_command(Topics.CMD_CAMERA, {"camera": index, "zoom": float(zoom)}):
+            return jsonify({"error": "worker unreachable"}), 503
+        return jsonify({"accepted": True, "camera": index, "zoom": float(zoom)}), 202
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         return jsonify({"error": "enabled must be true or false"}), 400
-    hub = _hub()
-    count = len(hub.session.get("cameras") or [])
     if not 0 <= index < count:
         return jsonify({"error": "no such camera"}), 404
     pipeline = hub.snapshot()["latest"].get("telemetry/pipeline", {})

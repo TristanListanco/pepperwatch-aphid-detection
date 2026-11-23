@@ -75,6 +75,8 @@ class CsiCamera(CameraSource):
         self._started = False
         self._lock = threading.Lock()
         self._lores_yuv = False
+        # The sensor area a 1x picture covers, for set_zoom to crop within.
+        self._full_crop: tuple[int, int, int, int] | None = None
 
     def _configuration(self, camera, lores_format: str):
         return camera.create_video_configuration(
@@ -124,6 +126,10 @@ class CsiCamera(CameraSource):
             # Auto exposure and white balance need a moment to settle, or the
             # first several frames come out badly exposed.
             time.sleep(1.5)
+            try:
+                self._full_crop = tuple(camera.capture_metadata()["ScalerCrop"])
+            except Exception:  # noqa: BLE001 — then zoom falls back to enlarging the picture
+                self._full_crop = None
 
             self._camera = camera
             self._started = True
@@ -149,6 +155,21 @@ class CsiCamera(CameraSource):
             array = cv2.cvtColor(array, cv2.COLOR_YUV2BGR_I420)
             return Frame(seq=self._seq, ts=time.time(), bgr=_rotate(array, self.cfg.camera.rotate))
         return Frame(seq=self._seq, ts=time.time(), bgr=_to_bgr(array, self.cfg.camera.rotate))
+
+    def set_zoom(self, zoom: float) -> bool:
+        """Crop on the sensor, before the picture is scaled down: real detail,
+        where cropping the 640x480 preview would only enlarge it. Both streams
+        share the crop, so stills are zoomed too."""
+        if self._camera is None or self._full_crop is None:
+            return False
+        x, y, width, height = self._full_crop
+        crop_w, crop_h = round(width / zoom), round(height / zoom)
+        try:
+            self._camera.set_controls({"ScalerCrop": (x + (width - crop_w) // 2, y + (height - crop_h) // 2, crop_w, crop_h)})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("sensor crop refused (%s); enlarging the picture instead", exc)
+            return False
+        return True
 
     def capture_still(self) -> np.ndarray:
         if not self._started or self._camera is None:

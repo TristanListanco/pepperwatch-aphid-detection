@@ -155,6 +155,14 @@ class CameraSource(ABC):
     def read(self) -> Frame | None:
         """Newest frame, or ``None`` if nothing new. Must not block."""
 
+    def set_zoom(self, zoom: float) -> bool:
+        """Crop on the sensor to ``zoom`` times closer; whether this camera did.
+
+        One that cannot returns False and the worker enlarges the middle of
+        its pictures instead (``render.digital_zoom``).
+        """
+        return False
+
     @abstractmethod
     def capture_still(self) -> np.ndarray:
         """A single high-resolution BGR still for a manual snapshot.

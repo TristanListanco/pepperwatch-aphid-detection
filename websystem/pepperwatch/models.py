@@ -14,6 +14,9 @@ from typing import Any, Iterable
 # Severity ordering, lowest first. Used to decide whether severity "moved"
 # (which forces a database write) and to colour the KPI tile.
 SEVERITY_ORDER = ("none", "low", "moderate", "high")
+# Zoom levels offered in the live view: the detector finds more on leaves
+# that fill more of the picture.
+ZOOMS = (1.0, 1.5, 2.0, 3.0)
 
 
 @dataclass(frozen=True, slots=True)

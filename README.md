@@ -810,6 +810,7 @@ the profile and an optional label, e.g. `20261029T081500Z_hailo_row3-noon`.
 |---|---|
 | `timestamp`, `elapsed_s` | UTC time, seconds since the session started |
 | `camera` | Which camera the frame came from, numbered from 0 |
+| `zoom` | That camera's zoom when the frame was checked: 1, 1.5, 2 or 3 |
 | `frame_seq` | Camera frame number |
 | `preprocess_ms` | Letterbox and colour conversion (and tensor building on the CPU) |
 | `infer_ms` | The model call alone, on the CPU or the HAT |
@@ -1102,7 +1103,7 @@ by a native speaker before field use.
 
 | Page | Contents (full view) |
 |---|---|
-| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; *Export CSV*, or *Export with photos* as a ZIP) |
+| `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause, and 1× / 1.5× / 2× / 3× zoom per camera in the full view: the detector finds more on leaves that fill the picture) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; *Export CSV*, or *Export with photos* as a ZIP) |
 | `/settings` | **View** for this device (simple or full) · **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · **Processor** (run detection on the AI HAT+, the CPU, or automatically whichever is ready; starts a new session) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) · **Debug log** (start it, make the fault happen, stop it, download it as a ZIP) |
 
 There's no login: anyone on the PepperWatch Wi-Fi can view everything and use
@@ -1134,7 +1135,7 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/capture` | Request a high-res snapshot → `202` |
 | POST | `/api/data/clear` | Delete every detection, its boxes and images. Requires `{"confirm": "DELETE"}` |
 | POST | `/api/inference/pause` · `/resume` | Pause or resume detection → `202` |
-| POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
+| POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`). `{"zoom": 1 \| 1.5 \| 2 \| 3}` crops to the middle of the picture for the preview, the detector and saved photos alike, kept across sessions → `202`. A CSI camera crops on its sensor, so the crop has real detail; a USB webcam's picture is enlarged |
 | PATCH | `/api/site` | Rename the site: `{"name": "…"}`, 1–40 characters. No PIN; each rename is logged to `system_log` |
 | GET / PATCH | `/api/config` | GET also returns `model`, the detector as the worker reports it (YOLO version read from the ONNX layer names, weights, precision, export date, Ultralytics version), shown in Settings → *Detection Model* (full view). Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99), and the photo intervals `heartbeat_detected_s`, `heartbeat_clean_s` (10–86400 s). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
 | POST | `/api/accelerator` | `{"mode": "auto" \| "cpu" \| "hailo"}`: what runs detection. Saved (outlasts restarts) and applied by starting a new session, labelled `processor-<mode>` → `202`. `hailo` with no AI HAT+ detected → `409`; a HAT that won't start still falls back to the CPU, with the reason. GET `/api/config` returns `accelerator`: the saved mode, what the session runs on and why, and the HAT detected. Needs the admin PIN |
