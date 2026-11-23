@@ -79,13 +79,36 @@
       <svg class="icon"><use href="#i-lock" data-lock-icon/></svg>
     </span>
     <div class="lock-text">
-      <strong data-lock-title>Locked: detection, photo saving and data</strong>
+      <strong data-lock-title>Locked: processor, detection, photos, data and debug log</strong>
       <p class="note" data-lock-note>Anyone can see these settings. Changing them needs the admin PIN.</p>
     </div>
     <button class="btn is-primary" type="button" data-unlock>
       <svg class="icon" aria-hidden="true"><use href="#i-lock-open"/></svg>Unlock</button>
     <button class="btn is-quiet" type="button" data-relock hidden>
       <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Lock again</button>
+  </div>
+</section>
+
+<section class="card" data-expert data-pin-card>
+  <div class="card-head">
+    <h2>Processor</h2>
+    <span class="card-sub">Starts a new session</span>
+    <button class="lock-chip" type="button" data-unlock data-lock-chip>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Locked</button>
+  </div>
+  <div class="card-body">
+    <fieldset class="settings-grid pin-fields" data-pin-fields>
+      <div class="field">
+        <label for="setting-accelerator">Run detection on</label>
+        <select id="setting-accelerator" data-setting-accelerator>
+          <option value="auto">Automatic: the AI HAT+ when it is ready, otherwise the CPU</option>
+          <option value="hailo">AI HAT+</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </div>
+      <p class="note" data-accelerator-now></p>
+      <p class="note" data-accelerator-status role="status" aria-live="polite"></p>
+    </fieldset>
   </div>
 </section>
 
@@ -215,6 +238,26 @@
         <p class="note" data-clear-status role="status" aria-live="polite"></p>
       </div>
     </fieldset>
+  </div>
+</section>
+
+<section class="card" data-expert data-pin-card>
+  <div class="card-head"><h2>Debug Log</h2>
+    <span class="card-sub">For finding faults</span>
+    <button class="lock-chip" type="button" data-unlock data-lock-chip>
+      <svg class="icon" aria-hidden="true"><use href="#i-lock"/></svg>Locked</button></div>
+  <div class="card-body">
+    <fieldset class="settings-grid pin-fields" data-pin-fields>
+      <p class="note">Records what the detector and the dashboard do, in full detail, until you
+        stop it. Start it, make the fault happen, stop it, then download the log. Each log holds
+        at most about 60 MB, and the last 5 are kept.</p>
+      <div class="live-controls">
+        <button class="btn is-primary" type="button" data-debug-start>Start debug log</button>
+        <button class="btn" type="button" data-debug-stop hidden>Stop debug log</button>
+      </div>
+      <p class="note" data-debug-status role="status" aria-live="polite"></p>
+    </fieldset>
+    <ul class="save-list" data-debug-logs></ul>
   </div>
 </section>
 

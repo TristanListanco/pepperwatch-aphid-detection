@@ -127,6 +127,11 @@ busy_timeout_ms = 5000
 [media]
 root = "var/media"
 
+[debug]
+# Debug logs started from Settings: one folder each, the last 5 kept. On the
+# Pi the systemd units point this at /var/lib/pepperwatch/debug.
+root = "var/debug"
+
 [mqtt]
 host = "127.0.0.1"
 port = 1883

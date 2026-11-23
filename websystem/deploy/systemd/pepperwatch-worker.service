@@ -30,6 +30,7 @@ Environment=PYTHONUNBUFFERED=1
 # The app directory is read-only under ProtectSystem=strict; session CSV
 # files go under the data directory instead.
 Environment=PW_SESSIONS_ROOT=/var/lib/pepperwatch/sessions
+Environment=PW_DEBUG_ROOT=/var/lib/pepperwatch/debug
 # HailoRT writes hailort.log to its working directory unless told otherwise.
 Environment=HAILORT_LOGGER_PATH=/var/lib/pepperwatch/hailort
 # Leave one of the Pi 5's four cores free. Giving ONNX all four starves Flask

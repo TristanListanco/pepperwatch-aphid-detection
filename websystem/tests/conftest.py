@@ -38,6 +38,7 @@ def cfg(tmp_path: Path) -> Config:
             "db": {"path": str(tmp_path / "test.db")},
             "media": {"root": str(tmp_path / "media")},
             "sessions": {"root": str(tmp_path / "sessions")},
+            "debug": {"root": str(tmp_path / "debug")},
             "frames": {
                 "shm_name": unique,
                 "tmpfs_dir": str(tmp_path / "frames"),

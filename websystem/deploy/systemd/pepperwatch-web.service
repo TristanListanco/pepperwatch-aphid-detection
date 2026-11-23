@@ -20,6 +20,7 @@ Environment=PYTHONUNBUFFERED=1
 # The app directory is read-only under ProtectSystem=strict; session CSV
 # files go under the data directory instead.
 Environment=PW_SESSIONS_ROOT=/var/lib/pepperwatch/sessions
+Environment=PW_DEBUG_ROOT=/var/lib/pepperwatch/debug
 
 # --workers 1 is a correctness requirement, not tuning. The process holds a
 # single MQTT subscription in its EventHub; a second worker would mean a second

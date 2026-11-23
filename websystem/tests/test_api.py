@@ -607,7 +607,7 @@ def test_a_to_date_includes_that_whole_day(seeded_db, client) -> None:
 
 def test_config_exposes_only_the_tunables(client) -> None:
     body = client.get("/api/config").get_json()
-    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory", "pin_required", "model"}
+    assert set(body) == {"site", "inference", "persist", "severity", "web", "locales", "advisory", "pin_required", "model", "accelerator"}
     # Secrets must never appear.
     assert "secret_key" not in body["web"]
 

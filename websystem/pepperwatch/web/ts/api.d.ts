@@ -232,6 +232,22 @@ export interface Config {
   pin_required?: boolean;
   // The worker's retained detector status; null before it first reports.
   model?: DetectorStatus | null;
+  accelerator?: AcceleratorStatus;
+}
+
+// Settings' processor choice and what the running session uses.
+export interface AcceleratorStatus {
+  mode: 'auto' | 'cpu' | 'hailo';
+  session_id?: string | null;
+  running?: string | null; // e.g. Hailo-8L or CPU
+  reason?: string | null;
+  hat?: string | null; // the HAT's name when one is detected
+}
+
+// /api/debug-log
+export interface DebugLogs {
+  active: string | null;
+  logs: { id: string; started_at: string; bytes: number; active: boolean }[];
 }
 
 export interface DetectorStatus {

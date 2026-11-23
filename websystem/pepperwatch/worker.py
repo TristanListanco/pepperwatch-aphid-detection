@@ -48,7 +48,8 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
-from .accel import AcceleratorChoice, choose_accelerator
+from . import debuglog
+from .accel import MODES, AcceleratorChoice, choose_accelerator
 from .config import TUNABLES, Config, detect_board_info, load, total_memory_mb
 from .db import Database, utcnow
 from .detect import Detector, get_detector, severity_from_config
@@ -657,6 +658,10 @@ class Worker:
                 last_logged = self._telemetry_tick(sample, chip_temperature, interval, last_logged)
             except Exception:  # noqa: BLE001 — this thread is the dashboard's heartbeat: never let it die
                 self._report("telemetry_loop", "telemetry_error")
+            try:
+                debuglog.sync(self.cfg.debug_root, "worker")
+            except OSError:
+                self._report("debug_log", "debug_log_failed")
             self._stopping.wait(timeout=min(period, interval))
 
     def _telemetry_tick(self, sample, chip_temperature, interval: float, last_logged: float) -> float:
@@ -875,6 +880,10 @@ class Worker:
             self.inference_fps.mark()
 
             severity, damaged_area = severity_from_config(detections, self.cfg)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("camera %d frame %d: %s, %s, %.1f ms (%d not on a plant)", index, frame.seq,
+                          [f"{d.class_name} {d.confidence:.2f}" for d in detections] or "no boxes",
+                          severity, self._inference_ms, non_plant)
             self._last_result[index] = (frame, detections, severity)
             # Recording and saving can fail (a full SD card, a locked database);
             # the live detections must carry on regardless.
@@ -1474,6 +1483,19 @@ def wait_for_camera(cfg: Config, *, poll_s: float = 2.0, retry_s: float = 30.0) 
     bus.stop()  # no closing status: the next worker announces itself
 
 
+def apply_saved_accelerator(cfg: Config) -> None:
+    """Settings' choice of processor (auto, cpu or hailo), over the config files', for the next session."""
+    try:
+        db = Database(cfg)
+        db.initialise(writer="worker")  # a first boot has no tables yet
+        mode = db.meta("accelerator_mode")
+    except Exception:  # noqa: BLE001 — an unreadable database leaves the config files' choice
+        log.exception("could not read the saved processor choice")
+        return
+    if mode in MODES:
+        cfg.accelerator._data["mode"] = mode  # noqa: SLF001
+
+
 def wait_after_error(cfg: Config, *, seconds: float = 30.0) -> None:
     """Tell the dashboard the worker hit a problem, then wait before trying again."""
     bus = make_bus(cfg, "worker", with_will=True)
@@ -1502,6 +1524,11 @@ def main() -> int:
     avoid_hat: str | None = None  # set for one session after the HAT stopped answering
     while True:
         cfg = load()
+        try:
+            debuglog.sync(cfg.debug_root, "worker")
+        except OSError:
+            log.exception("could not open the debug log")
+        apply_saved_accelerator(cfg)
         try:
             worker = Worker(cfg, avoid_hat)
         except CameraError as exc:

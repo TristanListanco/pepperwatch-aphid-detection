@@ -133,6 +133,10 @@ class Config(Section):
         return self.path(self.sessions.root)
 
     @property
+    def debug_root(self) -> Path:
+        return self.path(self.debug.root)
+
+    @property
     def board_profile(self) -> str | None:
         """The profiles applied for this board, e.g. ``"low"`` or ``"low+pi3"``."""
         applied = self._data.get("board", {}).get("profiles") or []

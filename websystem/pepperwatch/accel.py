@@ -47,6 +47,8 @@ HAILO_DEVICE_IDS = {"0x2864": "hailo8", "0x45c4": "hailo10h"}
 ARCH_NAMES = {"hailo8": "Hailo-8", "hailo8l": "Hailo-8L", "hailo10h": "Hailo-10H"}
 # Packages providing the PCIe driver, firmware and Python bindings, per chip.
 ARCH_PACKAGES = {"hailo8": "hailo-all", "hailo8l": "hailo-all", "hailo10h": "hailo-h10-all"}
+# [accelerator] mode, in the config files or chosen in Settings.
+MODES = ("auto", "cpu", "hailo")
 
 
 @dataclass(frozen=True, slots=True)
@@ -240,7 +242,7 @@ def choose_accelerator(cfg: Config, probe: HailoProbe | None = None) -> Accelera
         # Still look (sysfs only): a fitted HAT idles and draws power in a CPU
         # baseline, and the session record should say it was there.
         fitted = probe if probe is not None else probe_hailo(identify=False, import_runtime=False, settle_s=0)
-        return _cpu("[accelerator] mode is cpu", fitted, deliberate=True)
+        return _cpu("set to run on the CPU", fitted, deliberate=True)
 
     probe = probe if probe is not None else probe_hailo()
     problem = _hailo_problem(cfg, probe)

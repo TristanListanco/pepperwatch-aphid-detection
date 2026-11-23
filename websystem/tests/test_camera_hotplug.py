@@ -555,8 +555,11 @@ def test_only_the_session_right_after_a_stall_avoids_the_hat(monkeypatch) -> Non
 
     monkeypatch.setattr(worker_module, "detect_board_info", lambda: SimpleNamespace(
         supported=True, model="Pi 5", family="pi5", cpu="BCM2712", mem_mb=16384, tier="high"))
-    monkeypatch.setattr(worker_module, "load", lambda: None)
+    monkeypatch.setattr(worker_module, "load", lambda: SimpleNamespace(debug_root=None))
     monkeypatch.setattr(worker_module, "Worker", FakeWorker)
+    # What main() does with a real config before each session.
+    monkeypatch.setattr(worker_module.debuglog, "sync", lambda root, process: None)
+    monkeypatch.setattr(worker_module, "apply_saved_accelerator", lambda cfg: None)
     assert worker_module.main() == 0
     assert seen == [None, "it stopped answering (TimeoutError)", None]
 

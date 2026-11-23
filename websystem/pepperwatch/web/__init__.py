@@ -17,6 +17,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, redirect, request, send_from_directory, url_for
 
+from .. import debuglog
 from ..advisory import load_advisory
 from ..config import Config, load
 from ..db import Database
@@ -58,6 +59,10 @@ def create_app(cfg: Config | None = None, *, start_hub: bool = True) -> Flask:
     app.config["PW_FRAMES"] = [make_reader(cfg, i) for i in range(max(1, int(cfg.camera.max_cameras)))]
     app.config["PW_ADVISORY"] = load_advisory(cfg)
     app.config["PW_ADMIN_PIN"] = _admin_pin(cfg)
+    try:  # a debug log started before this process (re)started
+        debuglog.sync(cfg.debug_root, "web")
+    except OSError:
+        logging.getLogger(__name__).exception("could not open the debug log")
     # Taken before any change from Settings, which overwrites them in cfg.
     app.config["PW_THRESHOLD_DEFAULTS"] = {
         key: float(cfg.inference.get(key)) for key in ("conf_threshold", "iou_threshold")

@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 from flask import Blueprint, Response, current_app, jsonify, request
 from werkzeug.security import safe_join
 
+from .. import debuglog
+from ..accel import MODES
 from ..config import TUNABLES
 from ..models import SEVERITY_ORDER, Detection
 from ..session import csv_safe
@@ -493,6 +495,7 @@ def get_config():
             "advisory": _advisory().meta,
             # The model doing the detecting, as the worker last reported it.
             "model": _hub().detector or None,
+            "accelerator": _accelerator_status(),
             # Whether thresholds, photo saving and clearing data are behind a PIN.
             "pin_required": bool(current_app.config.get("PW_ADMIN_PIN")),
         }
@@ -543,6 +546,80 @@ def patch_config():
         if time.monotonic() >= deadline:
             return jsonify({"error": "the detector did not confirm the change; is it running?"}), 504
         time.sleep(0.1)
+
+
+def _accelerator_status() -> dict:
+    """Settings' processor choice, what the running session uses, and whether a HAT is there."""
+    session = _hub().session
+    running = session.get("accelerator") or {}
+    hat = running.get("hailo") or {}
+    return {
+        "mode": _db().meta("accelerator_mode") or _cfg().accelerator.mode,
+        "session_id": session.get("session_id"),
+        "running": running.get("name"),
+        "reason": running.get("reason"),
+        "hat": hat.get("name") if hat.get("present") else None,
+    }
+
+
+@bp.post("/accelerator")
+def set_accelerator():
+    """Run detection on the AI HAT+, the CPU, or whichever is ready ("auto").
+
+    Saved, so it outlasts restarts, and applied by starting a new session: the
+    processor is chosen once per session. With "hailo", a HAT that will not
+    start still falls back to the CPU, and the session says why.
+    """
+    refused = _pin_refusal()
+    if refused:
+        return refused
+    mode = (request.get_json(silent=True) or {}).get("mode")
+    if mode not in MODES:
+        return jsonify({"error": f"mode must be one of: {', '.join(MODES)}"}), 400
+    if mode == "hailo" and not _accelerator_status()["hat"]:
+        return jsonify({"error": "no AI HAT+ is detected"}), 409
+    db = _db()
+    db.set_meta("accelerator_mode", mode)
+    db.log_system(event="accelerator_mode", source="web", detail=mode)
+    # A worker that misses this reads the saved choice when its next session starts.
+    restarting = _publish_command(Topics.CMD_SESSION, {"action": "new", "label": f"processor-{mode}"})
+    return jsonify({"mode": mode, "restarting": restarting}), 202
+
+
+@bp.get("/debug-log")
+def debug_log():
+    """The running debug log, if any, and every kept one."""
+    root = _cfg().debug_root
+    debuglog.sync(root, "web")
+    return jsonify({"active": debuglog.active(root), "logs": debuglog.logs(root)})
+
+
+@bp.post("/debug-log")
+def control_debug_log():
+    """Start or stop the debug log: {"action": "start" | "stop"}."""
+    refused = _pin_refusal()
+    if refused:
+        return refused
+    action = (request.get_json(silent=True) or {}).get("action")
+    root = _cfg().debug_root
+    if action == "start":
+        log_id = debuglog.start(root)
+    elif action == "stop":
+        log_id = debuglog.stop(root)
+    else:
+        return jsonify({"error": "action must be start or stop"}), 400
+    debuglog.sync(root, "web")
+    _db().log_system(event=f"debug_log_{action}", source="web", detail=log_id)
+    return jsonify({"active": debuglog.active(root), "logs": debuglog.logs(root)})
+
+
+@bp.get("/debug-log/<log_id>.zip")
+def download_debug_log(log_id: str):
+    data = debuglog.archive(_cfg().debug_root, log_id)
+    if data is None:
+        return jsonify({"error": f"no debug log {log_id}"}), 404
+    return Response(data, mimetype="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="pepperwatch-debug-{log_id}.zip"'})
 
 
 SITE_NAME_MAX = 40

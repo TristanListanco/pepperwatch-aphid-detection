@@ -8,9 +8,9 @@
 // value be chosen from a measured precision/recall sweep instead of asserted,
 // which is a stronger result to defend.
 
-import type { ClearResult, Config } from './api.js';
-import { fetchJson, patchJson, postJson } from './bus.js';
-import { dateTime, errorText, num } from './fmt.js';
+import type { AcceleratorStatus, ClearResult, Config, DebugLogs } from './api.js';
+import { fetchJson, patchJson, poll, postJson } from './bus.js';
+import { bytes, dateTime, errorText, num } from './fmt.js';
 import { displayPrefs, setDisplayPref, type DisplayPrefs } from './liveview.js';
 
 // The admin PIN unlocks thresholds, photo saving and clearing data, for this
@@ -76,7 +76,7 @@ function bindLock(root: ParentNode, required: boolean): void {
     bar.querySelector('[data-lock-icon]')?.setAttribute('href', locked ? '#i-lock' : '#i-lock-open');
     const title = bar.querySelector('[data-lock-title]');
     const note = bar.querySelector('[data-lock-note]');
-    if (title) title.textContent = locked ? 'Locked: detection, photo saving and data' : 'Unlocked in this tab';
+    if (title) title.textContent = locked ? 'Locked: processor, detection, photos, data and debug log' : 'Unlocked in this tab';
     if (note) {
       note.textContent = locked
         ? 'Anyone can see these settings. Changing them needs the admin PIN.'
@@ -162,6 +162,7 @@ function bindLock(root: ParentNode, required: boolean): void {
 export async function initSettings(root: ParentNode): Promise<void> {
   bindDisplayPrefs(root);
   bindClear(root);
+  bindDebugLog(root);
 
   const config = await fetchJson<Config>('/api/config');
   if (!config) return;
@@ -178,6 +179,7 @@ export async function initSettings(root: ParentNode): Promise<void> {
     showIou(config.inference.defaults.iou_threshold);
   });
   bindIntervals(root, config.persist);
+  bindAccelerator(root, config.accelerator);
 
   bindSite(root, config.site.name);
 
@@ -387,6 +389,134 @@ function bindIntervals(root: ParentNode, initial: Config['persist']): void {
       else select.value = String(applied);
     });
   });
+}
+
+// Which processor runs the detector. It is picked once per session, so a change
+// starts a new one; the page then says what that session really runs on, since
+// a HAT that will not start still falls back to the CPU.
+function bindAccelerator(root: ParentNode, initial: AcceleratorStatus | undefined): void {
+  const select = root.querySelector<HTMLSelectElement>('[data-setting-accelerator]');
+  const now = root.querySelector('[data-accelerator-now]');
+  const status = root.querySelector('[data-accelerator-status]');
+  if (!select || !initial) return;
+  let applied = initial.mode;
+  let session = initial.session_id;
+
+  const show = (state: AcceleratorStatus) => {
+    session = state.session_id;
+    const hat = select.querySelector<HTMLOptionElement>('option[value="hailo"]');
+    if (hat) {
+      hat.disabled = !state.hat && state.mode !== 'hailo';
+      hat.textContent = state.hat ? `AI HAT+ (${state.hat})` : 'AI HAT+ (not detected)';
+    }
+    select.value = state.mode;
+    if (now) {
+      now.textContent = !state.running ? 'The detector has not reported yet.'
+        : state.running === 'CPU' && state.reason ? `Running on the CPU: ${state.reason}.`
+          : `Running on the ${state.running}.`;
+    }
+  };
+  show(initial);
+
+  const awaitSession = async () => {
+    for (let tries = 0; tries < 20; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const state = (await fetchJson<Config>('/api/config').catch(() => null))?.accelerator;
+      if (state?.session_id && state.session_id !== session) {
+        show(state);
+        if (status) status.textContent = `A new session started on the ${state.running}.`;
+        return;
+      }
+    }
+    if (status) status.textContent = 'Saved, but no new session has started yet. Check the dashboard.';
+  };
+
+  select.addEventListener('change', async () => {
+    const mode = select.value as AcceleratorStatus['mode'];
+    if (status) {
+      status.textContent = 'Saving…';
+      status.className = 'note';
+    }
+    try {
+      const result = await postJson<{ restarting: boolean }>('/api/accelerator', { mode }, adminHeaders());
+      applied = mode;
+      if (!result.restarting) {
+        if (status) status.textContent = 'Saved. It applies when the detector next starts.';
+        return;
+      }
+      if (status) status.textContent = 'Saved. A new session is starting…';
+      await awaitSession();
+    } catch (error) {
+      if (/PIN/.test(errorText(error))) pinRefused();
+      select.value = applied;
+      if (status) {
+        status.textContent = `Not saved: ${errorText(error)}`;
+        status.className = 'note sev-high';
+      }
+    }
+  });
+}
+
+// Start, stop and download a debug log. Downloads stay open while the card is
+// locked, like the session CSV files; starting and stopping need the PIN.
+function bindDebugLog(root: ParentNode): void {
+  const start = root.querySelector<HTMLButtonElement>('[data-debug-start]');
+  const stop = root.querySelector<HTMLButtonElement>('[data-debug-stop]');
+  const status = root.querySelector('[data-debug-status]');
+  const list = root.querySelector('[data-debug-logs]');
+  if (!start || !stop || !list) return;
+
+  const show = (state: DebugLogs) => {
+    start.hidden = Boolean(state.active);
+    stop.hidden = !state.active;
+    const running = state.logs.find((entry) => entry.active);
+    if (status) {
+      status.className = 'note';
+      status.textContent = running
+        ? `Recording since ${dateTime(running.started_at)}: ${bytes(running.bytes)} so far.`
+        : state.logs.length ? '' : 'No debug logs yet.';
+    }
+    list.replaceChildren(...state.logs.map((entry) => {
+      const link = document.createElement('a');
+      link.className = 'btn is-quiet';
+      link.href = `/api/debug-log/${encodeURIComponent(entry.id)}.zip`;
+      link.download = '';
+      link.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>';
+      link.append(`Debug log, ${dateTime(entry.started_at)}`);
+      const note = document.createElement('span');
+      note.className = 'note';
+      note.textContent = `${bytes(entry.bytes)}${entry.active ? ', still recording' : ''}`;
+      const item = document.createElement('li');
+      item.append(link, note);
+      return item;
+    }));
+  };
+
+  const control = async (action: 'start' | 'stop', button: HTMLButtonElement) => {
+    button.disabled = true;
+    try {
+      show(await postJson<DebugLogs>('/api/debug-log', { action }, adminHeaders()));
+    } catch (error) {
+      if (/PIN/.test(errorText(error))) pinRefused();
+      if (status) {
+        status.textContent = `Could not ${action} it: ${errorText(error)}`;
+        status.className = 'note sev-high';
+      }
+    } finally {
+      button.disabled = false;
+    }
+  };
+  start.addEventListener('click', () => control('start', start));
+  stop.addEventListener('click', () => control('stop', stop));
+
+  // Its size grows while it records.
+  let first = true;
+  poll(async () => {
+    if (!first && stop.hidden) return;
+    first = false;
+    const state = await fetchJson<DebugLogs>('/api/debug-log');
+    if (state) show(state);
+  }, 10000);
 }
 
 // Sends one change and says whether the worker took it.

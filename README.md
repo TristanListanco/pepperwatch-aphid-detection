@@ -1103,11 +1103,12 @@ by a native speaker before field use.
 | Page | Contents (full view) |
 |---|---|
 | `/` Dashboard | **Live camera** (live by default, box overlay, snapshot, pause) · **Hardware** (the board, AI HAT+, every camera found, the power source, each with a status dot and a warning when something needs attention) · **Figure tiles**: *Leaf health* (share of leaves healthy this week, coloured by severity, with a damage badge), damaged leaves this week (out of all scanned, with the change on last week), average confidence, damage trend, inference fps against the 17 fps target, latency, power and session energy, temperature · **Session** (model, run time, CSV downloads, *New session*, table of past sessions) · **Historical Detection Log** (gallery filtered by date, severity and class; *Export CSV*, or *Export with photos* as a ZIP) |
-| `/settings` | **View** for this device (simple or full) · **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) |
+| `/settings` | **View** for this device (simple or full) · **Display** for this device (live video, mirror camera, light or dark appearance; boxes hide while inference is paused) · **Processor** (run detection on the AI HAT+, the CPU, or automatically whichever is ready; starts a new session) · confidence/IoU sliders · language · **Clear all detections** (deletes saved scans, boxes and images; session CSV files are kept) · **Debug log** (start it, make the fault happen, stop it, download it as a ZIP) |
 
 There's no login: anyone on the PepperWatch Wi-Fi can view everything and use
-the live controls. **Changing the detection thresholds and clearing data ask
-for the admin PIN** (Settings, full view). `install.sh` generates it and shows
+the live controls. **Changing the processor or the detection thresholds,
+clearing data, and starting or stopping a debug log ask for the admin PIN**
+(Settings, full view). `install.sh` generates it and shows
 it with the Wi-Fi password; it's kept in `/etc/pepperwatch/admin.pin`. Five
 wrong tries lock it for a minute.
 
@@ -1136,6 +1137,9 @@ All responses are JSON unless noted. No endpoint needs authentication.
 | POST | `/api/camera/<n>` | `{"enabled": false}` turns camera *n* (from 0) off until the next session, `true` back on → `202`; the last camera running can't be turned off, and an unplugged one can't be turned on (`409`) |
 | PATCH | `/api/site` | Rename the site: `{"name": "…"}`, 1–40 characters. No PIN; each rename is logged to `system_log` |
 | GET / PATCH | `/api/config` | GET also returns `model`, the detector as the worker reports it (YOLO version read from the ONNX layer names, weights, precision, export date, Ultralytics version), shown in Settings → *Detection Model* (full view). Read / live-change `conf_threshold`, `iou_threshold` (0.01–0.99), and the photo intervals `heartbeat_detected_s`, `heartbeat_clean_s` (10–86400 s). PATCH answers `200` once the detector reports the new value (within 3 s), `503` if the dashboard can't reach it, `504` if it doesn't confirm. Needs the admin PIN (`X-Admin-Pin`). Kept across sessions |
+| POST | `/api/accelerator` | `{"mode": "auto" \| "cpu" \| "hailo"}`: what runs detection. Saved (outlasts restarts) and applied by starting a new session, labelled `processor-<mode>` → `202`. `hailo` with no AI HAT+ detected → `409`; a HAT that won't start still falls back to the CPU, with the reason. GET `/api/config` returns `accelerator`: the saved mode, what the session runs on and why, and the HAT detected. Needs the admin PIN |
+| GET / POST | `/api/debug-log` | GET: the running debug log and the last 5 kept. POST `{"action": "start" \| "stop"}` (admin PIN). While one runs, the web and the worker write their logs, with Pepper Watch's DEBUG lines (one per inference), to `/var/lib/pepperwatch/debug/<id>/`; at most 30 MB per process. A worker that restarts carries on writing |
+| GET | `/api/debug-log/<id>.zip` | One debug log's files. No PIN, like the session CSVs |
 | POST | `/api/time` | Record a client's clock if the Pi's is behind (logged; not applied) |
 | POST | `/api/detections` | Ingest a detection payload over HTTP (used by the tests) |
 | GET | `/frame.jpg` | Latest frame (clean). `?camera=1` for the second camera |
@@ -1166,7 +1170,7 @@ reachable by anyone within Wi-Fi range or on the same wired network.
 | Layer | Protection |
 |---|---|
 | Wi-Fi | WPA2 with a random 12-character password, generated at install |
-| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause and start sessions. **Changing thresholds or the photo interval, and clearing data, need the admin PIN** (`X-Admin-Pin`; 6 digits from install, 5 wrong tries a minute lock it). Clearing also needs `{"confirm": "DELETE"}` |
+| Controls | **No login.** Anyone who can reach the dashboard can take snapshots, pause and start sessions. **Changing the processor, thresholds or the photo interval, clearing data, and starting or stopping a debug log need the admin PIN** (`X-Admin-Pin`; 6 digits from install, 5 wrong tries a minute lock it). Clearing also needs `{"confirm": "DELETE"}` |
 | Requests | Bodies over 1 MB are refused; ingested class names must be the known ones (they are drawn into the charts); file downloads are confined to their folders by path, not string prefix |
 | Data exports | CSV cells that a spreadsheet would run as a formula (`=`, `+`, `-`, `@`) are written as plain text |
 | Broker | Mosquitto listens on `127.0.0.1` only; nothing on the network can publish commands |
@@ -1348,7 +1352,7 @@ through every layer and handled:
 | A camera that stays plugged in but freezes | After 10 s with no picture its frame says *isn't sending pictures*, and it's reopened every 30 s until it recovers |
 | A loose ribbon or a broken model failing constantly | Logged once a minute with a count, not twice a second |
 | The clock wrong after a power cut (no RTC battery) | The full view compares the Pi's clock with the phone's and warns past 5 minutes |
-| Clearing data, changing thresholds or the photo interval | Needs the admin PIN |
+| Clearing data, changing the processor, thresholds or the photo interval, starting or stopping a debug log | Needs the admin PIN |
 | A camera replugged into another port, or in another order | USB cameras are numbered by the port they're in, not by `/dev/videoN`, so *Camera 1* stays the camera in the same port |
 | Thresholds tuned from the dashboard | Saved in the database and restored at every new session, so a camera plugged in doesn't undo them |
 | A session restarting while phones watch | The frame reader that every web thread shares is locked while it re-attaches |
